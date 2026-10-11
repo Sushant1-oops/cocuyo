@@ -506,7 +506,10 @@ is added:
 
 After `send_tcp` the caller reads two bytes, calls `wire.message_len(prefix)`, reads that many
 bytes and passes them to `on_response`. There is no `read` action: the `wait` deadline already
-governs the read, and the framing rule is three lines in the example (§15 step 6).
+governs the read, and the framing rule is three lines in the example (§15 step 6). The length is
+a `u16`, and a caller who adds the prefix's two octets to it widens it first. A sum made in
+sixteen bits overflows from a prefix of 65534, which a server chooses: the engine and the twin
+each had that panic until 2026-10-10 (docs/mutations.md, Sums at the most their operands reach).
 
 ### Retry and timeout policy
 
@@ -1507,6 +1510,17 @@ structured hostility: valid headers over lying counts, pointers at every offset,
 past the end, rdata lengths one byte too long, names at exactly 255 and 256 bytes. The invariants:
 the parser never reads outside the message, always terminates, and never returns a name longer
 than `name_bytes_max`.
+
+Until 2026-10-10 two of those did not hold. The one question name that parsed as a question of
+class IN was `example.com`, 13 octets, so the gate never ran check 5 of §7 over a long name. Check
+5 summed the offsets of the type and the class in the octet a name's length is held in, and a name
+of 242 octets or more overflowed it: a panic on the answer to such a name (docs/mutations.md,
+Sums at the most their operands reach). And a pointer maze lost the high bits of each target, so
+no pointer aimed past offset 255. The generator now writes questions whose names are 192 to 255
+octets long, of types cocuyo asks, and a maze's pointers aim anywhere in the message. A test pins
+each: the gate's seeds reach every one of those lengths, and most mazes aim past offset 255. The
+target runs check 5 over each such question, and `matches_lowercase` over its echo in lowercase,
+since the two compares share the reads that overflowed.
 
 A second target, since 2026-09-26, reads what the caller hands in rather than what the network
 sends (`src/config/fuzz/`): an address, a name, a `resolv.conf`, a hosts file and an SPKI pin.
@@ -2816,8 +2830,9 @@ repository, which is a third thing to pin; the engine under `src/`.
 first `connect_tcp` and shared by every lookup that needs it, their queries pipelined onto it
 (RFC 7766 §6.2.1.1) and their answers matched back by the table's own demultiplexer. A stream
 carries no message boundaries, so a connection holds the partial bytes and takes whole messages
-out of them by the length prefix of §8; the buffer it assembles into is `tcp_message_bytes`, the
-longest a prefix can describe unless the caller knows its answers are smaller. A connection
+out of them by the length prefix of §8; the buffer it assembles into holds a message of
+`tcp_message_bytes`, the longest a prefix can describe unless the caller knows its answers are
+smaller, and the two octets of its prefix. A connection
 nobody is using is closed after `tcp_idle_ns` (§6.2.3). The chunks arrive in a buffer group of
 their own, since a datagram group carries rotor's prefix before every payload, and a group that
 runs dry is the ordinary end of a receive rather than a broken connection.
@@ -4052,8 +4067,9 @@ all DoQ or all DoH (§22, §23), and the rules hold for both. Where they differ,
    before the prefix's octets have come, octets after them, or another ID is a protocol error
    (RFC 9250 §4.2, §4.2.1, §4.3.3). The engine fails the connection, as rule 7 says, which is
    the silent abandonment §4.3.3 allows. An answer longer than the buffer fails it too, as an
-   answer longer than a TCP connection's frame does. The buffer is `tcp_message_bytes` long,
-   since a DoQ stream holds what a TCP connection holds (§4.2).
+   answer longer than a TCP connection's frame does. The buffer holds a message of
+   `tcp_message_bytes` and its prefix, since a DoQ stream holds what a TCP connection holds
+   (§4.2).
 6. **A request the lookup left is cancelled.** When the drive finds a lookup has left the
    transaction its request carries, because its deadline passed, it moved on, it ended, or it was
    cancelled or released, the engine cancels the stream. It sends STOP_SENDING and resets its own
@@ -4760,6 +4776,8 @@ Three types fill it:
   channel, the receive pool of its QUIC connection, and `answers` exchanges, 4 unless the consumer
   names another, as `cocuyo_quic`'s answer buffers were. Each exchange holds its GET's path, the
   three response fields it wants, and its answer buffer, and a request past them waits (rule 21).
+  The buffer is `message_bytes_max` long whatever `tcp_message_bytes` says: a DoH response's
+  content is the message alone, with no prefix (RFC 8484 §6).
   Its context is the DoQ session's: the anchors, the stream chapulin and the QUIC connection IDs
   draw from, and the wall clock. It keeps a copy of the ticket each link resumes with, which it
   wipes once the link's connection has ended.

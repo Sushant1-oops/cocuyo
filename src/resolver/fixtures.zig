@@ -337,7 +337,8 @@ pub const Harness = struct {
     /// The question section of the query last sent: the name as it went out, with its case.
     fn question_section(self: *const Harness) []const u8 {
         assert(self.query_bytes > core.constants.header_bytes);
-        const name_bytes = self.lookup.cased_name().len;
+        // `usize`: a name of 252 octets or more and the four after it overflow its `u8`.
+        const name_bytes: usize = self.lookup.cased_name().len;
         const question_at = self.query_body_offset + core.constants.header_bytes;
         return self.query[question_at..][0 .. name_bytes + core.constants.question_fixed_bytes];
     }

@@ -47,8 +47,9 @@ pub fn Connection(comptime message_bytes: u32, comptime lookups: u16, comptime T
         /// the slot is not opened again, since the loop may still read `address` (docs/design.md
         /// §19 step 13, the stream's rule 10). It outlives the connection, for that reason.
         connect_in_flight: bool = false,
-        /// The partial message: a length prefix and as much of the body as has arrived.
-        frame: [message_bytes]u8 = undefined,
+        /// The partial message: a length prefix and as much of the body as has arrived. It holds
+        /// the prefix beside the longest message, so that message can be whole in it.
+        frame: [cocuyo.constants.tcp_prefix_bytes + message_bytes]u8 = undefined,
         used: usize = 0,
         receiving: bool = false,
         /// How many lookups are on it. One with none is closed when it has been idle long enough.
@@ -327,7 +328,9 @@ pub fn deliver(self: anytype, at: u8, now_ns: u64) void {
     while (delivered < constants.tcp_messages_per_chunk_max) : (delivered += 1) {
         const prefix = cocuyo.constants.tcp_prefix_bytes;
         if (connection.used < prefix) return;
-        const length = cocuyo.message_len(connection.frame[0..prefix]);
+        // `usize`, not the `u16` the prefix reads as: with the prefix's two octets a message of
+        // 65534 or 65535 octets passes 65535, and a prefix can say either (RFC 1035 §4.2.2).
+        const length: usize = cocuyo.message_len(connection.frame[0..prefix]);
         if (connection.used < prefix + length) return;
         _ = self.resolver.on_datagram(connection.frame[prefix..][0..length], from, now_ns);
         const whole = prefix + length;

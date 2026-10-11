@@ -78,6 +78,54 @@ test "a seed that built a message reaching the parsers is checked, not merely re
     try testing.expect(parsed > 0);
 }
 
+test "a long question of every name length from the shortest long one to 255 octets is written" {
+    // Its class lies past octet 255 of the message from a name of 242 octets on, and its type from
+    // 244, where check 5's offsets overflowed once (docs/mutations.md, QO1): the seeds reach each.
+    const core = @import("core");
+    const shortest = @import("constants.zig").fuzz_question_name_bytes_min;
+    var seen: [core.constants.name_bytes_max - shortest + 1]bool = @splat(false);
+    var message: Message = .{};
+    for (0..seed_count) |seed| {
+        generate(seed, &message);
+        if (message.strategy != .long_question) continue;
+        var name: core.Name = core.Name.empty;
+        const parsed = try @import("question.zig").parse(message.slice(), &name);
+        try testing.expect(core.Kind.from_code(parsed.kind_code).?.queryable());
+        seen[name.len - shortest] = true;
+    }
+    for (seen) |reached| try testing.expect(reached);
+}
+
+/// The farthest offset a pointer of a maze aims at: every two octets after the header are one.
+fn farthest_target(message: *const Message) usize {
+    const constants = @import("constants.zig");
+    const bytes = message.slice();
+    var farthest: usize = 0;
+    var offset: usize = @import("core").constants.header_bytes;
+    while (offset + constants.pointer_bytes <= bytes.len) : (offset += constants.pointer_bytes) {
+        const pointer = @import("integer.zig").read_u16(bytes, offset);
+        farthest = @max(farthest, pointer & constants.pointer_offset_mask);
+    }
+    return farthest;
+}
+
+test "a pointer maze aims its pointers anywhere in the message, past offset 255 too" {
+    // A pointer's first octet holds the six high bits of the offset it aims at (RFC 1035 §4.1.4).
+    var message: Message = .{};
+    var mazes: usize = 0;
+    var far: usize = 0;
+    for (0..seed_count) |seed| {
+        generate(seed, &message);
+        if (message.strategy != .pointer_maze) continue;
+        const farthest = farthest_target(&message);
+        try testing.expect(farthest < message.len);
+        mazes += 1;
+        if (farthest > std.math.maxInt(u8)) far += 1;
+    }
+    // Most mazes are longer than 256 octets, and hold hundreds of pointers.
+    try testing.expect(far > mazes / 2);
+}
+
 test "a record written whole that its view refuses fails the verdict, and the same record changed does not" {
     const fixtures = @import("rdata/rdata.zig").fixtures;
     // A CAA whose tag is empty, which RFC 8659 §4.1 forbids and the copy takes as it is.

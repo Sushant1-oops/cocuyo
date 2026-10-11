@@ -220,7 +220,10 @@ fn write_inbound_step(loop: *Loop, connection: *network_module.Connection, scrip
 /// The one framed query a data record carries, answered in a data record of its own.
 fn answer_sealed(loop: *Loop, connection: *network_module.Connection, script: *const server.Script, data: []const u8) void {
     const prefix = core.constants.tcp_prefix_bytes;
-    if (data.len < prefix or data.len != prefix + wire.message_len(data[0..prefix])) return;
+    if (data.len < prefix) return;
+    // `usize`, not the `u16` the prefix reads as: with its own two octets it passes 65535.
+    const message_len: usize = wire.message_len(data[0..prefix]);
+    if (data.len != prefix + message_len) return;
     var frame: [constants.tls_payload_bytes_max]u8 = undefined;
     const answer = server.respond(script, &connection.peer, data[prefix..], true, draw(loop), frame[prefix..]) orelse return;
     wire.header.write_message_len(frame[0..prefix], @intCast(answer.len));

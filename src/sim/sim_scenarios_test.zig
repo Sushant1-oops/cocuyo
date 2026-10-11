@@ -265,6 +265,38 @@ test "a query over a stream is answered in framed chunks the seed sizes" {
     rig.loop.deinit();
 }
 
+test "a TLS server answers nothing to a record that is a length prefix of 65534 and no message" {
+    // The plaintext's two octets say a message that long follows, and none does: the prefix and
+    // its own two octets pass sixteen bits, and the record is no framed query.
+    var rig: Rig = .{};
+    try rig.init(8, .{ .delay_ns_min = 10, .delay_ns_max = 10 });
+    const socket = try sim.sync.open_socket(.ipv4);
+    defer sim.sync.close_now(socket);
+    var address = sim.Network.server_address(0);
+    address.port = constants.server_tls_port;
+    const connect: Operation = .{ .user_data = connect_tag, .kind = .{ .connect = .{ .socket = socket, .address = &address } } };
+    _ = rig.loop.submit(&.{connect}, &.{});
+    var events: [4]Event = undefined;
+    try testing.expectEqual(@as(u32, 1), try rig.collect(&events, 1000));
+    var hello: [constants.tls_record_header_bytes + 1]u8 = undefined;
+    var record: [constants.tls_record_header_bytes + core.constants.tcp_prefix_bytes]u8 = undefined;
+    var prefix: [core.constants.tcp_prefix_bytes]u8 = undefined;
+    wire.header.write_message_len(&prefix, core.constants.message_bytes_max - 1);
+    const hello_len = sim.tls.write_step(.hello, &hello);
+    const record_len = sim.tls.write_record(constants.tls_content_application, &prefix, &record);
+    const connection = rig.loop.network().connection(rig.loop.network().socket(socket).connection.?);
+    for ([_][]u8{ hello[0..hello_len], record[0..record_len] }) |bytes| {
+        const send: Operation = .{ .user_data = send_tag, .kind = .{ .send = .{ .socket = socket, .buffer = .{ .bytes = bytes } } } };
+        _ = rig.loop.submit(&.{send}, &.{});
+        try testing.expectEqual(@as(u32, 1), try rig.collect(&events, 1000));
+        // The hello is answered by the handshake's end, one step, and the record by nothing.
+        try testing.expectEqual(hello_len, connection.inbound_len);
+        try testing.expectEqual(@as(usize, 0), connection.partial_len);
+    }
+    try rig.loop.drain(&events);
+    rig.loop.deinit();
+}
+
 test "a server that is down answers nothing, and a connection to it is refused" {
     var rig: Rig = .{};
     try rig.init(1, .{ .down = true });

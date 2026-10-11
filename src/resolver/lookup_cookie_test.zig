@@ -3,6 +3,7 @@
 //! other cookie tests are in `lookup_cookie.zig`, whose helpers these read.
 const std = @import("std");
 const testing = std.testing;
+const core = @import("core");
 const fixtures = @import("fixtures.zig");
 const cookie_tests = @import("lookup_cookie.zig");
 const Verdict = @import("lookup.zig").Verdict;
@@ -85,4 +86,22 @@ test "a BADCOOKIE over the TCP a truncated answer led to is retried on the strea
     try testing.expectEqualSlices(u8, &fixtures.server_cookie_fresh, (try sent_cookie(&harness)).?.server);
     try testing.expectEqual(Verdict.accepted, harness.respond(fixtures.answer_a_cookie, servers[0].endpoint));
     try testing.expect(harness.poll() == .done);
+}
+
+test "a server cookie of 32 octets, the longest, is learned and goes out in the next query" {
+    // The option is then 4, 8 and 32 octets (RFC 7873 §4): the most its length sums to.
+    const longest: [core.constants.cookie_server_bytes_max]u8 = @splat(0x5c);
+    var harness: fixtures.Harness = .{ .config = .{ .servers = &servers } };
+    try harness.start("example.com.", .a, seed);
+    _ = harness.send();
+    var reply = fixtures.cname_only_cookie;
+    reply.server_cookie = &longest;
+    try testing.expectEqual(Verdict.accepted, harness.respond(reply, servers[0].endpoint));
+    // The CNAME had no target, so the lookup asks the same server again: with the pair now.
+    _ = harness.send();
+    const cookie = (try sent_cookie(&harness)).?;
+    try testing.expectEqualSlices(u8, &longest, cookie.server);
+    var answer = fixtures.answer_a_cookie;
+    answer.server_cookie = &longest;
+    try testing.expectEqual(Verdict.accepted, harness.respond(answer, servers[0].endpoint));
 }

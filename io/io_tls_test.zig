@@ -120,6 +120,27 @@ test "an idle TLS connection says close_notify, and closes once it has gone" {
     try rig.deinit();
 }
 
+test "a length prefix of 65535 in a record's plaintext is waited for, and the connection stays up" {
+    // The session opens a record into the connection's frame, and the framing of a stream in the
+    // clear reads it (TLS rule 7): the prefix's sum with its own two octets passes sixteen bits.
+    var rig: Rig = .{};
+    try start(&rig, 49, .{ .{}, .{} });
+    _ = try rig.engine.start(question("example.com."), rig.loop.now());
+    _ = try rig.until_result();
+    _ = rig.engine.take(rig.loop.now());
+    const connection = &rig.engine.connections[0];
+    try testing.expect(connection.state == .up and connection.used == 0);
+    var prefix: [cocuyo.constants.tcp_prefix_bytes]u8 = undefined;
+    std.mem.writeInt(u16, &prefix, cocuyo.constants.message_bytes_max, .big);
+    var record: [rotor.constants.tls_record_header_bytes + prefix.len]u8 = undefined;
+    const len = rotor.tls.write_record(rotor.constants.tls_content_application, &prefix, &record);
+    try testing.expect(rig.loop.network().write_stream(connection.descriptor.?, record[0..len], rig.loop.now()));
+    _ = try rig.step(fixtures.channel_read_ns);
+    try testing.expect(connection.state == .up);
+    try testing.expectEqual(@as(usize, prefix.len), connection.used);
+    try rig.deinit();
+}
+
 test "a ticket is kept and spent, and a declined one is answered in full, counting no failure" {
     var rig: Rig = .{};
     try start(&rig, 45, .{ .{ .tls = .{ .tickets = true, .decline_tickets = true } }, .{} });

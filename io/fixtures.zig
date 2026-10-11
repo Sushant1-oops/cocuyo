@@ -84,6 +84,23 @@ pub const socket_send_bytes_short = 5;
 /// A connection that can assemble only a small message, so an ordinary answer will not fit.
 pub const tiny_message_bytes = 64;
 
+/// A name of 255 octets in wire form, the longest (RFC 1035 §2.3.4): three labels of 63 letters
+/// and one of 61, each with its length octet, and the root's.
+pub const longest_name_text = ("x" ** 63 ++ ".") ** 3 ++ "x" ** 61 ++ ".";
+
+/// The seed of the first of the rigs that ask it.
+pub const longest_name_seed = 90;
+
+/// Names whose answer from a scripted server that sends no cookie is exactly `tiny_message_bytes`
+/// long, and one octet longer: 12 of header, the name and 4 of question, 16 of A record and 11 of
+/// OPT record are 43 and the name, which is 21 octets in wire form, and 22.
+pub const tiny_name_fits = "aaaaaaaaaaa.example.";
+pub const tiny_name_over = "aaaaaaaaaaaa.example.";
+
+/// The longest message whose length and the two octets of its prefix still sum within sixteen
+/// bits: 65533 and 2 are 65535 (RFC 1035 §4.2.2). One octet more overflowed the sum.
+pub const message_bytes_unsummed = 65533;
+
 /// Lookups on one connection when it fails: one whose query is being sent, one whose waits.
 pub const queued_lookups = 2;
 

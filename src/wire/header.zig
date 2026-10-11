@@ -89,6 +89,11 @@ pub fn write(header: *const Header, out: []u8) void {
 
 /// The length a TCP length prefix describes. The caller reads two octets, calls this, reads that
 /// many more, and hands the result to `on_response` (docs/design.md §5).
+///
+/// The length excludes the prefix's own two octets (RFC 1035 §4.2.2), and it is a `u16`. A caller
+/// who adds the two, or anything else, widens it first: `@as(usize, message_len(prefix)) +
+/// tcp_prefix_bytes`. `tcp_prefix_bytes` has no type of its own, so the sum is otherwise made in
+/// sixteen bits, and a prefix of 65534 or 65535, which a server chooses, overflows it: a panic.
 pub fn message_len(prefix: []const u8) u16 {
     assert(prefix.len >= core.constants.tcp_prefix_bytes);
     assert(core.constants.tcp_prefix_bytes == constants.u16_bytes);

@@ -248,6 +248,10 @@ test "the largest cookie fills the largest OPT record" {
     var out: [core.constants.opt_record_bytes_max]u8 = @splat(0);
     const largest = cookie_with(core.constants.cookie_server_bytes_max);
     try testing.expectEqual(core.constants.opt_record_bytes_max, write(core.constants.udp_payload_bytes_default, &largest, &out));
+    // And it reads back whole: a server cookie runs to 32 octets (RFC 7873 §4).
+    const view = (try find_cookie(out[core.constants.opt_record_bytes..])).?;
+    try testing.expectEqual(@as(usize, core.constants.cookie_server_bytes_max), view.server.len);
+    try testing.expectEqualSlices(u8, largest.server[0..largest.server_len], view.server);
 }
 
 test "find_cookie reads the short and the long form, takes the first of two, and finds none" {

@@ -315,6 +315,15 @@ test "failures count up until an answer resets them, and the instant is the last
     try testing.expectEqual(@as(u8, 0), servers.failures(0));
 }
 
+test "a server's failures stop at the most their octet counts, and the instant is still the last" {
+    const config: Config = .{ .servers = &fixtures.servers_two };
+    var servers = Servers.init(&config, 1);
+    const most = std.math.maxInt(u8);
+    for (0..most + 2) |instant| servers.record_failure(0, instant);
+    try testing.expectEqual(@as(u8, most), servers.failures(0));
+    try testing.expectEqual(@as(u64, most + 1), servers.state(0).failed_at_ns);
+}
+
 test "a server that lowercases the name is marked alone, and a table built again marks none" {
     const config: Config = .{ .servers = &fixtures.servers_two };
     var servers = Servers.init(&config, 1);

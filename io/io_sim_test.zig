@@ -125,6 +125,25 @@ test "a lookup started on the engine is answered by the scripted server through 
     try rig.deinit();
 }
 
+test "a lookup of a name of 255 octets is answered through the loop, over UDP and over a stream" {
+    // Its answer's question ends past octet 255 of the message, where check 5's offsets, summed
+    // in the octet a name's length is held in, overflowed (docs/design.md §7).
+    const scripts = [_]rotor.server.Script{ .{}, .{ .truncate_per_256 = fixtures.always } };
+    for (scripts, 0..) |script, case| {
+        var rig: Rig = .{};
+        try rig.init(fixtures.longest_name_seed + case, .{ script, .{ .down = true } }, .{ .servers = &.{} });
+        const text_question = question(fixtures.longest_name_text);
+        try testing.expectEqual(@as(usize, cocuyo.constants.name_bytes_max), text_question.name.len);
+        _ = try rig.engine.start(text_question, rig.loop.now());
+        const result = try rig.until_result();
+        try testing.expectEqual(@as(usize, 1), result.outcome.answer.addresses.len);
+        // A truncated answer sent the lookup to the stream, which answered it (RFC 7766 §5).
+        try testing.expectEqual(case == 1, rig.engine.connections[0].state == .up);
+        _ = rig.engine.take(rig.loop.now());
+        try rig.deinit();
+    }
+}
+
 test "a second start for the same name is a cache hit, and a negative answer is cached too" {
     var rig: Rig = .{};
     try rig.init(2, .{ .{}, .{} }, .{ .servers = &.{} });

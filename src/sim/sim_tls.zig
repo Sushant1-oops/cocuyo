@@ -54,7 +54,8 @@ pub fn step_of(record: []const u8) ?Step {
 /// The octets of the first whole record in `bytes`, or null while it has not all arrived.
 pub fn record_len(bytes: []const u8) ?usize {
     if (bytes.len < header_bytes) return null;
-    const length = std.mem.readInt(u16, bytes[constants.tls_record_length_at..][0..@sizeOf(u16)], .big);
+    // `usize`, not the `u16` the length is read as: with the header's octets it passes 65535.
+    const length: usize = std.mem.readInt(u16, bytes[constants.tls_record_length_at..][0..@sizeOf(u16)], .big);
     if (bytes.len < header_bytes + length) return null;
     return header_bytes + length;
 }
@@ -278,6 +279,16 @@ test "a hello, a flight and the handshake's end, with a ticket after it" {
     try testing.expectEqual(Session.Opened.nothing, try session.open(step_record(.ticket, &record), &.{}));
     try testing.expect(session.take_ticket() != null);
     try testing.expect(session.take_ticket() == null);
+}
+
+test "a record as long as its two length octets can say is waited for" {
+    // The length and the header's five octets pass sixteen bits from a length of 65531.
+    const longest = std.math.maxInt(u16);
+    for ([_]u16{ longest - header_bytes, longest - header_bytes + 1, longest }) |length| {
+        var header: [header_bytes]u8 = @splat(0);
+        std.mem.writeInt(u16, header[constants.tls_record_length_at..][0..@sizeOf(u16)], length, .big);
+        try testing.expectEqual(@as(?usize, null), record_len(&header));
+    }
 }
 
 test "a record refused once up fails the session and stages its fatal alert" {

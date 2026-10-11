@@ -40,6 +40,8 @@ pub const Strategy = enum {
     /// A response whose one answer is a record of a type the codec reads, written whole, or with
     /// one octet of its rdata changed.
     record,
+    /// A plausible header and a question of a long name, of a type cocuyo asks, then noise.
+    long_question,
 
     pub const count = @typeInfo(Strategy).@"enum".fields.len;
 };
@@ -105,6 +107,7 @@ pub fn generate(seed: u64, out: *Message) void {
         .pointer_maze => write_pointer_maze(&generator, out),
         .truncated => truncate(&generator, out),
         .record => write_record(&generator, out),
+        .long_question => write_long_question(&generator, out),
     }
     assert(out.len <= message_bytes_max);
 }
@@ -147,6 +150,45 @@ fn write_question(generator: *Generator, out: *Message) void {
     }
 }
 
+/// The header above, then a question whose name is `fuzz_question_name_bytes_min` octets long or
+/// more, up to the longest a name can be (RFC 1035 §2.3.4), so its type and class can lie past
+/// octet 255 of the message. Its type is one cocuyo asks and its class IN, so check 5's compare
+/// reads all of it (docs/design.md §7).
+fn write_long_question(generator: *Generator, out: *Message) void {
+    write_header(generator, out);
+    const lengths = core.constants.name_bytes_max - constants.fuzz_question_name_bytes_min + 1;
+    const name_bytes = constants.fuzz_question_name_bytes_min + generator.below(lengths);
+    const end = core.constants.header_bytes + name_bytes + core.constants.question_fixed_bytes;
+    out.len = @max(out.len, end);
+    var writer: Writer = .{ .bytes = out.bytes[0..out.len], .at = core.constants.header_bytes };
+    write_labels(generator, &writer, name_bytes - 1);
+    writer.octet(0);
+    writer.short(record_kinds[generator.below(record_kinds.len)].code());
+    writer.short(core.constants.class_internet);
+    assert(writer.at == end);
+}
+
+/// Labels of noise that take `area_bytes` octets, length octets included, of lengths the seed
+/// chooses up to 63 (RFC 1035 §2.3.4). A rest of 64 octets or fewer is the last label, and a
+/// longer one leaves at least the octets a label takes.
+fn write_labels(generator: *Generator, writer: *Writer, area_bytes: usize) void {
+    var rest = area_bytes;
+    for (0..core.constants.labels_max) |_| {
+        assert(rest >= constants.label_wire_bytes_min);
+        // The most octets this label may hold and still leave the next label its own.
+        const room = rest -| (1 + constants.label_wire_bytes_min);
+        const length = if (rest <= core.constants.label_bytes_max + 1)
+            rest - 1
+        else
+            1 + generator.below(@min(core.constants.label_bytes_max, room));
+        writer.octet(@intCast(length));
+        writer.noise(generator, length);
+        rest -= 1 + length;
+        if (rest == 0) return;
+    }
+    unreachable; // each label takes two octets or more, and a name's labels take 254 at most
+}
+
 /// One octet of a plausible message, flipped to something a parser must refuse: a count, a length
 /// octet, or a pointer's high octet.
 fn corrupt(generator: *Generator, out: *Message) void {
@@ -165,10 +207,9 @@ fn write_pointer_maze(generator: *Generator, out: *Message) void {
     write_header(generator, out);
     var offset: usize = core.constants.header_bytes;
     while (offset + constants.pointer_bytes <= out.len) {
-        const target = generator.below(out.len);
-        out.bytes[offset] = constants.label_kind_pointer |
-            @as(u8, @intCast((target >> constants.octet_bits) & constants.label_kind_mask));
-        out.bytes[offset + 1] = @truncate(target);
+        // The offset's high bits go in the first octet beside the two that say pointer (RFC 1035
+        // §4.1.4): masked with those two, they were lost, and no pointer aimed past offset 255.
+        integer.write_u16(out.bytes[0..out.len], offset, pointer_to(generator.below(out.len)));
         offset += constants.pointer_bytes;
     }
 }

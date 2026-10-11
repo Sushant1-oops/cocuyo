@@ -57,7 +57,8 @@ pub const Read = struct { item: Item, len: usize };
 pub fn read_item(bytes: []const u8) ?Read {
     if (bytes.len < header_bytes) return null;
     const kind = std.enums.fromInt(Kind, bytes[0]) orelse return null;
-    const length = std.mem.readInt(u16, bytes[constants.quic_item_length_at..][0..@sizeOf(u16)], .big);
+    // `usize`, not the `u16` the length is read as: with the header's octets it passes 65535.
+    const length: usize = std.mem.readInt(u16, bytes[constants.quic_item_length_at..][0..@sizeOf(u16)], .big);
     if (bytes.len < header_bytes + length) return null;
     const stream = std.mem.readInt(u32, bytes[constants.quic_item_stream_at..][0..@sizeOf(u32)], .big);
     return .{ .item = .{ .kind = kind, .stream = stream, .bytes = bytes[header_bytes..][0..length] }, .len = header_bytes + length };
@@ -293,6 +294,17 @@ test "an item reads back as written, and a short or unknown one does not read" {
     try testing.expectEqual(@as(?Read, null), read_item(out[0 .. len - 1]));
     out[0] = 0xff;
     try testing.expectEqual(@as(?Read, null), read_item(out[0..len]));
+}
+
+test "an item as long as its two length octets can say is not whole, and does not read" {
+    // The length and the header's seven octets pass sixteen bits from a length of 65529.
+    const longest = std.math.maxInt(u16);
+    for ([_]u16{ longest - header_bytes, longest - header_bytes + 1, longest }) |length| {
+        var header: [header_bytes]u8 = @splat(0);
+        header[0] = @intFromEnum(Kind.answer);
+        std.mem.writeInt(u16, header[constants.quic_item_length_at..][0..@sizeOf(u16)], length, .big);
+        try testing.expectEqual(@as(?Read, null), read_item(&header));
+    }
 }
 
 test "a hello, a flight, and the handshake's end on the offered protocol, then a ticket" {

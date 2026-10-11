@@ -54,7 +54,8 @@ pub const Options = struct {
     /// The QUIC connection type of docs/design.md §24, the request interface: colibri's over
     /// chapulin's QUIC object when the build links them, the twin's in its tests, and
     /// `quic.None`, which refuses a DoQ configuration. A DoQ answer is read into one buffer of
-    /// `tcp_message_bytes`, since a DoQ stream holds what a TCP connection holds (RFC 9250 §4.2).
+    /// `tcp_message_bytes` and a prefix, since a DoQ stream holds what a TCP connection holds
+    /// (RFC 9250 §4.2).
     quic: type = quic.None,
     /// The channel type of docs/design.md §24, DoH over colibri's client: colibri's
     /// `client.Channel` under `cocuyo_doh` when the build links it, the twin's in its tests, and
@@ -101,7 +102,8 @@ pub fn Resolver(comptime options: Options) type {
     const doh_servers = with_doh(options, cocuyo.constants.servers_max);
     const request_lookups = with_requests(options, options.lookups);
     const request_bytes_max = request_bytes_of(options);
-    const answer_bytes = with_requests(options, options.tcp_message_bytes);
+    // The stream of a DoQ answer holds the message and its prefix (RFC 9250 §4.2).
+    const answer_bytes = with_requests(options, cocuyo.constants.tcp_prefix_bytes + options.tcp_message_bytes);
     comptime check_transports(options);
     return struct {
         const Self = @This();

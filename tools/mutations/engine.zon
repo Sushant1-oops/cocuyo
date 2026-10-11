@@ -1041,4 +1041,103 @@
         },
         .caught_by = .{ .step = "spec-engine" },
     },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO8",
+        .what = "both offsets of a question are summed in the octet a name's length is held in, under the engine",
+        .edits = .{
+            .{ .file = "src/wire/question.zig", .old = "    const start: usize = core.constants.header_bytes;\n    const end = start + section_bytes(name);", .new = "    const start = core.constants.header_bytes;\n    const end = start + section_bytes(name);" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO9",
+        .what = "a stream's length prefix and its own two octets are summed in the sixteen bits the prefix reads as",
+        .edits = .{
+            .{ .file = "io/io_tcp.zig", .old = "        const length: usize = cocuyo.message_len(connection.frame[0..prefix]);", .new = "        const length = cocuyo.message_len(connection.frame[0..prefix]);" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO10",
+        .what = "a connection's frame holds tcp_message_bytes, with no room for the prefix beside the longest message",
+        .edits = .{
+            .{ .file = "io/io_tcp.zig", .old = "        frame: [cocuyo.constants.tcp_prefix_bytes + message_bytes]u8 = undefined,", .new = "        frame: [message_bytes]u8 = undefined," },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO11",
+        .what = "the DoQ answer buffer holds tcp_message_bytes, with no room for the prefix beside the longest message",
+        .edits = .{
+            .{ .file = "io/io.zig", .old = "    const answer_bytes = with_requests(options, cocuyo.constants.tcp_prefix_bytes + options.tcp_message_bytes);", .new = "    const answer_bytes = with_requests(options, options.tcp_message_bytes);" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO12",
+        .what = "the plain session sums an ALPN length and its own octet in the octet the length reads as",
+        .edits = .{
+            .{ .file = "io/io_quic_plain.zig", .old = "        const alpn_len: usize = body[0];", .new = "        const alpn_len = body[0];" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_quic" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO13",
+        .what = "the plain session sums a handshake message's length and its frame in the 24 bits the length reads as",
+        .edits = .{
+            .{ .file = "io/io_quic_plain.zig", .old = "        const body_len: usize = std.mem.readInt(u24, heard[1..][0..length_bytes], .big);", .new = "        const body_len = std.mem.readInt(u24, heard[1..][0..length_bytes], .big);" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_quic" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO14",
+        .what = "the twin sums a record's length and its header in the sixteen bits the length reads as",
+        .edits = .{
+            .{ .file = "src/sim/sim_tls.zig", .old = "    const length: usize = std.mem.readInt(u16, bytes[constants.tls_record_length_at..][0..@sizeOf(u16)], .big);", .new = "    const length = std.mem.readInt(u16, bytes[constants.tls_record_length_at..][0..@sizeOf(u16)], .big);" },
+        },
+        .caught_by = .{ .step = "test-sim" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO15",
+        .what = "the twin sums a QUIC item's length and its header in the sixteen bits the length reads as",
+        .edits = .{
+            .{ .file = "src/sim/sim_quic.zig", .old = "    const length: usize = std.mem.readInt(u16, bytes[constants.quic_item_length_at..][0..@sizeOf(u16)], .big);", .new = "    const length = std.mem.readInt(u16, bytes[constants.quic_item_length_at..][0..@sizeOf(u16)], .big);" },
+        },
+        .caught_by = .{ .step = "test-sim" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO16",
+        .what = "the twin's TLS server sums a query's length prefix and its own two octets in sixteen bits",
+        .edits = .{
+            .{ .file = "src/sim/sim_loop_perform.zig", .old = "    const message_len: usize = wire.message_len(data[0..prefix]);", .new = "    const message_len = wire.message_len(data[0..prefix]);" },
+        },
+        .caught_by = .{ .step = "test-sim" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO17",
+        .what = "a client of the plain session takes a second Finished, and owes another of its own",
+        .edits = .{
+            .{ .file = "io/io_quic_plain.zig", .old = "                if (keys_available(session, .application, .read)) return session.fail(.unexpected_message);\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_quic" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO18",
+        .what = "a server of the plain session takes a second ClientHello, and owes another flight",
+        .edits = .{
+            .{ .file = "io/io_quic_plain.zig", .old = "                if (session.selected_len != null) return session.fail(.unexpected_message);\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_quic" },
+    },
 }

@@ -67,7 +67,10 @@ const Case = enum { exact, lowercase };
 
 fn section_matches(message: []const u8, name: *const Name, kind: Kind, comptime case: Case) bool {
     assert(name.len >= 1);
-    const start = core.constants.header_bytes;
+    // `usize`, not the `u8` a name's length is held in: the class of a question whose name is 242
+    // octets or more lies past octet 255 of the message (12 + 242 + 2 = 256), and a name runs to
+    // 255 octets (RFC 1035 §2.3.4).
+    const start: usize = core.constants.header_bytes;
     const end = start + section_bytes(name);
     if (message.len < end) return false;
     assert(end <= message.len);
@@ -182,6 +185,76 @@ test "matches_lowercase takes the name asked with every letter small, and nothin
     try testing.expect(!matches_lowercase(&chaos, &mixed, .a));
     const short = query_message[0 .. query_message.len - 1];
     try testing.expect(!matches_lowercase(short, &mixed, .a));
+}
+
+/// A name of `length` octets in wire form, of letters: labels of 63 octets, then one of the rest.
+fn long_name(length: usize) !Name {
+    const letters: [core.constants.label_bytes_max]u8 = @splat('x');
+    var name: Name = Name.empty;
+    var rest = length - 1; // the root's octet
+    for (0..core.constants.labels_max) |_| {
+        if (rest == 0) break;
+        // `usize`: `@min` with 63 gives a `u6`, which its length octet's 1 overflows.
+        const label: usize = @min(rest - 1, letters.len);
+        try name.append_label(letters[0..label]);
+        rest -= 1 + label;
+    }
+    try name.terminate();
+    return name;
+}
+
+/// The question of `name` and type A after a header of zeros, written into `out`.
+fn question_message(name: *const Name, out: *[long_message_bytes]u8) []const u8 {
+    out.* = @splat(0);
+    const written = write(name, .a, out[core.constants.header_bytes..]);
+    return out[0 .. core.constants.header_bytes + written];
+}
+
+/// The octets a question of the longest name occupies, with the header before it.
+const long_message_bytes = core.constants.header_bytes + core.constants.name_bytes_max +
+    core.constants.question_fixed_bytes;
+
+test "a question of a name of 242 octets or more matches itself, its class past octet 255" {
+    // Its class lies past octet 255 of the message, and from 244 octets its type too, where offsets
+    // summed in the `u8` a name's length is held in overflowed; 241 is the longest that did not.
+    const entropy = 0x0123456789abcdef;
+    for ([_]usize{ 241, 242, 243, 244, core.constants.name_bytes_max }) |length| {
+        const held = try long_name(length);
+        try testing.expectEqual(length, @as(usize, held.len));
+        var cased = held;
+        name_codec.mix_case(&cased, entropy);
+        var asked_buffer: [long_message_bytes]u8 = undefined;
+        var mixed_buffer: [long_message_bytes]u8 = undefined;
+        const asked = question_message(&held, &asked_buffer);
+        const mixed = question_message(&cased, &mixed_buffer);
+        try testing.expect(matches(asked, &held, .a) and !matches(asked, &held, .aaaa));
+        try testing.expect(matches(mixed, &cased, .a) and !matches(mixed, &held, .a));
+        // The name asked in lowercase, read against the name as held and as the mix cased it.
+        try testing.expect(matches_lowercase(asked, &held, .a));
+        try testing.expect(matches_lowercase(asked, &cased, .a));
+        try testing.expect(!matches_lowercase(mixed, &held, .a));
+        // Another name of the same length, its last letter another: refused by each compare.
+        var other = held;
+        other.bytes[held.len - 2] = 'y';
+        try testing.expect(!matches(asked, &other, .a) and !matches_lowercase(asked, &other, .a));
+    }
+}
+
+test "a question of the most labels a name holds is written, read back and matched" {
+    // 127 labels of one letter are 254 octets, and the root's makes 255 (RFC 1035 §2.3.4).
+    const most = try Name.from_text("a." ** 126 ++ "a");
+    try testing.expectEqual(@as(usize, core.constants.name_bytes_max), most.len);
+    var buffer: [long_message_bytes]u8 = undefined;
+    const message = question_message(&most, &buffer);
+    var read: Name = Name.empty;
+    const parsed = try parse(message, &read);
+    try testing.expectEqual(message.len, parsed.end);
+    try testing.expectEqualSlices(u8, most.wire(), read.wire());
+    try testing.expect(matches(message, &read, .a) and matches_lowercase(message, &read, .a));
+    // One octet short of the class: refused, and not read.
+    const short = message[0 .. message.len - 1];
+    try testing.expectError(Error.MalformedMessage, parse(short, &read));
+    try testing.expect(!matches(short, &most, .a) and !matches_lowercase(short, &most, .a));
 }
 
 test "matches refuses a message too short to hold the question" {

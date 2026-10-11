@@ -93,6 +93,8 @@ pub const Session = struct {
         var at = session.owed_len[@intFromEnum(level)];
         var len: usize = 0;
         for (body) |part| len += part.len;
+        // A side owes each of its messages once, whatever the peer sends: `hear_as_client` and
+        // `hear_as_server` refuse the message that would owe one again.
         assert(at + frame_bytes + len <= owed.len);
         owed[at] = @intFromEnum(message);
         std.mem.writeInt(u24, owed[at + 1 ..][0..length_bytes], @intCast(len), .big);
@@ -133,6 +135,9 @@ pub const Session = struct {
             },
             .finished => {
                 if (level != .handshake or session.selected_len == null) return session.fail(.unexpected_message);
+                // RFC 9846 §4: a message out of its order ends the handshake with this alert. A
+                // second Finished is one, and each owes a Finished: the peer chooses how many come.
+                if (keys_available(session, .application, .read)) return session.fail(.unexpected_message);
                 session.owe(.handshake, .finished, &.{});
                 session.open_keys(.application);
             },
@@ -144,6 +149,8 @@ pub const Session = struct {
         switch (message) {
             .client_hello => {
                 if (level != .initial) return error.WrongLevel;
+                // RFC 9846 §4, as for a client's second Finished: each hello owes a whole flight.
+                if (session.selected_len != null) return session.fail(.unexpected_message);
                 try session.take_extensions(body);
                 if (session.other) {
                     @memcpy(session.selected[0..other_protocol.len], other_protocol);
@@ -168,8 +175,11 @@ pub const Session = struct {
     /// A hello's or EncryptedExtensions' body: an ALPN token after its length, then transport
     /// parameters.
     fn take_extensions(session: *Session, body: []const u8) tls.quic_provider.ProvideError!void {
-        if (body.len < 1 or body.len < 1 + body[0]) return session.fail(.decode_error);
-        const alpn = body[1..][0..body[0]];
+        if (body.len < 1) return session.fail(.decode_error);
+        // `usize`, not the octet the length is read as: a length of 255 and its own octet are 256.
+        const alpn_len: usize = body[0];
+        if (body.len < 1 + alpn_len) return session.fail(.decode_error);
+        const alpn = body[1..][0..alpn_len];
         const params = body[1 + alpn.len ..];
         if (alpn.len > alpn_bytes_max or params.len > params_bytes_max) return session.fail(.decode_error);
         @memcpy(session.selected[0..alpn.len], alpn);
@@ -220,7 +230,9 @@ fn provide_handshake(context: *anyopaque, level: Level, data: []const u8) tls.qu
     len.* += data.len;
     var messages: usize = 0;
     while (messages < level_bytes_max / frame_bytes and len.* >= frame_bytes) : (messages += 1) {
-        const body_len = std.mem.readInt(u24, heard[1..][0..length_bytes], .big);
+        // `usize`, not the `u24` the length is read as: with the frame's four octets a length of
+        // 2^24 - 4 or more passes twenty-four bits.
+        const body_len: usize = std.mem.readInt(u24, heard[1..][0..length_bytes], .big);
         if (len.* < frame_bytes + body_len) return;
         const message = std.enums.fromInt(Message, heard[0]) orelse return session.fail(.unexpected_message);
         try session.hear(level, message, heard[frame_bytes..][0..body_len]);
@@ -379,4 +391,73 @@ fn discard_previous_keys(context: *anyopaque) void {
 
 fn discard_keys(context: *anyopaque, level: Level) void {
     Session.of(context).keys[@intFromEnum(level)] = @splat(false);
+}
+
+// Tests.
+
+const testing = std.testing;
+
+/// A client that has given its transport parameters, and so has begun its handshake.
+fn started_client() !Session {
+    var session = Session.init(.client, "doq", false);
+    try session.provider().set_transport_params(&.{0});
+    return session;
+}
+
+test "an ALPN length of 255 with no token after it is a decode error, as one of 254 is" {
+    // The length and its own octet sum to 256, past the octet the length is read as.
+    for ([_]u8{ std.math.maxInt(u8) - 1, std.math.maxInt(u8) }) |alpn_len| {
+        var session = try started_client();
+        const extensions = [_]u8{ @intFromEnum(Message.encrypted_extensions), 0, 0, 1, alpn_len };
+        try testing.expectError(error.TlsFailed, session.provider().provide_handshake(.handshake, &extensions));
+        try testing.expectEqual(@as(?tls.Alert, .decode_error), session.alert);
+    }
+}
+
+test "a message as long as three octets can say is waited for, and nothing is read of it" {
+    // The length and the frame's four octets sum past twenty-four bits from a length of 2^24 - 4.
+    const longest = std.math.maxInt(u24);
+    for ([_]u24{ longest - frame_bytes, longest - frame_bytes + 1, longest }) |body_len| {
+        var session = try started_client();
+        var frame: [frame_bytes]u8 = undefined;
+        frame[0] = @intFromEnum(Message.server_hello);
+        std.mem.writeInt(u24, frame[1..][0..length_bytes], body_len, .big);
+        try session.provider().provide_handshake(.initial, &frame);
+        try testing.expectEqual(@as(usize, frame_bytes), session.heard_len[@intFromEnum(Level.initial)]);
+        try testing.expectEqual(@as(?tls.Alert, null), session.alert);
+        try testing.expect(!keys_available(&session, .handshake, .read));
+    }
+}
+
+/// A Finished, which has no body.
+const finished = [_]u8{ @intFromEnum(Message.finished), 0, 0, 0 };
+
+test "a client refuses a second Finished, and owes one of its own" {
+    // Each Finished a client hears owes one, and the peer chooses how many come.
+    var session = try started_client();
+    const extensions = [_]u8{ @intFromEnum(Message.encrypted_extensions), 0, 0, 4, 3, 'd', 'o', 'q' };
+    try session.provider().provide_handshake(.handshake, &(extensions ++ finished));
+    const owed = session.owed_len[@intFromEnum(Level.handshake)];
+    try testing.expectEqual(@as(usize, frame_bytes), owed);
+    try testing.expectError(error.TlsFailed, session.provider().provide_handshake(.handshake, &finished));
+    try testing.expectEqual(@as(?tls.Alert, .unexpected_message), session.alert);
+    try testing.expectEqual(owed, session.owed_len[@intFromEnum(Level.handshake)]);
+}
+
+test "a server refuses a second ClientHello, and its flight at its longest fits a level" {
+    var session = Session.init(.server, "doq", false);
+    const params: [params_bytes_max]u8 = @splat(0);
+    try session.provider().set_transport_params(&params);
+    // A hello at its longest: an ALPN token and transport parameters, each the most a side keeps.
+    var hello: [frame_bytes + 1 + alpn_bytes_max + params_bytes_max]u8 = @splat('a');
+    hello[0] = @intFromEnum(Message.client_hello);
+    std.mem.writeInt(u24, hello[1..][0..length_bytes], hello.len - frame_bytes, .big);
+    hello[frame_bytes] = alpn_bytes_max;
+    try session.provider().provide_handshake(.initial, &hello);
+    // EncryptedExtensions as long as the hello, and a Finished.
+    const owed = session.owed_len;
+    try testing.expectEqual(@as(usize, hello.len + frame_bytes), owed[@intFromEnum(Level.handshake)]);
+    try testing.expectError(error.TlsFailed, session.provider().provide_handshake(.initial, &hello));
+    try testing.expectEqual(@as(?tls.Alert, .unexpected_message), session.alert);
+    try testing.expectEqual(owed, session.owed_len);
 }

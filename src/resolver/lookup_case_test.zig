@@ -131,6 +131,65 @@ fn respond_altered(harness: *fixtures.Harness, offset: usize, octet: u8) Verdict
     return harness.lookup.on_response(message, servers[0].endpoint, harness.now_ns);
 }
 
+/// A name of 255 octets, the longest (RFC 1035 §2.3.4): labels of 63 letters, then one of the rest.
+const full_labels = 3;
+const full_label_text = "x" ** core.constants.label_bytes_max ++ ".";
+/// The octets of the name that neither the full labels nor the last one's letters take: the
+/// last label's length octet, and the root's.
+const last_label_framing = 2;
+const last_label_bytes = core.constants.name_bytes_max - full_labels * full_label_text.len - last_label_framing;
+const longest_text = full_label_text ** full_labels ++ "x" ** last_label_bytes ++ ".";
+
+test "a name of 255 octets is asked and answered, mixed, in lowercase and as held" {
+    // Its question's class lies past octet 255 of the message, where check 5's offsets, computed
+    // in the `u8` a name's length is held in, overflowed: a panic on its own server's answer.
+    var harness: fixtures.Harness = .{ .config = .{ .servers = &fixtures.servers_one } };
+    try harness.start(longest_text, .a, seed);
+    try testing.expectEqual(@as(usize, core.constants.name_bytes_max), harness.lookup.current.len);
+    _ = harness.send();
+    try testing.expect(harness.lookup.flags.query_mixed and sent_mixed(&harness));
+    // The echo in lowercase marks its server, and the echo as sent is taken.
+    try testing.expectEqual(Verdict.ignored, harness.respond(folded, only));
+    try testing.expect(harness.servers.changes_case(0));
+    try testing.expectEqual(Verdict.accepted, harness.respond(fixtures.answer_a, only));
+    try testing.expect(harness.poll() == .done);
+    // The next lookup asks the marked server in lowercase, and takes that echo.
+    try harness.start(longest_text, .a, seed + 1);
+    _ = harness.send();
+    try testing.expect(!harness.lookup.flags.query_mixed and !sent_mixed(&harness));
+    try testing.expectEqual(Verdict.accepted, harness.respond(folded, only));
+    // With 0x20 off the name goes out as held, and its echo is taken.
+    const unmixed: core.Config = .{ .servers = &fixtures.servers_one, .mix_case = false };
+    var without: fixtures.Harness = .{ .config = unmixed };
+    try without.start(longest_text, .a, seed);
+    _ = without.send();
+    try testing.expectEqual(Verdict.accepted, without.respond(fixtures.answer_a, only));
+}
+
+/// Connects the stream the lookup asked for, sends its mixed query on it, and answers that.
+fn expect_answered_over_tcp(harness: *fixtures.Harness) !void {
+    try testing.expect(harness.poll() == .connect_tcp);
+    harness.lookup.on_tcp_connected(harness.now_ns);
+    _ = harness.send_over_tcp();
+    try testing.expectEqual(lookup_module.State.awaiting_tcp, harness.lookup.state);
+    try testing.expect(harness.lookup.flags.query_mixed and sent_mixed(harness));
+    try testing.expectEqual(Verdict.accepted, harness.respond(fixtures.answer_a, only));
+    try testing.expect(harness.poll() == .done);
+}
+
+test "a name of 255 octets is answered over a stream, after a truncated answer and under use_tcp" {
+    // Check 5 reads the same question in a message a stream carried, after its length prefix.
+    var harness: fixtures.Harness = .{ .config = .{ .servers = &fixtures.servers_one } };
+    try harness.start(longest_text, .a, seed);
+    _ = harness.send();
+    try testing.expectEqual(Verdict.accepted, harness.respond(fixtures.truncated, only));
+    try expect_answered_over_tcp(&harness);
+    const stream: core.Config = .{ .servers = &fixtures.servers_one, .use_tcp = true };
+    var over_tcp: fixtures.Harness = .{ .config = stream };
+    try over_tcp.start(longest_text, .a, seed);
+    try expect_answered_over_tcp(&over_tcp);
+}
+
 test "a reply whose question differs in more than its case marks nothing" {
     var harness: fixtures.Harness = .{ .config = .{ .servers = &servers } };
     try harness.start("example.com.", .a, seed);
@@ -141,7 +200,7 @@ test "a reply whose question differs in more than its case marks nothing" {
     // "fxample.com": a letter that is not the same letter in another case.
     try testing.expectEqual(Verdict.ignored, respond_altered(&harness, 1, 'f'));
     // The name in another case, and the type AAAA: the type's low octet follows the name.
-    const type_low = harness.lookup.current.len + 1;
+    const type_low = @as(usize, harness.lookup.current.len) + 1;
     const aaaa: u8 = @intCast(core.Kind.aaaa.code());
     try testing.expectEqual(Verdict.ignored, respond_altered(&harness, type_low, aaaa));
     try testing.expect(!harness.servers.changes_case(0));

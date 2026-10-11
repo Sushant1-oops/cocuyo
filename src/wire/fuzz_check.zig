@@ -91,8 +91,28 @@ fn question_check(message: []const u8) ?[]const u8 {
     // run against the message's own bytes.
     // A type cocuyo does not name is a question it never asks, so there is nothing to match.
     const kind = core.Kind.from_code(parsed.kind_code) orelse return null;
-    if (kind.queryable() and !question_codec.matches(message, &name, kind)) {
+    if (!kind.queryable()) return null;
+    if (!question_codec.matches(message, &name, kind)) {
         return "a question did not match the bytes it was parsed from";
+    }
+    return lowercase_echo_check(message[0..parsed.end], &name, kind);
+}
+
+/// The question that matched, echoed with every letter of its name small, is the lowercase echo
+/// of the question asked. `matches_lowercase` makes the two reads `matches` makes, after a compare
+/// of its own, so the gate runs it wherever it runs `matches`, over the long names too
+/// (docs/design.md §7, A server that changes the case).
+fn lowercase_echo_check(question: []const u8, name: *const Name, kind: core.Kind) ?[]const u8 {
+    const header = core.constants.header_bytes;
+    var echo: [header + core.constants.name_bytes_max + core.constants.question_fixed_bytes]u8 = undefined;
+    // The name matched octet for octet, so no pointer shortened it in the message.
+    if (question.len != header + question_codec.section_bytes(name)) {
+        return "a question that matched does not end where its name says";
+    }
+    @memcpy(echo[0..question.len], question);
+    for (echo[header..][0..name.len]) |*octet| octet.* = std.ascii.toLower(octet.*);
+    if (!question_codec.matches_lowercase(echo[0..question.len], name, kind)) {
+        return "a question echoed in lowercase is not the lowercase echo of the question asked";
     }
     return null;
 }

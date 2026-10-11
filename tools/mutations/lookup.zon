@@ -1722,4 +1722,112 @@
         },
         .caught_by = .{ .step = "test-resolver" },
     },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO1",
+        .what = "the offset of a question's type is summed in the octet a name's length is held in",
+        .edits = .{
+            .{ .file = "src/wire/question.zig", .old = "    if (integer.read_u16(message, start + name.len) != kind.code()) return false;", .new = "    if (integer.read_u16(message, core.constants.header_bytes + name.len) != kind.code()) return false;" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO2",
+        .what = "the offset of a question's class is summed in the octet a name's length is held in",
+        .edits = .{
+            .{ .file = "src/wire/question.zig", .old = "    return integer.read_u16(message, start + name.len + constants.u16_bytes) ==", .new = "    return integer.read_u16(message, core.constants.header_bytes + name.len + constants.u16_bytes) ==" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO3",
+        .what = "both offsets of a question are summed in that octet, under a lookup",
+        .edits = .{
+            .{ .file = "src/wire/question.zig", .old = "    const start: usize = core.constants.header_bytes;\n    const end = start + section_bytes(name);", .new = "    const start = core.constants.header_bytes;\n    const end = start + section_bytes(name);" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO4",
+        .what = "the fuzz generator writes an ordinary question where a long one goes",
+        .edits = .{
+            .{ .file = "src/wire/fuzz_generate.zig", .old = "        .long_question => write_long_question(&generator, out),", .new = "        .long_question => write_question(&generator, out)," },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO5",
+        .what = "the fuzz generator's long names stop at 241 octets",
+        .edits = .{
+            .{ .file = "src/wire/fuzz_generate.zig", .old = "    const lengths = core.constants.name_bytes_max - constants.fuzz_question_name_bytes_min + 1;", .new = "    const lengths = core.constants.name_bytes_max - constants.fuzz_question_name_bytes_min + 1 - 14;" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO6",
+        .what = "a pointer of a maze keeps the low octet of its target alone, so none aims past offset 255",
+        .edits = .{
+            .{ .file = "src/wire/fuzz_generate.zig", .old = "        integer.write_u16(out.bytes[0..out.len], offset, pointer_to(generator.below(out.len)));", .new = "        integer.write_u16(out.bytes[0..out.len], offset, pointer_to(generator.below(out.len) & std.math.maxInt(u8)));" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO7",
+        .what = "the failover delay and the instant of the failure are summed without saturating",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_order.zig", .old = "        if (now_ns < state.failed_at_ns +| self.config.failover_retry_delay_ns) continue;", .new = "        if (now_ns < state.failed_at_ns + self.config.failover_retry_delay_ns) continue;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO19",
+        .what = "a server's failures are counted without saturating",
+        .edits = .{
+            .{ .file = "src/resolver/servers.zig", .old = "        entry.failures +|= 1;", .new = "        entry.failures += 1;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO20",
+        .what = "a COOKIE option as long as the longest server cookie makes it is refused",
+        .edits = .{
+            .{ .file = "src/wire/edns.zig", .old = "len <= constants.cookie_option_long_bytes_max;", .new = "len < constants.cookie_option_long_bytes_max;" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO21",
+        .what = "a COOKIE option as long as the longest server cookie makes it is refused, under a lookup",
+        .edits = .{
+            .{ .file = "src/wire/edns.zig", .old = "len <= constants.cookie_option_long_bytes_max;", .new = "len < constants.cookie_option_long_bytes_max;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO22",
+        .what = "a query advertises the default payload size whatever the configuration says",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_poll.zig", .old = "        .payload_bytes = if (self.flags.edns_enabled) self.config.udp_payload_bytes else null,", .new = "        .payload_bytes = if (self.flags.edns_enabled) core.constants.udp_payload_bytes_default else null," },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "Sums at the most their operands reach",
+        .id = "QO23",
+        .what = "a lowercase echo of a question whose name is 250 octets long is not taken for one",
+        .edits = .{
+            .{ .file = "src/wire/question.zig", .old = "        .lowercase => is_lowercase_of(echoed, name.wire()),", .new = "        .lowercase => name.len != 250 and is_lowercase_of(echoed, name.wire())," },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
 }

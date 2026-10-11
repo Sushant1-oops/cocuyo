@@ -108,6 +108,15 @@ pub const fuzz_hints_max = 3;
 /// An SVCB key with no format of its own, which a client keeps as it is: RFC 9460 Appendix D's
 /// `key667`.
 pub const fuzz_svcb_key_generic = 667;
+/// The shortest name of the long questions the fuzz generator writes (`fuzz_generate.zig`): 64
+/// lengths, from here to the longest name, 255 octets. They hold the fourteen whose question's
+/// class lies past octet 255 of the message, from 242 octets on, and fifty shorter. The gate's 4096
+/// seeds over eight strategies give each length about eight seeds, by arithmetic, and a test of
+/// `fuzz.zig` pins that each is reached. Chosen, not measured.
+pub const fuzz_question_name_bytes_min = 192;
+/// The fewest octets a label other than the root takes in a name: its length octet and one octet
+/// (RFC 1035 §3.1). A long question's labels never leave fewer for the next.
+pub const label_wire_bytes_min = 2;
 
 /// An OPT option: a 16-bit code and a 16-bit length, then the data (RFC 6891 §6.1.2).
 pub const opt_option_fixed_bytes = 4;

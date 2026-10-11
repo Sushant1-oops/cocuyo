@@ -57,7 +57,9 @@ fn promote_retry(self: *Lookup, count: usize, now_ns: u64) void {
     while (index < count) : (index += 1) {
         const state = self.servers.state(self.order[index]);
         if (state.failures == 0) continue;
-        if (now_ns < state.failed_at_ns + self.config.failover_retry_delay_ns) continue;
+        // The sum saturates: the delay is the caller's and has no limit but its type's, so the
+        // largest, which says never, passes sixty-four bits with any instant of failure.
+        if (now_ns < state.failed_at_ns +| self.config.failover_retry_delay_ns) continue;
         std.mem.rotate(u8, self.order[0 .. index + 1], index);
         assert(self.servers.failures(self.order[0]) >= 1);
         return;
@@ -121,6 +123,21 @@ test "a failed server is promoted once its delay has passed, one query in the ch
     try testing.expectEqualSlices(u8, &.{ 0, 1, 2 }, ordered(&always, &servers, 1, 110)[0..3]);
     const never: Config = .{ .servers = &three, .failover_retry_chance = 0, .failover_retry_delay_ns = 10 };
     try testing.expectEqualSlices(u8, &.{ 1, 2, 0 }, ordered(&never, &servers, 1, 110)[0..3]);
+}
+
+test "a delay of the largest u64 never promotes a failed server, at any instant" {
+    // The delay has no limit but its type's, and the largest says never: its sum with the
+    // instant of the failure passes sixty-four bits, and saturates there.
+    const longest = std.math.maxInt(u64);
+    const never: Config = .{ .servers = &three, .failover_retry_chance = 1, .failover_retry_delay_ns = longest };
+    var servers = Servers.init(&never, 1);
+    servers.record_failure(0, 100);
+    for ([_]u64{ 100, 105, longest - 1 }) |now_ns| {
+        try testing.expectEqualSlices(u8, &.{ 1, 2, 0 }, ordered(&never, &servers, 1, now_ns)[0..3]);
+    }
+    // One nanosecond less than the largest still sums past it with the failure's instant.
+    const nearly: Config = .{ .servers = &three, .failover_retry_chance = 1, .failover_retry_delay_ns = longest - 1 };
+    try testing.expectEqualSlices(u8, &.{ 1, 2, 0 }, ordered(&nearly, &servers, 1, 105)[0..3]);
 }
 
 test "with a chance of two, about half the lookups promote the failed server" {

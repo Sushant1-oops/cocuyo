@@ -241,6 +241,21 @@ test "a walk stops at records_max and says it was truncated" {
     try testing.expect(walk.truncated);
 }
 
+test "a walk over more records than records_max reads that many of them, and says so" {
+    // One record more than the bound, each one real: the bound stops the walk, not the message.
+    const more = core.constants.records_max + 1;
+    const message = fixtures.answer_a ++ fixtures.record_a ** core.constants.records_max;
+    var walk = Iterator.init(&message, fixtures.answer_offset, more);
+    var read: usize = 0;
+    for (0..more) |_| {
+        if (try walk.next() == null) break;
+        read += 1;
+    }
+    try testing.expectEqual(@as(usize, core.constants.records_max), read);
+    try testing.expect(walk.truncated);
+    try testing.expectEqual(@as(?Record, null), try walk.next());
+}
+
 test "a record whose fixed part runs past the end of the message is malformed" {
     const short = fixtures.answer_a[0 .. fixtures.answer_offset + 5];
     var walk = Iterator.init(short, fixtures.answer_offset, 1);

@@ -51,6 +51,18 @@ test "a lookup over DoQ handshakes, then is answered on its stream, and no plain
     try rig.deinit();
 }
 
+test "a lookup of a name of 255 octets is answered over DoQ" {
+    // The answer of a request passes check 5 too, over the longest question (docs/design.md §23).
+    var rig: Rig = .{};
+    try start(&rig, fixtures.longest_name_seed, .{ .{}, .{} });
+    _ = try rig.engine.start(question(fixtures.longest_name_text), rig.loop.now());
+    const result = try rig.until_result();
+    try testing.expectEqual(@as(usize, 1), result.outcome.answer.addresses.len);
+    try testing.expectEqual(@as(u8, 0), rig.engine.resolver.servers.failures(0));
+    _ = rig.engine.take(rig.loop.now());
+    try rig.deinit();
+}
+
 test "requests taken while the handshake runs wait for its end, then each opens a stream" {
     var rig: Rig = .{};
     try start(&rig, 62, .{ .{ .quic = .{ .flights = 2 } }, .{} });

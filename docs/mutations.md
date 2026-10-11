@@ -3925,3 +3925,169 @@ probe test of `lookup_failover_test.zig`. Each fails under a row already in thes
 against `test-resolver` by hand to name the tests, then by `zig build mutations -- lookup`,
 which caught all three. DT31 fails all five, DT9 the minute-restart test, and DT21 the
 lost-datagram, minute-restart and probe tests.
+
+## Sums at the most their operands reach
+
+2026-10-10. A lookup for a name of 242 octets or more panicked when its own server's answer
+arrived. `section_matches` in `src/wire/question.zig` held the header's twelve octets in a
+constant with no type and added a name's length to it. A name's length is held in an octet
+(`core.Name.len`), so the sums were made in that octet. The offset of the class overflowed from a
+name of 242 octets, since 12, 242 and 2 are 256, and the offset of the type from 244. Both are
+read once the echoed name matches, so the answer to such a name was a panic, "integer overflow",
+in a safe build. `matches_lowercase` shares the two reads, so a lowercase echo reached them too.
+RFC 1035 §2.3.4 allows names of 255 octets. The line dates from 23fd425, of 2026-09-21, and is in
+every release, v0.1.0 to v0.5.0.
+
+Nothing caught it. No test asked a name past 241 octets and took its answer. The codec's fuzz
+generator wrote one question name that parsed as a question of class IN, `example.com`, 13
+octets.
+
+Two audits of the same day searched the tree for the same fault: a constant with no type added
+to a narrow value an input sets, and a sum no limit bounds. This change fixes what they found:
+
+- `deliver` in `io/io_tcp.zig` summed a stream's length prefix and its own two octets in the
+  `u16` the prefix reads as (RFC 1035 §4.2.2). A prefix of 65534 or 65535 overflowed it: a panic
+  of the engine on two octets from a server a lookup has a stream to, in the clear or inside a
+  DoT record, before any check of design §7 runs. Since 886a4e8, of 2026-09-22, in v0.1.0 to
+  v0.5.0.
+- A connection's frame held `tcp_message_bytes` octets, the prefix among them. So the longest
+  message it assembled was two octets shorter than that option says, and a message of 65534 or
+  65535 octets failed its connection. The engine's DoQ answer buffer had the same length for the
+  same stream. Each now holds the prefix beside the message. This was a wrong result and no
+  panic, since 886a4e8 for TCP and DoT, and since v0.2.0 for DoQ. Design §19 step 13 and §24
+  request rule 5 said each buffer was `tcp_message_bytes` long, and now say what it holds.
+- `promote_retry` in `src/resolver/lookup_order.zig` summed the instant of a server's failure
+  and `failover_retry_delay_ns` without saturating. The delay has no limit but its type's, and
+  the largest `u64`, the way to say never, panicked at the first poll of a lookup once a server
+  had failed. The value is the caller's own, never a response's. Since 8829548, of 2026-09-22.
+- The plain QUIC session of `io/io_quic_plain.zig` summed an ALPN length and its own octet in a
+  `u8`, and a handshake message's length and its frame in a `u24`. An ALPN length of 255, and a
+  message length of 2^24 - 4 or more, panicked. The session encrypts nothing and is for tests,
+  but `cocuyo_quic` exports it and its `Options.Session` defaults to it. Since 8b9fa5b, of
+  2026-09-25, in v0.2.0 to v0.5.0.
+- The twin had the fault three times: `record_len` in `src/sim/sim_tls.zig`, `read_item` in
+  `src/sim/sim_quic.zig` and `answer_sealed` in `src/sim/sim_loop_perform.zig`. Only a test's own
+  octets reach them. The audits could not reach the third. A scenario test now does, with a data
+  record whose plaintext is a prefix of 65534 and no message.
+- The fuzz generator's pointer maze masked the high bits of each target with the two bits that
+  say pointer, so every pointer aimed at offsets 0 to 255 (RFC 1035 §4.1.4).
+
+Each sum now has its type written where the narrow value is read, and the failover sum
+saturates. `core.constants.header_bytes` and `tcp_prefix_bytes` keep no type: both are used
+across the tree, and a type on either is the owner's to rule. `wire.header.message_len` still
+returns a `u16`, so a driver of a caller's own that adds the prefix's two octets to it has the
+engine's fault. Its comment and design §5 now say to widen it first.
+
+A review of the same day found one more panic on a peer's octets in the plain session, and it is
+no sum. A client owed a Finished for each Finished it heard, and a server a whole flight for each
+ClientHello, into the 512 octets a level holds, and an assertion alone bounded them. A client's
+provider given 129 Finished panicked. So did a server's given a second hello, when its flight
+was at its longest, 281 octets. Both were shown at the provider, as the tests of the session's
+two sums go, and not through colibri's connection. Each side now refuses the second message with
+`unexpected_message`, the alert for a message out of its order (RFC 9846 §4). So a side owes
+each of its messages once, and the assertion holds whatever a peer sends. The reach is that of
+the session's two sums, and the lines date from 8b9fa5b too.
+
+The codec's fuzz generator has an eighth strategy, `long_question`: a plausible header and a
+question of class IN, of a type cocuyo asks, whose name is 192 to 255 octets long. A test of
+`fuzz.zig` requires the gate's 4,096 seeds to reach each of the 64 lengths. Another requires
+most pointer mazes to aim past offset 255. An eighth strategy gives every seed another message,
+so the whole lookup set ran again, as the paragraph on the runs below says. Six rows are in no
+set and name the codec's fuzz gate as what catches them under `test-wire`: FZ1 to FZ5 and DL1.
+Each was planted again by hand in the changed tree, and each still fails the gate, at seeds
+0x51c, 0x5a, 0x1e, 0x309, 0x15b and 0xf6.
+
+The gate's check ran `matches` alone over a question that parsed, and the long-name test of
+`question.zig` held `matches_lowercase` at five lengths. The check now echoes the question with
+the letters of its name small, and requires `matches_lowercase` to take the echo, at every
+length the gate writes. QO23 refuses the echo of a name of 250 octets, a length the long-name
+test does not ask. The gate fails under it at seed 0x120, and with the new check taken out again
+no test of `test-wire` fails.
+
+Two sums stay as they are. `deadline_ns` in `src/resolver/lookup_policy.zig` adds a wait of 30
+seconds at most to `now_ns`, and `insert` in `src/cache/cache.zig` adds a TTL, 136 years at most,
+to it. Neither saturates. Each overflows only with a clock that close to the end of a `u64` of
+nanoseconds, 584 years, which no response, name or file can set.
+
+These tests reach a limit no test reached, and no check changed for them:
+
+- In `question.zig`, the most-labels test: a question of 127 labels, the most 255 octets hold,
+  written, read back and matched.
+- In `record.zig`, the real-records test: a walk over 65 records reads `records_max` of them.
+- In `servers.zig`, the saturation test: 257 failures count 255.
+- In `lookup_cookie_test.zig`, the longest-cookie test: a server cookie of 32 octets is learned
+  and sent back.
+- In `lookup_config_test.zig`, the payload test: a query advertises 512 and 65535 octets.
+- In `lookup_walk_test.zig`, the largest-walk test: 8 servers by 5 passes by 7 candidates under
+  a 30-second wait, 280 tries.
+
+Three of those tests are the first to catch a break of the line they reach: the saturation
+test, the longest-cookie test and the payload test. The review broke each line at 8074c20 and
+ran `test-wire`, `test-resolver`, `test-cache`, `test-cocuyo` and `test-io` there, and no test
+failed. The three breaks are rows now: QO19, QO21 and QO22. In the changed tree each fails the
+one test its row names, and `test-cache`, `test-cocuyo` and `test-io` still pass under each. The
+codec's own largest-cookie test wrote 32 octets of server cookie and never read them back. It
+reads them back now, so `test-wire`, the step of the module that owns the check, catches the
+same break as QO20.
+
+Each of QO1 to QO23 was broken by hand against the step its row names, to name the tests that
+fail. QO1 and QO2 each fail the fuzz gate, by a panic. With the edits of QO3, which is both, and
+of QO4 applied together, the gate holds: the long names are what make the gate catch the fault.
+The lookup's harness in `src/resolver/fixtures.zig` had the same sum, a name's length and the
+question's four fixed octets in a `u8`; without its type the two 255-octet tests panic in the
+harness. A test of `lookup_case_test.zig` summed a name's length and one in the same octet, with
+`example.com` alone: it has its type now, and no test, since no name it is given reaches it.
+
+QO1 to QO7 and QO19 to QO23 are in `tools/mutations/lookup.zon`, and QO8 to QO18, the engine's,
+the plain session's and the twin's, in `tools/mutations/engine.zon`. Once the last of them was
+written, `zig build mutations -- lookup` ran the whole set, after running each check once with
+nothing mutated: 202 mutations, each against the step it names, and caught each.
+`zig build mutations -- engine` ran the twenty rows of its set that `test-io`,
+`test-cocuyo_quic` and `test-sim` catch: QO8 to QO18, and ET12, ET13, SQ3, SQ4, TR4, CE4, CE18,
+CE20 and CE21. It caught each. The engine's other rows did not run again: the walks catch them,
+or `test-cocuyo_doh` does, whose files this change does not touch. The review ran the 28 rows of
+`test-cocuyo_doh` in a copy of the tree, before QO17 to QO23 were written, and caught each.
+Twenty-three new mutations, twenty-three `CAUGHT`; the 190 others of the lookup set run again,
+190 `CAUGHT`; nine of the engine set run again, nine `CAUGHT`.
+
+The tests the table names: in `src/wire/question.zig`, the long-name test (names of 241, 242,
+243, 244 and 255 octets under `matches` and `matches_lowercase`, each against another name of
+its length) and the most-labels test; in `src/wire/fuzz.zig`, the fuzz gate, the every-length
+test and the maze test; in `lookup_case_test.zig`, the two 255-octet tests (a name of 255 octets
+asked mixed, in lowercase and as held, and over a stream after a truncated answer and under
+`use_tcp`); in `lookup_order.zig`, the largest-delay test; in `io_sim_test.zig`, the 255-octet
+test, over UDP and over a stream; in `io_request_test.zig`, the DoQ 255-octet test; in
+`io_tcp_test.zig`, the prefix test (prefixes of 65533, 65534 and 65535), the whole-frame test (a
+frame filled by hand with a message of 65535 octets) and the tiny-frame test (a message of 64
+octets taken by a connection of 64, and one of 65 not); in `io_tls_test.zig`, the record-prefix
+test; in `io_request_failure_test.zig`, the DoQ buffer test; in `io_quic_plain.zig`, the ALPN
+test, the message-length test, the second-Finished test and the second-hello test (a server
+whose flight is at its longest, 281 of a level's 512 octets); in `edns.zig`, the largest-cookie
+test; and in the twin, the record-length test of `sim_tls.zig`, the item-length test of
+`sim_quic.zig` and the record-prefix scenario of `sim_scenarios_test.zig`.
+
+| # | Mutation | Check it breaks | Caught by | Status |
+| --- | --- | --- | --- | --- |
+| QO1 | the offset of a question's type is summed in the octet a name's length is held in | RFC 1035 §2.3.4, §7 check 5 | the long-name and most-labels tests and the fuzz gate, each by a panic, `test-wire` | CAUGHT |
+| QO2 | the offset of a question's class is summed in the octet a name's length is held in | RFC 1035 §2.3.4, §7 check 5 | the long-name and most-labels tests and the fuzz gate, each by a panic, `test-wire` | CAUGHT |
+| QO3 | both offsets of a question are summed in that octet, under a lookup | RFC 1035 §2.3.4, §7 check 5 | the two 255-octet tests of `lookup_case_test.zig`, by a panic, `test-resolver` | CAUGHT |
+| QO4 | the fuzz generator writes an ordinary question where a long one goes | §13, a question of a long name in the gate | the every-length test, `test-wire` | CAUGHT |
+| QO5 | the fuzz generator's long names stop at 241 octets | §13, names of 242 to 255 octets in the gate | the every-length test, `test-wire` | CAUGHT |
+| QO6 | a pointer of a maze keeps the low octet of its target alone, so none aims past offset 255 | RFC 1035 §4.1.4, §13 pointers at every offset | the maze test, `test-wire` | CAUGHT |
+| QO7 | the failover delay and the instant of the failure are summed without saturating | §19 step 12, a delay of any `u64` | the largest-delay test, by a panic, `test-resolver` | CAUGHT |
+| QO8 | both offsets of a question are summed in the octet a name's length is held in, under the engine | RFC 1035 §2.3.4, §7 check 5 | the 255-octet test of `io_sim_test.zig` and the DoQ 255-octet test, by a panic, `test-io` | CAUGHT |
+| QO9 | a stream's length prefix and its own two octets are summed in the sixteen bits the prefix reads as | RFC 1035 §4.2.2 | the prefix, whole-frame and record-prefix tests, by a panic, `test-io` | CAUGHT |
+| QO10 | a connection's frame holds `tcp_message_bytes`, with no room for the prefix beside the longest message | §19 step 13, the buffer a stream assembles into | the whole-frame and tiny-frame tests, `test-io` | CAUGHT |
+| QO11 | the DoQ answer buffer holds `tcp_message_bytes`, with no room for the prefix beside the longest message | RFC 9250 §4.2, §24 request rule 5 | the DoQ buffer test, `test-io` | CAUGHT |
+| QO12 | the plain session sums an ALPN length and its own octet in the octet the length reads as | the plain session's hello, an ALPN token after its length | the ALPN test, by a panic, `test-cocuyo_quic` | CAUGHT |
+| QO13 | the plain session sums a handshake message's length and its frame in the 24 bits the length reads as | RFC 9846 §4, a message's framing | the message-length test, by a panic, `test-cocuyo_quic` | CAUGHT |
+| QO14 | the twin sums a record's length and its header in the sixteen bits the length reads as | RFC 9846 §5.1, a record's header | the record-length test, by a panic, `test-sim` | CAUGHT |
+| QO15 | the twin sums a QUIC item's length and its header in the sixteen bits the length reads as | the twin's items | the item-length test, by a panic, `test-sim` | CAUGHT |
+| QO16 | the twin's TLS server sums a query's length prefix and its own two octets in sixteen bits | RFC 1035 §4.2.2 | the record-prefix scenario, by a panic, `test-sim` | CAUGHT |
+| QO17 | a client of the plain session takes a second Finished, and owes another of its own | RFC 9846 §4, a message out of its order | the second-Finished test, `test-cocuyo_quic` | CAUGHT |
+| QO18 | a server of the plain session takes a second ClientHello, and owes another flight | RFC 9846 §4, a message out of its order | the second-hello test, by a panic, `test-cocuyo_quic` | CAUGHT |
+| QO19 | a server's failures are counted without saturating | §19 step 12, a count that stops at the most its octet holds | the saturation test, by a panic, `test-resolver` | CAUGHT |
+| QO20 | a COOKIE option as long as the longest server cookie makes it is refused | RFC 7873 §4, a server cookie of 8 to 32 octets | the largest-cookie test of `edns.zig`, `test-wire` | CAUGHT |
+| QO21 | a COOKIE option as long as the longest server cookie makes it is refused, under a lookup | RFC 7873 §4, a server cookie of 8 to 32 octets | the longest-cookie test of `lookup_cookie_test.zig`, `test-resolver` | CAUGHT |
+| QO22 | a query advertises the default payload size whatever the configuration says | RFC 6891 §6.2.3, the payload size a configuration names | the payload test, `test-resolver` | CAUGHT |
+| QO23 | a lowercase echo of a question whose name is 250 octets long is not taken for one | §7, a server that changes the case, at every length the gate writes | the fuzz gate, `test-wire` | CAUGHT |

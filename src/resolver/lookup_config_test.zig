@@ -152,3 +152,16 @@ test "a configuration with no server fails every lookup at once" {
     try testing.expectEqual(State.failed, harness.lookup.state);
     try testing.expectEqual(core.Error.NoServers, harness.poll().failed.err);
 }
+
+test "a query advertises the payload size configured, at the least and at the most it may be" {
+    // 512 and 65535 octets (RFC 6891 §6.2.3; the class of the OPT record is sixteen bits).
+    for ([_]u16{ core.constants.udp_payload_bytes_min, core.constants.message_bytes_max }) |payload| {
+        var harness: fixtures.Harness = .{ .config = .{ .servers = &servers, .udp_payload_bytes = payload } };
+        try harness.start("example.com.", .a, seed);
+        _ = harness.send();
+        const cased = harness.lookup.cased_name();
+        const opt = (try wire.response_opt.find(harness.query[0..harness.query_bytes], &cased)).?;
+        try testing.expectEqual(payload, opt.class);
+        try testing.expectEqual(Verdict.accepted, harness.respond(fixtures.answer_a, servers[0].endpoint));
+    }
+}

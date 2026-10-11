@@ -122,15 +122,36 @@ const Tiny = io.Resolver(.{
     .quic = rotor.quic.Connection,
 });
 
-test "an answer longer than the engine's buffer fails the connection" {
+/// How a lookup of `text` fails on the tiny engine, over DoQ servers that send no cookie, or null
+/// when it is answered with one address.
+fn tiny_failure(seed: u64, text: []const u8) !?cocuyo.Error {
     var rig: sim_test.RigOf(Tiny) = .{};
     const quic: cocuyo.Tls = .{ .name = try cocuyo.Name.from_text("dns.example.") };
     for (&rig.servers) |*server| server.quic = quic;
-    try rig.init(80, .{ .{}, .{} }, .{ .servers = &.{}, .timeout_ns = fixtures.stream_timeout_ns, .timeout_ns_max = fixtures.stream_timeout_ns, .failover_retry_chance = 0 });
-    // A name long enough that its answer, prefix and all, passes the buffer's 64 octets.
-    _ = try rig.engine.start(question("a-name-long-enough-to-overflow.example."), rig.loop.now());
+    const bare: rotor.server.Script = .{ .cookies = false };
+    try rig.init(seed, .{ bare, bare }, .{ .servers = &.{}, .timeout_ns = fixtures.stream_timeout_ns, .timeout_ns_max = fixtures.stream_timeout_ns, .failover_retry_chance = 0 });
+    _ = try rig.engine.start(question(text), rig.loop.now());
     const result = try rig.until_result();
-    try testing.expectEqual(cocuyo.Error.AllServersFailed, result.outcome.failure.err);
+    const failure: ?cocuyo.Error = switch (result.outcome) {
+        .answer => |answer| if (answer.addresses.len == 1) null else error.NoData,
+        .failure => |failure| failure.err,
+    };
     _ = rig.engine.take(rig.loop.now());
     try rig.deinit();
+    return failure;
+}
+
+test "an answer longer than the engine's buffer fails the connection" {
+    // A name long enough that its answer passes the 64 octets a message may be.
+    const failure = try tiny_failure(80, "a-name-long-enough-to-overflow.example.");
+    try testing.expectEqual(@as(?cocuyo.Error, cocuyo.Error.AllServersFailed), failure);
+}
+
+test "an answer of tcp_message_bytes is taken over DoQ, and one an octet longer is not" {
+    // The header, the question, an A record and a bare OPT record are 43 octets and the name
+    // (`fixtures.tiny_name_fits`): a name of 21 octets makes a message of 64, which the buffer
+    // holds beside its prefix (RFC 9250 §4.2), and a name of 22 one of 65.
+    try testing.expectEqual(@as(?cocuyo.Error, null), try tiny_failure(81, fixtures.tiny_name_fits));
+    const longer = try tiny_failure(82, fixtures.tiny_name_over);
+    try testing.expectEqual(@as(?cocuyo.Error, cocuyo.Error.AllServersFailed), longer);
 }
