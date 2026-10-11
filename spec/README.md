@@ -296,6 +296,9 @@ event handed the engine to be back in its group. The model's wait is two ticks, 
 configuration caps every wait at two ticks, under the 250 ms floor, and a cap below the floor
 wins, so every wait the engine arms is the model's, whatever samples the tries that ran out add.
 So no walk runs servers that wait different times, where a lookup sent later can run out sooner.
+The model holds no cache. Since 2026-10-11 the engine has one only when its caller hands it the
+memory (docs/design.md §19 step 13), and the replay hands its engine two slots, the size it had
+as an option before. Each start of a walk asks a new name, so the cache answers none.
 The table's bound on the soonest deadline takes any deadline a lookup arms, and a test in
 `src/resolver/table_ready.zig` arms a later send with an earlier deadline, but no walk does.
 

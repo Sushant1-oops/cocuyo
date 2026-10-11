@@ -16,7 +16,6 @@ const question = sim_test.question;
 /// An engine that speaks the twin's QUIC, and keeps no TCP connection: DoQ needs none.
 pub const Resolver = io.Resolver(.{
     .lookups = fixtures.small_lookups,
-    .cache_slots = fixtures.small_lookups,
     .group_buffers = fixtures.group_buffers,
     .tcp_connections = 0,
     .quic = rotor.quic.Connection,
@@ -191,7 +190,6 @@ test "a closing connection reads nothing more, and a close the loop refused goes
 /// An engine whose datagram group runs dry under its own answers.
 const Starved = io.Resolver(.{
     .lookups = fixtures.small_lookups,
-    .cache_slots = fixtures.small_lookups,
     .group_buffers = fixtures.small_group_buffers,
     .quic = rotor.quic.Connection,
 });

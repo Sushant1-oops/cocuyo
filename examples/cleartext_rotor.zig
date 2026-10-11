@@ -19,11 +19,15 @@ const io = @import("io");
 const answer_text = @import("answer_text.zig");
 const server_text = @import("server_text.zig");
 
-const Resolver = io.Resolver(.{ .lookups = at_once_max + 1, .cache_slots = at_once_max + 1 });
+const Resolver = io.Resolver(.{ .lookups = at_once_max + 1 });
 
 const loop_options: rotor.Loop.Options = .{ .operations = Resolver.loop_operations };
 var loop_memory: [rotor.Loop.memory_bytes(loop_options)]u8 align(rotor.memory_alignment) = undefined;
 var engine: Resolver = undefined;
+/// The cache's memory, which is the caller's (docs/design.md §19 step 13): the size the README
+/// recommends, 2.9 MiB. The engine builds its cache over it at `init`, and `null` in its place
+/// would be an engine with no cache.
+var cache_memory: cocuyo.cache.Storage(io.constants.cache_slots_default) = undefined;
 
 /// How long a turn is given, in ticks of `tick_ns`, before the example gives up on it.
 const tick_ns = 100_000_000;
@@ -56,7 +60,7 @@ pub fn main(init: std.process.Init) !void {
     try loop.init(&loop_memory, loop_options);
     defer loop.deinit();
     var events: [events_max]rotor.Event = undefined;
-    try engine.init(&loop, &config, std.mem.readInt(u64, &engine_seed, .little), clock.read());
+    try engine.init(&loop, &config, cache_memory.slices(), std.mem.readInt(u64, &engine_seed, .little), clock.read());
     defer {
         engine.deinit();
         loop.drain(&events) catch {};

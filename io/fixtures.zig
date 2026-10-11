@@ -1,10 +1,10 @@
 //! The sizes the engine's tests build their rig with. Exempt from the magic-numbers rule by
 //! name, like every corpus; test-only.
 
-/// A small engine: enough lookups for the many-in-flight scenario, a cache the same size, and
-/// a group of a few buffers so the buffers run out under load.
+/// A small engine: enough lookups for the many-in-flight scenario, and a group of a few buffers
+/// so the buffers run out under load. A rig hands its engine a cache of as many slots as the
+/// engine has lookups (`io_sim_test.zig`).
 pub const lookups = 64;
-pub const cache_slots = 64;
 pub const group_buffers = 16;
 
 /// The scripted servers the rig configures: the twin's first two.
@@ -134,3 +134,22 @@ pub const quic_cancelled_streams = 140;
 /// A DoH connection's answer buffers in the tests over colibri's HTTP/3: fewer than the engine's
 /// lookups, so some requests wait for one.
 pub const doh_answers = 2;
+
+/// The cache's memory in the tests of `io_lifecycle_cache_test.zig`: a cache of two names, which
+/// a third evicts one of, and the least there is, one slot and the two keys it takes.
+pub const cache_two_slots = 2;
+pub const cache_least_slots = 1;
+pub const cache_least_keys = 2;
+
+/// A TTL past the default cap of an hour, which a scripted server gives its answers so that the
+/// cap shows; a cap under it and one over it, which a configuration sets; and the two caps a
+/// configuration and the one that replaces it at a `reinit` set.
+pub const long_ttl_seconds = 7200;
+pub const hour_seconds = 3600;
+pub const cap_under_seconds = 60;
+pub const cap_over_seconds = 86_400;
+pub const cap_before_seconds = 600;
+pub const cap_after_seconds = 30;
+
+/// What a test writes over memory the engine was told to let go of, to see it left alone.
+pub const memory_mark = 0xa5;

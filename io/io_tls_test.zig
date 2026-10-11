@@ -16,7 +16,6 @@ const question = sim_test.question;
 /// An engine that speaks the twin's TLS, with a connection slot for each server (TLS rule 6).
 const Resolver = io.Resolver(.{
     .lookups = fixtures.small_lookups,
-    .cache_slots = fixtures.small_lookups,
     .group_buffers = fixtures.group_buffers,
     .tcp_connections = fixtures.servers,
     .tls = rotor.tls.Session,
@@ -238,7 +237,6 @@ const Failing = struct {
 
 const FailingRig = sim_test.RigOf(io.Resolver(.{
     .lookups = fixtures.small_lookups,
-    .cache_slots = fixtures.small_lookups,
     .group_buffers = fixtures.group_buffers,
     .tcp_connections = fixtures.servers,
     .tls = Failing,

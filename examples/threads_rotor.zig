@@ -23,7 +23,7 @@ const engines = 2;
 /// nothing of, since each resolves each name once.
 const names = [_][]const u8{ "a.example.", "b.example.", "c.example.", "d.example." };
 
-const Resolver = io.Resolver(.{ .lookups = names.len, .cache_slots = names.len });
+const Resolver = io.Resolver(.{ .lookups = names.len });
 const loop_options: rotor.Loop.Options = .{ .operations = Resolver.loop_operations };
 const events_max = 16;
 /// How long the engines are given, in ticks of `tick_ns`, before the example gives up.
@@ -36,6 +36,9 @@ const ticks_max = 500;
 const loop_memory_bytes = std.mem.alignForward(usize, rotor.Loop.memory_bytes(loop_options), rotor.memory_alignment);
 var loop_memory: [engines][loop_memory_bytes]u8 align(rotor.memory_alignment) = undefined;
 var resolvers: [engines]Resolver = undefined;
+/// Each engine's cache memory, which is the caller's and never shared between two engines
+/// (docs/design.md §19 step 13, §24): the size the README recommends, one for each thread.
+var cache_memory: [engines]cocuyo.cache.Storage(io.constants.cache_slots_default) = undefined;
 
 /// One engine thread: what it was given, and what it took.
 const Engine = struct {
@@ -95,7 +98,7 @@ fn resolve(state: *Engine) !void {
     defer loop.deinit();
     var events: [events_max]rotor.Event = undefined;
     const resolver = &resolvers[state.index];
-    try resolver.init(&loop, state.config, state.seed, state.clock.read());
+    try resolver.init(&loop, state.config, cache_memory[state.index].slices(), state.seed, state.clock.read());
     defer {
         resolver.deinit();
         loop.drain(&events) catch {};

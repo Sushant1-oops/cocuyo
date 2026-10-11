@@ -175,6 +175,14 @@ pub const Config = struct {
     udp_queries_per_port: u32 = 0,
     /// How long a failed server stays last before it may be tried first again.
     failover_retry_delay_ns: u64 = constants.failover_retry_delay_ns_default,
+    /// The cap on every TTL the engine's cache keeps, in seconds: c-ares's `qcache_max_ttl`
+    /// (`ARES_OPT_QUERY_CACHE`), and an hour by default as it is there. The engine hands it to
+    /// the cache it builds, at `init` and at each `reinit`, and no lookup reads it; a caller
+    /// that builds a `Cache` of its own hands `Cache.init` this or a cap of its own. At least
+    /// 1: an engine is given no cache by handing it no memory, never by a cap of zero. At most
+    /// `constants.cache_ttl_seconds_max`, seven days, the cap RFC 8767 §4 recommends. No line
+    /// of a `resolv.conf` sets it (docs/design.md §16 decision 37, §19 step 13).
+    cache_ttl_seconds_max: u32 = constants.cache_ttl_seconds_max_default,
 
     /// Every rule a configuration must satisfy. A configuration is the caller's to build, so a
     /// broken one is a programmer error and asserts rather than returning (CLAUDE.md
@@ -190,6 +198,13 @@ pub const Config = struct {
         assert(self.udp_payload_bytes >= constants.udp_payload_bytes_min);
         assert(self.udp_payload_bytes <= constants.message_bytes_max);
         assert(self.lookups.len <= constants.lookup_sources_max);
+        // A cap of zero would lower every TTL to zero, and a record with a TTL of zero "should
+        // not be cached" (RFC 1035 §3.2.1, as `Cache.put` cites it): handing an engine no memory
+        // is what turns its cache off (docs/design.md §19 step 13).
+        assert(self.cache_ttl_seconds_max >= 1);
+        // "Values SHOULD be capped on the order of days to weeks, with a recommended cap of
+        // 604,800 seconds (7 days)" (RFC 8767 §4): no configuration caps later than that.
+        assert(self.cache_ttl_seconds_max <= constants.cache_ttl_seconds_max);
         assert(servers_agree(self.servers));
         // Every query on a stream means TCP, and a DoH or DoQ server takes each query as an
         // request of its own (docs/design.md §22, §23).
@@ -284,6 +299,20 @@ test "the defaults are the resolv.conf defaults, c-ares's waits, and are valid" 
     try testing.expect(config.mix_case);
     try testing.expect(!config.rotate);
     try testing.expectEqual(@as(usize, 0), config.search.len);
+}
+
+test "the cache's TTL cap is c-ares's hour by default, and a cap of a second to seven days is valid" {
+    const servers = [_]Server{.{ .endpoint = .{ .address = Address.from_v4(.{ 127, 0, 0, 1 }) } }};
+    const config: Config = .{ .servers = &servers };
+    try testing.expectEqual(@as(u32, 3600), config.cache_ttl_seconds_max);
+    // The least cap keeps an answer a second, and the most keeps one seven days, "a recommended
+    // cap of 604,800 seconds (7 days)" (RFC 8767 §4).
+    try testing.expectEqual(@as(u32, 604_800), constants.cache_ttl_seconds_max);
+    for ([_]u32{ 1, 300, constants.cache_ttl_seconds_max }) |cap| {
+        const capped: Config = .{ .servers = &servers, .cache_ttl_seconds_max = cap };
+        capped.assert_valid();
+        try testing.expectEqual(cap, capped.cache_ttl_seconds_max);
+    }
 }
 
 test "a search list at the limit is valid" {

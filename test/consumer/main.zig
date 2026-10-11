@@ -11,22 +11,20 @@ const cocuyo = @import("cocuyo");
 const lookups = 2;
 const keys_per_lookup = 4;
 const cache_entries = 4;
-const cache_keys = 8;
 const seed = 1;
 const now_ns = 1;
 
 pub fn main() !void {
     var slots: [lookups]cocuyo.Slot = @splat(.{});
     var keys: [lookups * keys_per_lookup]cocuyo.MatchKey = @splat(.{});
-    var entries: [cache_entries]cocuyo.cache.Slot = @splat(cocuyo.cache.Slot.empty);
-    var index: [cache_keys]cocuyo.cache.Key = @splat(.{});
+    var cache_memory: cocuyo.cache.Storage(cache_entries) = undefined;
 
     const servers = [_]cocuyo.Server{
         .{ .endpoint = .{ .address = cocuyo.Address.from_v4(.{ 127, 0, 0, 1 }) } },
     };
     const config: cocuyo.Config = .{ .servers = &servers, .search = &.{} };
 
-    var store = cocuyo.Cache.init(&entries, &index, seed, cocuyo.cache.constants.ttl_seconds_max_default);
+    var store = cocuyo.Cache.init(&cache_memory.slots, &cache_memory.keys, seed, config.cache_ttl_seconds_max);
     var table = cocuyo.Resolver.init(&slots, &keys, &config, seed);
     table.remember_with(cocuyo.remembered_by(&store));
 

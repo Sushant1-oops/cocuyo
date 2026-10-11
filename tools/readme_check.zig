@@ -12,13 +12,16 @@
 //!   `socket`, and returns the answer.
 //! - `quick-start` is given `config`, `seed` and `now_ns`, and ends with `event`, the table's first
 //!   event, whose action must be `send_udp`.
+//! - `engine` is the engine over rotor, built and not run: it is given `loop`, a `rotor.Loop`,
+//!   `config`, `seed`, `new_seed` and `now_ns`, and an `allocator` and a `slot_count` for the cache
+//!   memory a caller sizes at run time (docs/design.md §19 step 13, the cache's memory).
 //! - `build` is the part of a dependent's `build.zig` that imports cocuyo: it is given `b`,
 //!   `target` and `exe`.
 //!
 //! A Zig block with no marker, or a marker with no block, fails the check, so a new block cannot
 //! go unbuilt: it brings its harness with it. The tool writes a package that depends on cocuyo by
 //! relative path and on the rotor cocuyo pins, with the `build` block as its build and the other
-//! two in its `main.zig`, builds it under the parent's cache, and runs it.
+//! three in its `main.zig`, builds it under the parent's cache, and runs it.
 //!
 //! Usage: `readme_check <zig-exe> <README.md> <build.zig.zon> <package-dir> <cache-dir>`
 const std = @import("std");
@@ -28,6 +31,7 @@ pub const Error = error{ Unmarked, MarkerWithoutBlock, UnknownHarness, Duplicate
 pub const Harness = enum {
     loop,
     quick_start,
+    engine,
     build,
 
     /// The name a marker spells: `quick-start` for `quick_start`.
@@ -53,6 +57,8 @@ const package_name = "readme_check";
 const package_fingerprint = "0x38996b9c783622d2";
 /// What the program prints when the quick start reached its first action as the README says.
 const quick_start_line = "readme: the quick start's first action is send_udp";
+/// What sets each line the nested build or the program printed in from the margin.
+const quote_indent = "    ";
 
 /// Every marked Zig block of `readme`, each under its harness.
 pub fn blocks_of(readme: []const u8) Error!Blocks {
@@ -200,10 +206,19 @@ pub fn write_main(writer: *std.Io.Writer, blocks: Blocks) std.Io.Writer.Error!vo
         \\    }
         \\};
         \\
-        \\fn loop(config: @import("cocuyo").Config, seed: u64, name: []const u8, clock: Clock, socket: Socket) !@import("cocuyo").Answer {
+        \\fn driving_loop(config: @import("cocuyo").Config, seed: u64, name: []const u8, clock: Clock, socket: Socket) !@import("cocuyo").Answer {
         \\
     );
     try writer.print("{s}{s}}}\n\n", .{ import_unless_made(blocks.get(.loop)), blocks.get(.loop) });
+    // The engine's loop is the caller's `rotor.Loop`, whose type the engine's own field names:
+    // the package's program imports `cocuyo_rotor`, and rotor only through it.
+    try writer.writeAll(
+        \\fn engine_start(config: @import("cocuyo").Config, seed: u64, new_seed: u64, now_ns: u64, allocator: std.mem.Allocator, slot_count: usize) !void {
+        \\    const Loop = @typeInfo(@FieldType(@import("cocuyo_rotor").Resolver(.{}), "loop")).pointer.child;
+        \\    var loop: Loop = undefined;
+        \\
+    );
+    try writer.print("{s}{s}}}\n\n", .{ import_unless_made(blocks.get(.engine)), blocks.get(.engine) });
     try writer.writeAll(
         \\fn quick_start(config: @import("cocuyo").Config, seed: u64, now_ns: u64) ![]const u8 {
         \\
@@ -211,8 +226,8 @@ pub fn write_main(writer: *std.Io.Writer, blocks: Blocks) std.Io.Writer.Error!vo
     try writer.print("{s}{s}    return @tagName(event.action);\n}}\n\n", .{ import_unless_made(blocks.get(.quick_start)), blocks.get(.quick_start) });
     try writer.print(
         \\pub fn main() !void {{
-        \\    _ = &loop;
-        \\    _ = @import("cocuyo_rotor").Resolver;
+        \\    _ = &driving_loop;
+        \\    _ = &engine_start;
         \\    const address = @import("cocuyo").Address.from_v4(.{{ 192, 0, 2, 1 }});
         \\    const servers = [_]@import("cocuyo").Server{{.{{ .endpoint = .{{ .address = address }} }}}};
         \\    const config: @import("cocuyo").Config = .{{ .servers = &servers, .search = &.{{}} }};
@@ -263,6 +278,20 @@ fn write_package(arena: std.mem.Allocator, io: std.Io, package: []const u8, root
     try cwd.writeFile(io, .{ .sub_path = try std.fs.path.join(arena, &.{ package, "main.zig" }), .data = text.written() });
 }
 
+/// What the nested build or the program printed, each line set in from the margin. The nested
+/// compiler says `main.zig:<line>:<column>: error: ...`, and at the margin `zig build mutations`
+/// would read that as this tree failing to compile (`mutations_check.zig`). It is the README's
+/// code that does not build, which is what this check finds, so the line is quoted.
+pub fn quoted(arena: std.mem.Allocator, output: []const u8) ![]const u8 {
+    var text: std.Io.Writer.Allocating = .init(arena);
+    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, output, "\n"), '\n');
+    for (0..output.len + 1) |_| {
+        const line = lines.next() orelse break;
+        try text.writer.print("{s}{s}\n", .{ quote_indent, line });
+    }
+    return text.written();
+}
+
 /// Builds the package under the parent's cache, then runs what it built.
 fn build_and_run(arena: std.mem.Allocator, io: std.Io, zig_exe: []const u8, package: []const u8, cache: []const u8) !void {
     const prefix = try std.fs.path.join(arena, &.{ cache, "out" });
@@ -273,7 +302,7 @@ fn build_and_run(arena: std.mem.Allocator, io: std.Io, zig_exe: []const u8, pack
         .stderr_limit = output_bytes_max,
     });
     if (!exited_zero(built.term)) {
-        std.debug.print("readme-check: the README's code does not build:\n{s}\n", .{built.stderr});
+        std.debug.print("readme-check: the README's code does not build:\n{s}", .{try quoted(arena, built.stderr)});
         std.process.exit(1);
     }
     const ran = try std.process.run(arena, io, .{
@@ -282,7 +311,7 @@ fn build_and_run(arena: std.mem.Allocator, io: std.Io, zig_exe: []const u8, pack
         .stderr_limit = output_bytes_max,
     });
     if (!exited_zero(ran.term) or std.mem.indexOf(u8, ran.stderr, quick_start_line) == null) {
-        std.debug.print("readme-check: the README's quick start did not run as it says:\n{s}\n", .{ran.stderr});
+        std.debug.print("readme-check: the README's quick start did not run as it says:\n{s}", .{try quoted(arena, ran.stderr)});
         std.process.exit(1);
     }
 }
@@ -322,6 +351,11 @@ const sample =
     \\const event = 1;
     \\```
     \\
+    \\<!-- readme-check: engine -->
+    \\```zig
+    \\try resolver.init(&loop, &config, null, seed, now_ns);
+    \\```
+    \\
 ;
 
 test "every marked block is read under its harness, and other code blocks are left alone" {
@@ -329,6 +363,7 @@ test "every marked block is read under its harness, and other code blocks are le
     try testing.expectEqualStrings("var a = 1;\n", blocks.get(.loop));
     try testing.expectEqualStrings("const cocuyo = b.dependency(\"cocuyo\", .{});\n", blocks.get(.build));
     try testing.expectEqualStrings("", import_unless_made(blocks.get(.quick_start)));
+    try testing.expectEqualStrings("try resolver.init(&loop, &config, null, seed, now_ns);\n", blocks.get(.engine));
     try testing.expect(import_unless_made(blocks.get(.loop)).len > 0);
 }
 
@@ -341,6 +376,20 @@ test "a block with no marker, a marker with no block, and a harness named twice 
     try testing.expectError(Error.Duplicate, blocks_of("<!-- readme-check: loop -->\n```zig\nx\n```\n<!-- readme-check: loop -->\n```zig\ny\n```\n"));
     try testing.expectError(Error.Unclosed, blocks_of("<!-- readme-check: loop -->\n```zig\nx\n"));
     try testing.expectError(Error.Missing, blocks_of("<!-- readme-check: loop -->\n```zig\nx\n```\n"));
+}
+
+test "what the nested build prints is quoted set in from the margin, a compiler's line too" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const printed = "install\nmain.zig:66:22: error: expected 5 argument(s), found 4\n";
+    const text = try quoted(arena_state.allocator(), printed);
+    try testing.expectEqualStrings("    install\n    main.zig:66:22: error: expected 5 argument(s), found 4\n", text);
+    // No line of it starts where a compiler's own line does.
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    for (0..text.len + 1) |_| {
+        const line = lines.next() orelse break;
+        try testing.expect(line.len == 0 or line[0] == ' ');
+    }
 }
 
 test "the rotor pin comes from cocuyo's manifest" {

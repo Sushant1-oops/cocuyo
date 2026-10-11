@@ -260,6 +260,9 @@ test "options are read, and the ones cocuyo does not know are skipped" {
     try testing.expectEqual(@as(u64, 2_000_000_000), config.timeout_ns);
     try testing.expectEqual(@as(u8, 4), config.attempts);
     try testing.expect(config.rotate);
+    // No line and no option sets the cap on the cache's TTLs: it is the default, an hour, until
+    // the caller sets it (docs/design.md §10).
+    try testing.expectEqual(@as(u32, core.constants.cache_ttl_seconds_max_default), config.cache_ttl_seconds_max);
 }
 
 test "comments and blank lines are skipped" {

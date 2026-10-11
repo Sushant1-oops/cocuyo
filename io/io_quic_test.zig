@@ -17,7 +17,6 @@ const question = sim_test.question;
 /// An engine over colibri, with no TCP connection: DoQ needs none.
 const Resolver = io.Resolver(.{
     .lookups = fixtures.small_lookups,
-    .cache_slots = fixtures.small_lookups,
     .group_buffers = fixtures.group_buffers,
     .tcp_connections = 0,
     .quic = cocuyo_quic.Connection(.{ .streams = fixtures.small_lookups }),

@@ -5,10 +5,12 @@
 //! whose `rotor` import the consumer binds, so it runs on the consumer's loop (docs/design.md
 //! §24).
 //!
-//! The engine is a struct sized at compile time by its `Options`: the lookups it holds, the
-//! cache's slots, the buffers of its datagram group. Nothing here allocates; the caller declares
-//! one and calls `init` on it in place, because the table, `cocuyo.Resolver`, and the loop hold
-//! pointers into it.
+//! The engine is a struct sized at compile time by its `Options`: the lookups it holds and the
+//! buffers of its datagram group. Nothing here allocates; the caller declares one and calls
+//! `init` on it in place, because the table, `cocuyo.Resolver`, and the loop hold pointers into
+//! it. The cache's memory is the caller's too, and a second value: `init` and `reinit` are handed
+//! its slots and its key index, sized at compile time or at run time, or none for an engine with
+//! no cache (docs/design.md §19 step 13, the cache's memory).
 //!
 //! What the caller does with it: `start` a question, hand every event of its `tick` to `apply`,
 //! and `take` the results. `now_ns` is the caller's clock on every call, as it is on every call
@@ -39,7 +41,6 @@ const request_events = @import("io_request_events.zig");
 
 pub const Options = struct {
     lookups: u16 = constants.lookups_default,
-    cache_slots: u16 = constants.cache_slots_default,
     tag: u16 = constants.tag_default,
     group_buffers: u16 = constants.group_buffers_default,
     /// The TCP connections held at once, and the chunk buffers they read into. None suits an
@@ -115,10 +116,10 @@ pub fn Resolver(comptime options: Options) type {
         config: *const cocuyo.Config,
         resolver: cocuyo.Resolver,
         slots: [options.lookups]cocuyo.Slot,
-        keys: [keys_for(options.lookups, cocuyo.resolver.constants.keys_per_slot_min)]cocuyo.MatchKey,
-        cache: cocuyo.Cache,
-        cache_slots: [options.cache_slots]cocuyo.cache.Slot,
-        cache_keys: [keys_for(options.cache_slots, cocuyo.cache.constants.keys_per_slot_min)]cocuyo.cache.Key,
+        keys: [table_keys_for(options.lookups)]cocuyo.MatchKey,
+        /// The cache under the table, built over the memory `init` or the last `reinit` was
+        /// handed, or null when that was none. The slots and the key index are the caller's.
+        cache: ?cocuyo.Cache,
         /// One handle per slot, kept so an event's index finds its lookup.
         handles: [options.lookups]cocuyo.Handle,
         /// Whether the slot's send buffer is lent to the loop: from a send's submission to its
@@ -172,9 +173,10 @@ pub fn Resolver(comptime options: Options) type {
         scratch: [cocuyo.constants.query_bytes_max]u8,
         closing: bool,
 
-        /// The key table a slot table needs: the load factor its owner asks, at a power of two.
-        fn keys_for(count: usize, per_slot: usize) usize {
-            return std.math.ceilPowerOfTwoAssert(usize, count * per_slot);
+        /// The key table the lookups' slots need: the load factor the table asks, at a power of
+        /// two. The cache's key index is sized by its caller, with `cocuyo.cache.keys_for`.
+        fn table_keys_for(lookups: usize) usize {
+            return std.math.ceilPowerOfTwoAssert(usize, lookups * cocuyo.resolver.constants.keys_per_slot_min);
         }
 
         /// The high bits of every `user_data` this engine submits.
@@ -203,14 +205,31 @@ pub fn Resolver(comptime options: Options) type {
             constants.loop_operations_per_channel * @as(u32, doh_servers) +
             constants.loop_operations_slack;
 
-        pub fn init(self: *Self, loop: *rotor.Loop, config: *const cocuyo.Config, seed: u64, now_ns: u64) InitError!void {
+        /// Starts the engine on the caller's loop. `cache_memory` is the memory of its cache,
+        /// the slots and the key index as `cocuyo.Cache.init` takes them, or null for an engine
+        /// with no cache, whose every lookup goes to its servers. The engine builds the cache
+        /// over it, keyed by `seed` and capped at `config.cache_ttl_seconds_max`. The memory is
+        /// the caller's and this engine's alone, and must stay valid and unmoved until `close`
+        /// returns, or until a `reinit` that is handed other memory or none returns
+        /// (docs/design.md §19 step 13, the cache's memory). Slices `Cache.init` would refuse
+        /// are a programmer error: `cocuyo.cache.slot_count_valid` and `keys_for` say what it
+        /// takes.
+        pub fn init(
+            self: *Self,
+            loop: *rotor.Loop,
+            config: *const cocuyo.Config,
+            cache_memory: ?cocuyo.cache.Slices,
+            seed: u64,
+            now_ns: u64,
+        ) InitError!void {
             config.assert_valid();
             assert_tls(config);
+            lifecycle.assert_cache_memory(cache_memory);
             self.loop = loop;
             self.config = config;
             self.send_in_flight = @splat(false);
             self.sent_from = @splat(null);
-            lifecycle.reset_tables(self, config, seed);
+            lifecycle.reset_tables(self, config, cache_memory, seed);
             self.timer_handle = null;
             self.timer_due_ns = null;
             self.timer_generation = 0;
@@ -307,9 +326,20 @@ pub fn Resolver(comptime options: Options) type {
         /// A new configuration, which is `ares_reinit`. The engine must be idle, and `seed` a new
         /// draw from a CSPRNG; `io_lifecycle.zig` says why and what a caller does first. Every
         /// server's latency samples start over (docs/design.md §5), and a server marked as one
-        /// that lowercases the name is asked with DNS-0x20 again (§7).
-        pub fn reinit(self: *Self, config: *const cocuyo.Config, seed: u64, now_ns: u64) InitError!void {
-            try lifecycle.reinit(self, config, seed, now_ns);
+        /// that lowercases the name is asked with DNS-0x20 again (§7). The cache is built again
+        /// over `cache_memory`, empty: the memory the engine holds, other memory of any size
+        /// `Cache.init` takes, or null for no cache from here on. Memory the engine held before
+        /// and is not handed again is the caller's to free once this returns, whatever it
+        /// returns. A `reinit` that fails has still taken the memory it was handed, which is the
+        /// engine's until a later `reinit` or `close` returns: never free it on the error.
+        pub fn reinit(
+            self: *Self,
+            config: *const cocuyo.Config,
+            cache_memory: ?cocuyo.cache.Slices,
+            seed: u64,
+            now_ns: u64,
+        ) InitError!void {
+            try lifecycle.reinit(self, config, cache_memory, seed, now_ns);
         }
 
         /// Settles the lookup as cancelled; its failure comes through `take` like any other.
@@ -384,6 +414,7 @@ test {
         _ = @import("io_sim_test.zig");
         _ = @import("io_tcp_test.zig");
         _ = @import("io_lifecycle_test.zig");
+        _ = @import("io_lifecycle_cache_test.zig");
         _ = @import("io_tls_test.zig");
         _ = @import("io_request_test.zig");
         _ = @import("io_request_failure_test.zig");

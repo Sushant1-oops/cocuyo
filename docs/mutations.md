@@ -4332,3 +4332,164 @@ other 179 run again, 179 `CAUGHT`.
 | CM21 | the first letter is not made a capital once every draw left the name small, moved to `name_case.zig` | `case_draws_max` | the one-letter and later-draw tests, `test-wire`; the later-draw test, `test-resolver` | CAUGHT |
 | CM22 | a name without a letter is drawn again as one left small, written again for `Draw` | §7 Entropy | the letterless, takes-the-name and boundary-octets tests, `test-wire`, by a panic at the `unreachable` past the last draw | CAUGHT |
 | QO2 | the offset of a question's class is summed in the octet a name's length is held in, written again for the class read first | RFC 1035 §2.3.4, §7 check 5 | the long-name and most-labels tests, the long `matches_mixed` test and the fuzz gate, each by a panic, `test-wire` | CAUGHT |
+
+## The engine's cache over memory the caller hands it
+
+2026-10-11. The owner ruled that the caller hands the engine its cache memory at init, as the
+library's `Cache.init` takes it, so that the size can come from a configuration file, and that
+the cache's TTL cap is a `Config` field, 3,600 s by default (design §16 decision 37). Until then
+`Options.cache_slots` sized two arrays inside the engine when its type was built. So no number
+read at run time reached the size, an engine could not run without a cache, and the cap was the
+constant of an hour.
+
+`init` and `reinit` now take a `?cocuyo.cache.Slices`, the slots and the key index, or null.
+The engine builds its `Cache` over them, keyed by the seed of the call and capped at the
+configuration's `cache_ttl_seconds_max`, and an engine handed null gives its table no `Memory`.
+`reinit` takes the memory it holds, other memory, or none. The library's `cache` module gained
+what a caller sizes that memory with: `Slices`, `Storage`, `keys_for` and `slot_count_valid`
+(`src/cache/cache_storage.zig`). `Config` gained `cache_ttl_seconds_max`, whose default is
+`core`'s `cache_ttl_seconds_max_default`, and `cache.constants.ttl_seconds_max_default` is that
+constant under its older name. `Cache.init` keeps its signature, and the cache's eviction, its
+probe bound and what it refuses to keep are as they were.
+
+The design changed first: §3, §4, §10, §12, §18 (Sizing the memory), §19 step 13 (The cache's
+memory), §20, §24, §16 decision 37 and §17 questions 29 to 33. No model changed. The Lean models
+are of one lookup and of the `getaddrinfo` walks, and the TLA+ model of the engine leaves the
+cache out, as spec/README.md says: a search of `spec/lean/` and `spec/tla/` for a cache, a
+recall, a remember or a `reinit` finds none, and the two lines there that say memory are about
+buffers lent to the loop. The replay's engine is handed two slots, the size it had as an
+option, and no start of a walk asks a name twice. `zig build spec-lean` and the replays of
+`zig build test` agree.
+
+Each of CZ1 to CZ28 was broken by hand against the step its row names, to name the tests that
+fail. Then `zig build mutations -- lookup` ran CZ1 to CZ14, CZ25, CZ27 and CZ28, and
+`zig build mutations -- engine` ran CZ15 to CZ24 and CZ26, each after running its checks once
+with nothing mutated, and caught each. Twenty-eight new mutations, twenty-eight `CAUGHT`.
+
+A review the same day broke two checks that no test caught, and each was a test missing:
+
+- CZ25. `Slices.valid` took more slots than the most. CZ9 takes its bound on the slots away
+  whole, which the shape test catches at no slots, and nothing asked it of 16385. The
+  most-slots test does, over slices cut longer than the memory under them: `valid` reads the
+  two lengths and nothing else, and no cache is built over those slices.
+- CZ26. Design §19 step 13 rule 5 says the memory an engine held is the caller's once a
+  `reinit` handed other memory or none returns, whatever it returns. That held only because
+  `reinit` builds its table and its cache before it opens its sockets, and no test ran a
+  `reinit` that fails. The failed-reinit test does. The twin refuses the open, and the cache
+  must be over the memory that call handed in, under its seed, then over none when the call
+  hands none. The rule now says so of the new memory too: a failed `reinit` has taken it.
+
+CZ24 breaks the README and was in no set at first. Its check fails where the package the
+README's code is written into does not compile, and the tool read the nested compiler's line
+as a mutation whose text no longer applies. `readme-check` now quotes what the nested build
+prints, each line set in from the margin, and the tool takes a compiler's line for this tree's
+own only from a line's first column. CZ27 and CZ28 break those two against the tools' tests,
+and CZ24 is in the engine's set.
+
+Breaking the checks changed four tests before the rows stood:
+
+- CZ3 was one edit at first, and did not compile: `keys_for` asserts the bound it computes, and
+  `Storage` evaluates it when the caller compiles. The row breaks the check and the assertion
+  together, as a bound is both (CLAUDE.md non-negotiable 6). The shape test sliced six keys
+  from a `Storage` of three slots, which under the mutation holds four, a compile error of the
+  test's own. It now slices arrays of its own.
+- CZ8 was caught by a panic alone, the assertion in `slices`. The shape test now holds two
+  slots and four keys valid, the case where the least index is exactly the bound.
+- CZ17 was caught by the off test alone. The no-memory test read the cache of an engine whose
+  memory had held nothing. It now starts an engine with a cache, closes it, and starts it again
+  with none, so a cache left behind shows.
+- The run-time test of `cache_storage.zig` read its slot count from a function, which the
+  magic-numbers rule refused for its literal. The count is a variable of the test.
+
+Four checks are in no row, as Z10 and T11 are not: the assertion of `assert_cache_memory` in
+`io/io_lifecycle.zig`, which `init` and `reinit` call, the two in `keys_for`,
+`assert_valid`'s floor of one second under the cap, weakened, and the compile error `Storage`
+gives a count outside the bounds. `Cache.init` asserts the same of the slices and of the cap,
+and `keys_for` refuses the same count when `Storage` evaluates it, so a test that reached one
+of them would halt or not compile, and no behaviour changes without it. `Storage(0)` and
+`Storage(16385)` were compiled by hand: each stops at the error that names the bounds, and
+`Storage(1)` and `Storage(16384)` compile. `assert_cache_memory` asserted a second thing, a key
+index of `keys_for` entries at least, which `valid` already says, and the review took it out.
+Z9, `reinit` keeps the answers the old servers gave, is CZ22 now: the cache is emptied by
+being built again over the memory `reinit` is handed, and the reinit test of
+`io_lifecycle_test.zig` still catches it.
+
+Rows of the engine's set run again, since the rigs and the replay's world now hand the engine
+its cache memory, each `CAUGHT` as before:
+
+- The thirteen that `test-io` and `test-cocuyo_quic` catch: ET12, ET13, SQ3, SQ4, TR4, CE4,
+  CE18, CE20, CE21 and QO8 to QO11.
+- The twenty-eight that `test-cocuyo_doh` catches, DC1 to DC28, whose world holds the memory of
+  its engine's cache.
+- The fifty-four the committed short walks catch, by those walks.
+
+The twenty-two rows the picked walks catch did not run again: each needs TLC's full run. The
+picked walks replay in agreement in the gate with nothing mutated, and no file their edits
+touch changed but `io/io.zig`, where E3's lines stand as they were.
+
+The review's changes touched files that older rows edit, so those ran again by the tool, each
+`CAUGHT` as before: QO11 in the engine's set, and DH1, QU1, QU2, DT28 and TA6 to TA8 in the
+lookup's.
+
+The tests the table names. In `src/cache/cache_storage.zig`: the least-index test (1, 2, 3,
+1024 and 16384 slots take 2, 4, 8, 2048 and 32768 keys, each a power of two, at least two a
+slot, and the least such), the bounds test (0 and 16385 slots refused, 1, 1024 and 16384
+taken), the shape test, the most-slots test (16384 slots under their least index valid, and
+16385 under an index long enough for them not), the storage test, the one-slot test and the
+run-time test (a count of three, in a variable, over part of a memory of eight). In
+`src/cache/cache_ttl_test.zig`, the default-cap test. In `src/core/config.zig`, the cap test
+(an hour by default, and caps of 1, 300 and the most a `u32` holds valid). In
+`src/config/resolv_conf.zig`, the options test. In `io/io_lifecycle_cache_test.zig`: the hit
+test (memory handed over, a repeated question answered with nothing sent, and the cache over
+that memory under that seed), the no-memory test, the two-slot test (a count read at run time,
+and the third name evicts one), the least-memory test (one slot and two keys), the same-memory
+test, the other-memory test (the old memory written over and found as written), the
+failed-reinit test (the open refused, the cache over the memory that call handed in, the old
+memory written over and found as written after the next `reinit`, then a second failure
+handed none), the off test (none, then memory again), the default-cap test (a TTL of 7,200 s
+kept an hour), the set-cap test (caps of 60 and 86,400 s) and the reinit-cap test (600 s, then
+30). A lookup counts as sent when its slot's buffer is lent to the loop as `start` returns, and
+as answered from the cache when its result is taken before the loop turns. In
+`tools/mutations_check.zig`, the quoted-error test, and in `tools/readme_check.zig`, the
+quotation test.
+
+The same day the owner answered design §17 question 30: follow the RFC. A cap is at most seven
+days, the named `cache_ttl_seconds_max`: "Values SHOULD be capped on the order of days to weeks,
+with a recommended cap of 604,800 seconds (7 days)" (RFC 8767 §4). `cache.ttl_seconds_max_valid`
+says whether a cap is one a cache takes, and CZ29 and CZ30 break its two bounds; the cap test of
+`cache_ttl_test.zig` sees both. `Cache.init` and `Config.assert_valid` assert the same bound and
+have no row, as the assertions of Z10 and T11 have none: taking an assertion away changes
+nothing a test can see.
+
+| # | Mutation | Check it breaks | Caught by | Status |
+| --- | --- | --- | --- | --- |
+| CZ1 | `slot_count_valid` takes a cache of no slots | §18, a slot count of 1 to `cache_slots_max` | the bounds and shape tests, `test-cache` | CAUGHT |
+| CZ2 | `slot_count_valid` takes one slot more than the most | §18, a slot count of 1 to `cache_slots_max` | the bounds and most-slots tests, `test-cache` | CAUGHT |
+| CZ3 | `keys_for` gives one key a slot, and its own assertion asks no more | §18, `cache_keys_per_slot_min` entries a slot | the least-index, most-slots, storage, one-slot and run-time tests; twenty-three tests that build a cache, by `Cache.init`'s assertion, `test-cache` | CAUGHT |
+| CZ4 | `keys_for` does not round up to a power of two | §18, a key index of a power of two | the least-index, storage and run-time tests; four tests of the probe and the sweep, by a panic, `test-cache` | CAUGHT |
+| CZ5 | `keys_for` gives twice the least key index | §18, the least index a slot count takes | the least-index, storage and one-slot tests, `test-cache` | CAUGHT |
+| CZ6 | `Slices.valid` takes a key index that is no power of two | §18, what `Cache.init` asserts | the shape test, `test-cache` | CAUGHT |
+| CZ7 | `Slices.valid` takes a key index of fewer than two entries a slot | §18, what `Cache.init` asserts | the shape test, `test-cache` | CAUGHT |
+| CZ8 | `Slices.valid` refuses the least key index | §18, the least index is enough | the shape and most-slots tests; the one-slot test, by the assertion in `slices`, `test-cache` | CAUGHT |
+| CZ9 | `Slices.valid` asks nothing of the slot count | §18, a slot count of 1 to `cache_slots_max` | the shape and most-slots tests, `test-cache` | CAUGHT |
+| CZ10 | the cache module's default cap is not the configuration's | §12, one constant for the two | the default-cap test of `cache_ttl_test.zig`, `test-cache` | CAUGHT |
+| CZ11 | a configuration's default cap is not the named hour | §4, 3,600 s by default | the cap test of `config.zig`, `test-core` | CAUGHT |
+| CZ12 | `assert_valid` refuses a cap of one second | §4, a cap of at least 1 | the cap test of `config.zig`, by a panic, `test-core` | CAUGHT |
+| CZ13 | a parsed configuration's cap is not the default | §10, no line of a `resolv.conf` sets the cap | the options test of `resolv_conf.zig`, `test-config` | CAUGHT |
+| CZ14 | the consumer fixture starts its resolver without its cache memory, as before the ruling | §24, what a consumer writes | `consumer-check`: the dependent package does not build | CAUGHT |
+| CZ15 | an engine handed cache memory puts no cache under its table | §19 step 13, the cache's memory, rule 2 | ten of the eleven tests of `io_lifecycle_cache_test.zig`, all but the no-memory test; the second-start test of `io_sim_test.zig` and the reinit test of `io_lifecycle_test.zig`, each by a panic, `test-io` | CAUGHT |
+| CZ16 | an engine handed no cache memory is refused | rule 3, null is an engine with no cache | the no-memory, failed-reinit and off tests, each by a panic, `test-io` | CAUGHT |
+| CZ17 | an engine handed no cache memory keeps the cache its memory held | rule 3, no cache | the no-memory, failed-reinit and off tests, `test-io` | CAUGHT |
+| CZ18 | the engine caps its cache at the constant of an hour, whatever the configuration says | rule 8, the configuration's cap | the set-cap and reinit-cap tests, `test-io` | CAUGHT |
+| CZ19 | the engine's cache has no cap | rule 8, the configuration's cap | the default-cap, set-cap and reinit-cap tests, `test-io` | CAUGHT |
+| CZ20 | the engine keys its cache by a constant, not by the seed it is given | rule 2, keyed by the seed of the call | the hit, same-memory and failed-reinit tests, `test-io` | CAUGHT |
+| CZ21 | the engine builds its cache over the first slot alone | rule 2, a cache over the memory handed in | the hit and two-slot tests, `test-io` | CAUGHT |
+| CZ22 | `reinit` keeps the cache it had, whatever memory it is handed | rule 4, `reinit` takes the memory again | the same-memory, other-memory, failed-reinit, off and reinit-cap tests, and the reinit test of `io_lifecycle_test.zig`, `test-io` | CAUGHT |
+| CZ23 | `reinit` builds its cache over the memory the engine held, when it held some | rules 4 and 5, the old memory is never touched again | the other-memory, failed-reinit and off tests, `test-io` | CAUGHT |
+| CZ24 | the README's engine block starts the engine without its cache memory, as before the ruling | the README's code compiles | `readme-check`: the package does not build, since `init` expects five arguments and finds four | CAUGHT |
+| CZ25 | `Slices.valid` takes more slots than the most, where it refuses none | §18, a slot count of 1 to `cache_slots_max` | the most-slots test, `test-cache` | CAUGHT |
+| CZ26 | `reinit` opens its sockets before it builds its table and its cache, so a `reinit` that fails keeps the cache it had | rule 5, the old memory is the caller's whatever `reinit` returns, and a failed `reinit` has taken the new | the failed-reinit test, `test-io` | CAUGHT |
+| CZ27 | the mutation tool reads a compile error a check quotes as this tree's own | a nested build's compile error is what its check caught | the quoted-error test of `mutations_check.zig`, `test-tools` | CAUGHT |
+| CZ28 | `readme-check` prints the nested build's output at the margin, as it did | the nested build's output is quoted, set in from the margin | the quotation test of `readme_check.zig`, `test-tools` | CAUGHT |
+| CZ29 | a cache takes a cap of zero | §18, a cap of 1 second to `cache_ttl_seconds_max` | the cap test of `cache_ttl_test.zig`, `test-cache` | CAUGHT |
+| CZ30 | a cache takes a cap past seven days | §18, a cap of 1 second to `cache_ttl_seconds_max`, the cap RFC 8767 §4 recommends | the cap test of `cache_ttl_test.zig`, `test-cache` | CAUGHT |

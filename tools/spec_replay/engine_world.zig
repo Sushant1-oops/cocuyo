@@ -60,7 +60,6 @@ pub fn WorldOver(comptime slots: u16, comptime conns: u16, comptime Doh: type) t
         const Self = @This();
         pub const Resolver = io.Resolver(.{
             .lookups = slots,
-            .cache_slots = 2,
             .group_buffers = 2,
             .tcp_connections = conns,
             .tcp_group_buffers = 2,
@@ -78,6 +77,9 @@ pub fn WorldOver(comptime slots: u16, comptime conns: u16, comptime Doh: type) t
         servers: [2]cocuyo.Server,
         config: cocuyo.Config,
         engine: Resolver,
+        /// The memory of the engine's cache: two slots, the size it had as an option. The model
+        /// holds no cache, and no start of a walk asks a name twice (`names`).
+        cache_memory: cocuyo.cache.Storage(2),
         now_ns: u64,
         /// Names asked so far in this walk: each start asks a new one, so the cache never
         /// answers, as the model has it.
@@ -112,7 +114,7 @@ pub fn begin(self: anytype, transport: Transport) !void {
     // it has one.
     self.now_ns = 1;
     self.names = 0;
-    try self.engine.init(&self.loop, &self.config, seed, self.now_ns);
+    try self.engine.init(&self.loop, &self.config, self.cache_memory.slices(), seed, self.now_ns);
     self.engine.tcp_idle_ns = idle_ns;
     self.engine.quic.idle_ns = idle_ns;
     self.engine.doh.idle_ns = idle_ns;

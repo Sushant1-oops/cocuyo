@@ -17,14 +17,12 @@ const endpoint_of = sim_test.endpoint_of;
 
 const Tiny = io.Resolver(.{
     .lookups = fixtures.small_lookups,
-    .cache_slots = fixtures.small_lookups,
     .group_buffers = fixtures.group_buffers,
     .tcp_message_bytes = fixtures.tiny_message_bytes,
 });
 
 const Dry = io.Resolver(.{
     .lookups = fixtures.small_lookups,
-    .cache_slots = fixtures.small_lookups,
     .group_buffers = fixtures.group_buffers,
     .tcp_group_buffers = fixtures.tcp_group_buffers_small,
 });
@@ -119,7 +117,6 @@ test "a server that refuses the connection costs it the lookup, and the next ser
 /// An engine that keeps no TCP connection, as one built for DoQ alone does (c4milo/cocuyo#14).
 const Streamless = io.Resolver(.{
     .lookups = fixtures.small_lookups,
-    .cache_slots = fixtures.small_lookups,
     .group_buffers = fixtures.group_buffers,
     .tcp_connections = 0,
 });
@@ -216,7 +213,8 @@ test "the stream receive is armed again after its group runs dry" {
     const servers = [_]cocuyo.Server{.{ .endpoint = endpoint_of(rotor.Network.server_address(0)) }};
     const config: cocuyo.Config = .{ .servers = &servers, .timeout_ns = 5_000_000_000 };
     var engine: Dry = undefined;
-    try engine.init(&loop, &config, 20, loop.now());
+    var cache_memory: cocuyo.cache.Storage(fixtures.small_lookups) = .{};
+    try engine.init(&loop, &config, cache_memory.slices(), 20, loop.now());
     var buffer: [fixtures.name_text_bytes]u8 = undefined;
     var started: usize = 0;
     while (started < fixtures.small_lookups) : (started += 1) {
@@ -253,7 +251,8 @@ test "a message longer than the connection can assemble ends the lookups on it" 
     const servers = [_]cocuyo.Server{.{ .endpoint = endpoint_of(rotor.Network.server_address(0)) }};
     const config: cocuyo.Config = .{ .servers = &servers, .timeout_ns = 1_000_000_000, .attempts = 1 };
     var engine: Tiny = undefined;
-    try engine.init(&loop, &config, 19, loop.now());
+    var cache_memory: cocuyo.cache.Storage(fixtures.small_lookups) = .{};
+    try engine.init(&loop, &config, cache_memory.slices(), 19, loop.now());
     _ = try engine.start(question("example.com."), loop.now());
     var events: [fixtures.events_max]rotor.Event = undefined;
     var rounds: usize = 0;

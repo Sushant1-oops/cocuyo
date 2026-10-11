@@ -20,7 +20,6 @@ const lookups = 4;
 const group_buffers = 16;
 const Resolver = io.Resolver(.{
     .lookups = lookups,
-    .cache_slots = lookups,
     .group_buffers = group_buffers,
     .tcp_connections = 0,
     .doh = cocuyo_doh.Channel(.{}),
@@ -167,6 +166,8 @@ const World = struct {
     servers: [servers]cocuyo.Server = undefined,
     config: cocuyo.Config = undefined,
     engine: Resolver = undefined,
+    /// The memory of the engine's cache, a slot for each of its lookups.
+    cache_memory: cocuyo.cache.Storage(lookups) = .{},
     events: [events_max]rotor.Event = undefined,
     sides: [servers]Side = undefined,
     quic_sides: [servers]QuicSide = undefined,
@@ -196,7 +197,7 @@ const World = struct {
             };
         }
         world.config = .{ .servers = &world.servers, .timeout_ns = timeout_ns, .timeout_ns_max = timeout_ns, .failover_retry_chance = 0 };
-        try world.engine.init(&world.loop, &world.config, seed, world.loop.now());
+        try world.engine.init(&world.loop, &world.config, world.cache_memory.slices(), seed, world.loop.now());
         world.engine.doh.context = .init(&anchors, @splat(@truncate(seed)), identity.unix_seconds, world.loop.now());
         for (&world.sides, &world.quic_sides, 0..) |*side, *quic_side, index| {
             side.* = .{ .index = @intCast(index), .network = world.loop.network(), .script = script };

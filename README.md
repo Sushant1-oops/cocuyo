@@ -30,8 +30,9 @@ cocuyo does the first job only. That choice gives you four things:
 
 - **It fits your loop.** You send the bytes it hands you and give it the bytes you receive. The same
   library runs under a blocking socket and under io_uring, unchanged.
-- **Its memory is yours, sized once.** You hand cocuyo its lookup table and its cache at init. It
-  never allocates, so there is no allocator to pass and no out-of-memory path at run time.
+- **Its memory is yours, sized once.** You hand cocuyo its lookup table and its cache's memory at
+  init, sized by a constant or by a number you read at run time. It never allocates, so there is
+  no allocator to pass and no out-of-memory path at run time.
 - **It is deterministic.** Time and randomness are arguments. The same seed and the same clock
   replay the same lookup byte for byte, so the state machine is tested without a network.
 - **It checks itself in production.** Assertions stay on in every build cocuyo offers. A malformed
@@ -68,7 +69,7 @@ exactly what the rest of the machine sees.
 | Encryption | In the engine: DNS over TLS (RFC 7858, strict as RFC 8310 asks), DNS over QUIC (RFC 9250) and DNS over HTTPS (RFC 8484) on HTTP/3, HTTP/2 or HTTP/1.1, a server known by its name, by SPKI pins, or by both |
 | Robustness | Retries with each server's wait set from its measured latency and doubled per pass, rotation, and server failover that tracks failures per server |
 | Configuration | `resolv.conf`, `RES_OPTIONS` and `LOCALDOMAIN`, and the hosts file, parsed from bytes you read |
-| Cache | Optional, sized by you, with SIEVE eviction and RFC 2308 negative caching |
+| Cache | Optional, over memory you hand in, sized when you compile or from a number you read at run time, with a TTL cap you set, SIEVE eviction and RFC 2308 negative caching |
 | Security | DNS cookies (RFC 7873), DNS-0x20 case randomisation, a source-port hint, and strict response matching |
 
 The search-list walk has been checked on the wire against glibc 2.39, musl 1.2.5 and c-ares 1.34.8.
@@ -133,13 +134,14 @@ under Docker's default security profile, and on kqueue on macOS.
 
 - **Many lookups over rotor.** The engine in [`io/`](io) runs a whole `Resolver` over rotor: one
   UDP socket per server with source-port rotation, one reused TCP connection per server, one timer
-  for every deadline, and the cache in front. It is tested on a deterministic twin of rotor, and end
+  for every deadline, and a cache in front when you hand it the memory for one
+  ([quick start](#quick-start)). It is tested on a deterministic twin of rotor, and end
   to end over rotor itself on macOS and Linux; the throughput comparison with c-ares below runs on
   it. It is exported as the module `cocuyo_rotor`, whose type `Resolver` runs on a loop
   you own: your build binds its `rotor` import to your rotor, and every event your loop hands out
   goes to the engine's `apply` first ([`test/consumer/`](test/consumer) is such a package).
-- **One engine for each core.** Each thread runs a loop and an engine of its own, and nothing is
-  shared between them but a `Config`, which is only read.
+- **One engine for each core.** Each thread runs a loop and an engine of its own, with cache
+  memory of its own, and nothing is shared between them but a `Config`, which is only read.
   [`examples/threads_rotor.zig`](examples/threads_rotor.zig) runs two at once, and CI runs it under
   ThreadSanitizer as well.
 
@@ -214,10 +216,10 @@ const cocuyo = @import("cocuyo");
 
 var slots: [64]cocuyo.Slot = @splat(.{});
 var keys: [256]cocuyo.MatchKey = @splat(.{});
-var entries: [1024]cocuyo.cache.Slot = @splat(cocuyo.cache.Slot.empty);
-var index: [2048]cocuyo.cache.Key = @splat(.{});
+var cache_memory: cocuyo.cache.Storage(1024) = undefined; // 1,024 slots and their key index
 
-var store = cocuyo.Cache.init(&entries, &index, seed, cocuyo.cache.constants.ttl_seconds_max_default);
+const cap_seconds = config.cache_ttl_seconds_max; // no answer is kept longer: an hour by default
+var store = cocuyo.Cache.init(&cache_memory.slots, &cache_memory.keys, seed, cap_seconds);
 var table = cocuyo.Resolver.init(&slots, &keys, &config, seed);
 table.remember_with(cocuyo.remembered_by(&store)); // optional: the cache under every lookup
 
@@ -225,6 +227,39 @@ _ = try table.start(try cocuyo.Question.from_text("example.com.", .a));
 var query: [cocuyo.constants.query_bytes_max]u8 = undefined;
 const event = table.poll(now_ns, &query).?; // event.action is .send_udp: the bytes, and where
 ```
+
+The engine, `cocuyo_rotor`, takes the cache's memory the same way, at `init` and again at `reinit`,
+and builds the cache itself. Hand it `null` and it has no cache: every lookup goes to its servers.
+`loop` is your `rotor.Loop`, and `allocator` and `slot_count` stand for wherever your memory and
+your configuration come from:
+
+<!-- readme-check: engine -->
+```zig
+const cocuyo = @import("cocuyo");
+const dns = @import("cocuyo_rotor");
+
+const Resolver = dns.Resolver(.{});
+var resolver: Resolver = undefined;
+// A size known when you compile: 1,024 slots, the size measured below, 2.9 MiB.
+var cache_memory: cocuyo.cache.Storage(dns.constants.cache_slots_default) = undefined;
+try resolver.init(&loop, &config, cache_memory.slices(), seed, now_ns);
+
+// A size read at run time, handed over at a `reinit`. The engine must be idle.
+if (!cocuyo.cache.slot_count_valid(slot_count)) return error.CacheSlotsOutOfRange;
+const entries = try allocator.alloc(cocuyo.cache.Slot, slot_count);
+const index = try allocator.alloc(cocuyo.cache.Key, cocuyo.cache.keys_for(slot_count));
+try resolver.reinit(&config, .{ .slots = entries, .keys = index }, new_seed, now_ns);
+```
+
+A cache takes 1 to 16,384 slots, 2,984 octets each, and `cocuyo.cache.keys_for` gives the key
+index a slot count needs. The memory must stay valid, and where it is, until the engine's `close`,
+or until a `reinit` hands the engine other memory or none. A `reinit` that fails has still taken
+the memory it was handed, so never free that memory on the error: hand it to the next `reinit`, or
+keep it until `close`. Each engine has its own. The cache keeps no answer longer than
+`Config.cache_ttl_seconds_max`, an hour unless you set it and seven days at most, the cap
+RFC 8767 §4 recommends; `cocuyo.cache.ttl_seconds_max_valid` says whether a cap you read at run
+time is one a cache takes. cocuyo never reads the cap from a `resolv.conf`, which has no line for
+it.
 
 [`examples/`](examples) holds complete programs that resolve real names against real servers: one
 lookup over a blocking UDP socket, the same over [rotor](#an-event-loop-to-drive-it-rotor), and the
@@ -338,17 +373,27 @@ quiet machine measures it again (docs/design.md §11). The two also spend memory
 each message and each record, and cocuyo holds only the memory its caller sized at init, so what it
 uses cannot grow with the load.
 
-The cache, replayed over a real ISP's DNS log of 28 million questions: at its default of 1,024
-entries, a cache per client answers 49% to 60% of questions without a packet. The range is the
-TTLs, which the log does not carry and the replay assigns two ways. Either way the cache is at
-most 2 points under the best any eviction policy could do with the same memory, which is why it
-uses SIEVE and not something more complex. The replay and its source are in
+The cache, replayed over a real ISP's DNS log of 28 million questions: at 1,024 entries, the size
+the quick start declares, a cache per client answers 49% to 60% of questions without a packet.
+The range is the TTLs, which the log does not carry and the replay assigns two ways. Either way
+the cache is at most 2 points under the best any eviction policy could do with the same memory,
+which is why it uses SIEVE and not something more complex. The replay and its source are in
 [`bench/README.md`](bench/README.md).
 
 ## Compared with c-ares
 
 cocuyo covers what c-ares does as a DNS client: every record type it parses, its configuration
-options, cookies, failover, the hosts file and a cache. What it does not cover, today:
+options, cookies, failover, the hosts file and a cache.
+
+The cache is where a c-ares user meets a difference. c-ares's query cache is on unless
+`ARES_OPT_QUERY_CACHE` turns it off with a TTL of zero, and `ares_init_options(3)` gives it a cap
+on the TTL and no size. cocuyo's holds the slots you hand it and no more, and the engine has no
+cache until you hand it the memory for one. Its cap on a TTL is `Config.cache_ttl_seconds_max`,
+an hour by default as c-ares's `qcache_max_ttl` is, and a cap of zero is refused: no memory is how
+the cache is off. A `qcache_max_ttl` of zero in a configuration you port is yours to turn into
+`null` memory before it reaches a `Config`, whose `assert_valid` stops the program on it.
+
+What it does not cover, today:
 
 - **The platform's own configuration.** c-ares also reads the macOS system configuration, the
   Windows registry and Android's settings. cocuyo reads `resolv.conf` alone.

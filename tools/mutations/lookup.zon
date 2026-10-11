@@ -2091,4 +2091,176 @@
         },
         .caught_by = .{ .step = "test-wire" },
     },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ1",
+        .what = "slot_count_valid takes a cache of no slots",
+        .edits = .{
+            .{ .file = "src/cache/cache_storage.zig", .old = "    return slot_count >= 1 and slot_count <= constants.slots_max;", .new = "    return slot_count <= constants.slots_max;" },
+        },
+        .caught_by = .{ .step = "test-cache" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ2",
+        .what = "slot_count_valid takes one slot more than the most",
+        .edits = .{
+            .{ .file = "src/cache/cache_storage.zig", .old = "    return slot_count >= 1 and slot_count <= constants.slots_max;", .new = "    return slot_count >= 1 and slot_count <= constants.slots_max + 1;" },
+        },
+        .caught_by = .{ .step = "test-cache" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ3",
+        .what = "keys_for gives one key a slot, and its own assertion asks no more",
+        .edits = .{
+            .{ .file = "src/cache/cache_storage.zig", .old = "    const key_count = std.math.ceilPowerOfTwoAssert(usize, slot_count * constants.keys_per_slot_min);", .new = "    const key_count = std.math.ceilPowerOfTwoAssert(usize, slot_count);" },
+            .{ .file = "src/cache/cache_storage.zig", .old = "    assert(key_count >= slot_count * constants.keys_per_slot_min);", .new = "    assert(key_count >= slot_count);" },
+        },
+        .caught_by = .{ .step = "test-cache" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ4",
+        .what = "keys_for does not round up to a power of two",
+        .edits = .{
+            .{ .file = "src/cache/cache_storage.zig", .old = "    const key_count = std.math.ceilPowerOfTwoAssert(usize, slot_count * constants.keys_per_slot_min);", .new = "    const key_count = slot_count * constants.keys_per_slot_min;" },
+        },
+        .caught_by = .{ .step = "test-cache" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ5",
+        .what = "keys_for gives twice the least key index",
+        .edits = .{
+            .{ .file = "src/cache/cache_storage.zig", .old = "    const key_count = std.math.ceilPowerOfTwoAssert(usize, slot_count * constants.keys_per_slot_min);", .new = "    const key_count = 2 * std.math.ceilPowerOfTwoAssert(usize, slot_count * constants.keys_per_slot_min);" },
+        },
+        .caught_by = .{ .step = "test-cache" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ6",
+        .what = "Slices.valid takes a key index that is no power of two",
+        .edits = .{
+            .{ .file = "src/cache/cache_storage.zig", .old = "        return std.math.isPowerOfTwo(self.keys.len);", .new = "        return true;" },
+        },
+        .caught_by = .{ .step = "test-cache" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ7",
+        .what = "Slices.valid takes a key index of fewer than two entries a slot",
+        .edits = .{
+            .{ .file = "src/cache/cache_storage.zig", .old = "        if (self.keys.len < self.slots.len * constants.keys_per_slot_min) return false;", .new = "        if (self.keys.len == 0) return false;" },
+        },
+        .caught_by = .{ .step = "test-cache" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ8",
+        .what = "Slices.valid refuses the least key index",
+        .edits = .{
+            .{ .file = "src/cache/cache_storage.zig", .old = "        if (self.keys.len < self.slots.len * constants.keys_per_slot_min) return false;", .new = "        if (self.keys.len <= self.slots.len * constants.keys_per_slot_min) return false;" },
+        },
+        .caught_by = .{ .step = "test-cache" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ9",
+        .what = "Slices.valid asks nothing of the slot count",
+        .edits = .{
+            .{ .file = "src/cache/cache_storage.zig", .old = "        if (!slot_count_valid(self.slots.len)) return false;\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-cache" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ10",
+        .what = "the cache module's default cap is not the configuration's",
+        .edits = .{
+            .{ .file = "src/cache/constants.zig", .old = "pub const ttl_seconds_max_default = core.constants.cache_ttl_seconds_max_default;", .new = "pub const ttl_seconds_max_default = 2 * core.constants.cache_ttl_seconds_max_default;" },
+        },
+        .caught_by = .{ .step = "test-cache" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ11",
+        .what = "a configuration's default cap is not the named hour",
+        .edits = .{
+            .{ .file = "src/core/config.zig", .old = "    cache_ttl_seconds_max: u32 = constants.cache_ttl_seconds_max_default,", .new = "    cache_ttl_seconds_max: u32 = constants.cache_ttl_seconds_max_default + 1," },
+        },
+        .caught_by = .{ .step = "test-core" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ12",
+        .what = "assert_valid refuses a cap of one second",
+        .edits = .{
+            .{ .file = "src/core/config.zig", .old = "        assert(self.cache_ttl_seconds_max >= 1);", .new = "        assert(self.cache_ttl_seconds_max > 1);" },
+        },
+        .caught_by = .{ .step = "test-core" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ13",
+        .what = "a parsed configuration's cap is not the default",
+        .edits = .{
+            .{ .file = "src/config/resolv_conf.zig", .old = "    config: Config = .{ .servers = &.{} },", .new = "    config: Config = .{ .servers = &.{}, .cache_ttl_seconds_max = 1 }," },
+        },
+        .caught_by = .{ .step = "test-config" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ14",
+        .what = "the consumer fixture starts its resolver without its cache memory, as before the ruling",
+        .edits = .{
+            .{ .file = "test/consumer/embed.zig", .old = "    try resolver.init(&loop, &config, cache_memory.slices(), seed, now_ns);", .new = "    try resolver.init(&loop, &config, seed, now_ns);" },
+        },
+        .caught_by = .{ .step = "consumer-check" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ25",
+        .what = "Slices.valid takes more slots than the most, where it refuses none",
+        .edits = .{
+            .{ .file = "src/cache/cache_storage.zig", .old = "        if (!slot_count_valid(self.slots.len)) return false;", .new = "        if (self.slots.len == 0) return false;" },
+        },
+        .caught_by = .{ .step = "test-cache" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ27",
+        .what = "the mutation tool reads a compile error a check quotes as this tree's own",
+        .edits = .{
+            .{ .file = "tools/mutations_check.zig", .old = "    if (std.ascii.isWhitespace(line[0])) return false;\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ28",
+        .what = "readme-check prints the nested build's output at the margin, as it did",
+        .edits = .{
+            .{ .file = "tools/readme_check.zig", .old = "const quote_indent = \"    \";", .new = "const quote_indent = \"\";" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ29",
+        .what = "a cache takes a cap of zero",
+        .edits = .{
+            .{ .file = "src/cache/cache.zig", .old = "    return ttl_seconds_max >= 1 and ttl_seconds_max <= core.constants.cache_ttl_seconds_max;", .new = "    return ttl_seconds_max <= core.constants.cache_ttl_seconds_max;" },
+        },
+        .caught_by = .{ .step = "test-cache" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ30",
+        .what = "a cache takes a cap past seven days",
+        .edits = .{
+            .{ .file = "src/cache/cache.zig", .old = "    return ttl_seconds_max >= 1 and ttl_seconds_max <= core.constants.cache_ttl_seconds_max;", .new = "    return ttl_seconds_max >= 1;" },
+        },
+        .caught_by = .{ .step = "test-cache" },
+    },
 }

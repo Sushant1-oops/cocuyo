@@ -169,6 +169,20 @@ pub const timeout_ns_max = 30_000_000_000;
 /// since the cap is the caller's (docs/design.md §5). 250 * 1_000_000.
 pub const timeout_ns_min = 250_000_000;
 
+/// The default cap on every TTL a cache keeps, `Config.cache_ttl_seconds_max`: an hour, which is
+/// c-ares's default (docs/design.md §18), so a consumer replacing it sees the same ceiling.
+/// "Values SHOULD be capped on the order of days to weeks, with a recommended cap of 604,800
+/// seconds (7 days)" (RFC 8767 §4), so an hour is inside it. Here because `Config` and the cache
+/// both read it (§16 decision 37). 60 * 60.
+pub const cache_ttl_seconds_max_default = 3600;
+
+/// The most `Config.cache_ttl_seconds_max` may be, and the longest cap a cache takes: seven days.
+/// "Values SHOULD be capped on the order of days to weeks, with a recommended cap of 604,800
+/// seconds (7 days)" (RFC 8767 §4), so no configuration keeps an answer longer than the cap the
+/// RFC recommends. The owner's ruling of 2026-10-11 (docs/design.md §16 decision 37).
+/// 7 * 24 * 60 * 60.
+pub const cache_ttl_seconds_max = 604_800;
+
 /// The IANA Dynamic port range, which the source-port hint is drawn from (RFC 6335 §6).
 pub const port_ephemeral_min = 49152;
 pub const port_ephemeral_max = 65535;
@@ -315,5 +329,7 @@ comptime {
     if (timeout_ns_default > timeout_ns_max_default) @compileError("the default timeout exceeds the cap");
     if (timeout_ns_max_default > timeout_ns_max) @compileError("the default cap exceeds the most");
     if (timeout_ns_min > timeout_ns_default) @compileError("the floor is above the default wait");
+    if (cache_ttl_seconds_max_default < 1) @compileError("the default TTL cap caches nothing");
+    if (cache_ttl_seconds_max_default > cache_ttl_seconds_max) @compileError("the default TTL cap exceeds the most");
     if (port_ephemeral_min >= port_ephemeral_max) @compileError("the port range is empty");
 }

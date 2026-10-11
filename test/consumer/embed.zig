@@ -10,7 +10,9 @@ const rotor = @import("rotor");
 const cocuyo = @import("cocuyo");
 const dns = @import("cocuyo_rotor");
 
-const Resolver = dns.Resolver(.{ .lookups = 2, .cache_slots = 2 });
+const Resolver = dns.Resolver(.{ .lookups = 2 });
+/// The slots of the resolver's cache: small on purpose, as the table is.
+const cache_slots = 2;
 
 /// The consumer's own tag, which is not the resolver's, in the same high bits of `user_data`.
 const own_tag: u64 = Resolver.tag + 1;
@@ -23,6 +25,9 @@ const now_ns = 1;
 
 var loop_memory: [rotor.Loop.memory_bytes(loop_options)]u8 align(rotor.memory_alignment) = undefined;
 var resolver: Resolver = undefined;
+/// The cache's memory is the consumer's, as the loop's is: the resolver is handed its slices at
+/// `init`, or `null` for no cache (docs/design.md §19 step 13, the cache's memory).
+var cache_memory: cocuyo.cache.Storage(cache_slots) = undefined;
 
 pub fn main() !void {
     var loop: rotor.Loop = undefined;
@@ -34,7 +39,7 @@ pub fn main() !void {
     };
     const config: cocuyo.Config = .{ .servers = &servers, .search = &.{} };
     // The resolver borrows the consumer's loop; it never makes one.
-    try resolver.init(&loop, &config, seed, now_ns);
+    try resolver.init(&loop, &config, cache_memory.slices(), seed, now_ns);
     defer resolver.deinit();
 
     const own: rotor.Operation = .{

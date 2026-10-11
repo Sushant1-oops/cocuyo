@@ -18,7 +18,6 @@ const question = sim_test.question;
 /// channel's TCP link is the channel's.
 pub const Resolver = io.Resolver(.{
     .lookups = fixtures.small_lookups,
-    .cache_slots = fixtures.small_lookups,
     .group_buffers = fixtures.group_buffers,
     .tcp_connections = 0,
     .doh = rotor.channel.Channel,

@@ -116,7 +116,6 @@ test "an idle connection near its negotiated timeout closes before a request, wh
 /// An engine whose answer buffer holds less than an ordinary answer.
 const Tiny = io.Resolver(.{
     .lookups = fixtures.small_lookups,
-    .cache_slots = fixtures.small_lookups,
     .group_buffers = fixtures.group_buffers,
     .tcp_message_bytes = fixtures.tiny_message_bytes,
     .quic = rotor.quic.Connection,

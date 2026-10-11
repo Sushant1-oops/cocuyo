@@ -22,6 +22,21 @@ pub const Key = cache_keys.Key;
 pub const Links = cache_chain.Links;
 pub const none = cache_chain.none;
 
+const cache_storage = @import("cache_storage.zig");
+/// The memory a cache is built over, and how much of it a slot count takes (docs/design.md §18).
+pub const Slices = cache_storage.Slices;
+pub const Storage = cache_storage.Storage;
+pub const keys_for = cache_storage.keys_for;
+pub const slot_count_valid = cache_storage.slot_count_valid;
+
+/// Whether a cache takes `ttl_seconds_max` as its cap: 1 second to seven days. A cap of zero
+/// would keep nothing, and "Values SHOULD be capped on the order of days to weeks, with a
+/// recommended cap of 604,800 seconds (7 days)" (RFC 8767 §4). A cap read at run time is input,
+/// so its reader asks this and refuses a bad one itself; `Cache.init` asserts the same bound.
+pub fn ttl_seconds_max_valid(ttl_seconds_max: u32) bool {
+    return ttl_seconds_max >= 1 and ttl_seconds_max <= core.constants.cache_ttl_seconds_max;
+}
+
 /// What an entry remembers: records, or one of the two negative answers RFC 2308 caches.
 pub const Outcome = enum { answered, name_not_found, no_data };
 
@@ -92,13 +107,15 @@ pub const Cache = struct {
     /// The free list, threaded through `links.newer` of the slots outside the order.
     free: u16 = none,
 
-    /// `keys.len` is a power of two at least `keys_per_slot_min` times `slots.len`, and
-    /// `ttl_seconds_max` caps every TTL put, the way c-ares's `qcache_max_ttl` does.
+    /// `keys.len` is a power of two at least `keys_per_slot_min` times `slots.len`, which
+    /// `keys_for` gives at its least, and `slots.len` is one `slot_count_valid` takes.
+    /// `ttl_seconds_max` caps every TTL put, the way c-ares's `qcache_max_ttl` does, and is a
+    /// cap `ttl_seconds_max_valid` takes.
     pub fn init(slots: []Slot, keys: []Key, seed: u64, ttl_seconds_max: u32) Cache {
         assert(slots.len >= 1 and slots.len <= constants.slots_max);
         assert(std.math.isPowerOfTwo(keys.len));
         assert(keys.len >= slots.len * constants.keys_per_slot_min);
-        assert(ttl_seconds_max >= 1);
+        assert(ttl_seconds_max_valid(ttl_seconds_max));
         var self: Cache = .{
             .slots = slots,
             .keys = keys,
@@ -461,6 +478,7 @@ test "the hash is keyed: two seeds land one name in two places" {
 }
 
 test {
+    _ = cache_storage;
     _ = @import("cache_kinds_test.zig");
     _ = @import("cache_probe_test.zig");
     _ = @import("cache_ttl_test.zig");

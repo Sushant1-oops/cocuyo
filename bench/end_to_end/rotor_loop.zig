@@ -24,7 +24,6 @@ const Names = schedule_module.Names;
 /// the lookup started between two takes needs a slot of its own.
 const Resolver = io.Resolver(.{
     .lookups = constants.in_flight_max + 1,
-    .cache_slots = constants.in_flight_max + 1,
     .group_buffers = constants.group_buffers,
 });
 
@@ -32,6 +31,9 @@ const loop_options: rotor.Loop.Options = .{ .operations = Resolver.loop_operatio
 
 var loop_memory: [rotor.Loop.memory_bytes(loop_options)]u8 align(rotor.memory_alignment) = undefined;
 var engine: Resolver = undefined;
+/// The memory of the engine's cache, a slot for each of its lookups: the engine has the cache it
+/// is handed the memory of (docs/design.md §19 step 13), and the row of cache hits needs one.
+var cache_memory: cocuyo.cache.Storage(constants.in_flight_max + 1) = undefined;
 /// Which lookup of the row each of the engine's slots holds, by the slot's index.
 var lookup_of: [constants.in_flight_max + 1]u32 = @splat(0);
 
@@ -47,7 +49,7 @@ pub fn run(port: u16, schedule: Schedule, total: u32, record: Record, names: Nam
     try loop.init(&loop_memory, loop_options);
     defer loop.deinit();
     var events: [constants.events_max]rotor.Event = undefined;
-    try engine.init(&loop, &config, constants.engine_seed, harness.now_ns());
+    try engine.init(&loop, &config, cache_memory.slices(), constants.engine_seed, harness.now_ns());
     defer {
         engine.deinit();
         loop.drain(&events) catch {};

@@ -3,6 +3,7 @@
 //! (docs/design.md §18, §17 question 14). Split from `cache.zig` to keep it under 500 lines.
 const std = @import("std");
 const testing = std.testing;
+const core = @import("core");
 const cache = @import("cache.zig");
 const constants = @import("constants.zig");
 const fixtures = @import("fixtures.zig");
@@ -44,6 +45,34 @@ test "the put after an expired miss renews the entry where it stands" {
     try testing.expectEqual(oldest, table.order.oldest);
     try testing.expectEqual(oldest, table.find(&ask("a.example"), table.hash_of(&ask("a.example"))).?);
     try testing.expectEqual(@as(u32, 300), table.get(&ask("a.example"), 20 * second).?.ttl_seconds);
+}
+
+test "the default cap is an hour, and it is the cap a configuration names by default" {
+    try testing.expectEqual(@as(u32, 3600), constants.ttl_seconds_max_default);
+    const config: core.Config = .{ .servers = &.{} };
+    try testing.expectEqual(config.cache_ttl_seconds_max, constants.ttl_seconds_max_default);
+    // A table built with the default keeps a day's TTL for the hour.
+    var fixture: fixtures.Fixture(slot_count) = .{};
+    var table = fixture.init();
+    const day = fixtures.answers_v4(1, 86_400);
+    table.put(&ask("a.example"), &day, null, 0);
+    try testing.expectEqual(@as(u32, 3600), table.get(&ask("a.example"), 0).?.ttl_seconds);
+}
+
+test "a cache takes a cap of a second to seven days, and refuses none and a second more" {
+    try testing.expect(!cache.ttl_seconds_max_valid(0));
+    try testing.expect(cache.ttl_seconds_max_valid(1));
+    try testing.expect(cache.ttl_seconds_max_valid(3600));
+    try testing.expect(cache.ttl_seconds_max_valid(604_800));
+    try testing.expect(!cache.ttl_seconds_max_valid(604_801));
+    // "a recommended cap of 604,800 seconds (7 days)" (RFC 8767 §4).
+    try testing.expectEqual(@as(u32, 604_800), core.constants.cache_ttl_seconds_max);
+    // A table built with the longest cap keeps a TTL of thirty days for the seven.
+    var fixture: fixtures.Fixture(slot_count) = .{};
+    var table = cache_init_capped(&fixture, core.constants.cache_ttl_seconds_max);
+    const month = fixtures.answers_v4(1, 2_592_000);
+    table.put(&ask("a.example"), &month, null, 0);
+    try testing.expectEqual(@as(u32, 604_800), table.get(&ask("a.example"), 0).?.ttl_seconds);
 }
 
 test "a TTL of zero and a truncated answer are not cached, and a TTL over the cap is capped" {

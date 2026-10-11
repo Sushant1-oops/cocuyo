@@ -16,8 +16,9 @@ pub const probe_max = 16;
 
 /// The TTL cap when the caller sets none: an hour, which is c-ares's default (§18), so a consumer
 /// replacing it sees the same ceiling. RFC 8767 §4 asks for a cap and recommends seven days at
-/// most, so an hour is inside it.
-pub const ttl_seconds_max_default = 3600;
+/// most, so an hour is inside it. It is `core`'s constant, under the name it has had here, since
+/// `Config.cache_ttl_seconds_max` defaults to the same number (docs/design.md §16 decision 37).
+pub const ttl_seconds_max_default = core.constants.cache_ttl_seconds_max_default;
 
 /// Where the type and the flag sit in the word the hash starts from: the flag's one bit at 40,
 /// the type's sixteen at 48, so the two never overlap whatever the seed.

@@ -34,7 +34,6 @@ const root_text = @import("root_text.zig");
 const Quic = cocuyo_quic.Connection(.{ .Session = chapulin.Session, .streams = at_once_max });
 const Resolver = io.Resolver(.{
     .lookups = at_once_max + 1,
-    .cache_slots = at_once_max + 1,
     .tcp_connections = 0,
     .quic = Quic,
 });
@@ -42,6 +41,10 @@ const Resolver = io.Resolver(.{
 const loop_options: rotor.Loop.Options = .{ .operations = Resolver.loop_operations };
 var loop_memory: [rotor.Loop.memory_bytes(loop_options)]u8 align(rotor.memory_alignment) = undefined;
 var engine: Resolver = undefined;
+/// The cache's memory, which is the caller's (docs/design.md §19 step 13): the size the README
+/// recommends, 2.9 MiB. The engine builds its cache over it at `init`, and `null` in its place
+/// would be an engine with no cache.
+var cache_memory: cocuyo.cache.Storage(io.constants.cache_slots_default) = undefined;
 
 /// The roots one run may trust: chapulin's bound on its anchors, as colibri's configuration holds
 /// them.
@@ -95,7 +98,7 @@ pub fn main(init: std.process.Init) !void {
     try loop.init(&loop_memory, loop_options);
     defer loop.deinit();
     var events: [events_max]rotor.Event = undefined;
-    try engine.init(&loop, &config, std.mem.readInt(u64, &engine_seed, .little), clock.read());
+    try engine.init(&loop, &config, cache_memory.slices(), std.mem.readInt(u64, &engine_seed, .little), clock.read());
     engine.use_quic(.{
         .session = .init(anchors[0..roots.len], seed, unix_seconds, clock.read()),
         .stream = std.Random.ChaCha.init(id_seed),

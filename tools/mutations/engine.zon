@@ -1140,4 +1140,103 @@
         },
         .caught_by = .{ .step = "test-cocuyo_quic" },
     },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ15",
+        .what = "an engine handed cache memory puts no cache under its table",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "        self.resolver.remember_with(cocuyo.remembered_by(&self.cache.?));\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ16",
+        .what = "an engine handed no cache memory is refused",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "    if (cache_memory) |memory| {\n        self.cache = cocuyo.Cache.init(", .new = "    {\n        const memory = cache_memory.?;\n        self.cache = cocuyo.Cache.init(" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ17",
+        .what = "an engine handed no cache memory keeps the cache its memory held",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "    self.cache = null;\n    if (cache_memory) |memory| {", .new = "    if (cache_memory) |memory| {" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ18",
+        .what = "the engine caps its cache at the constant of an hour, whatever the configuration says",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "        self.cache = cocuyo.Cache.init(memory.slots, memory.keys, seed, config.cache_ttl_seconds_max);", .new = "        self.cache = cocuyo.Cache.init(memory.slots, memory.keys, seed, cocuyo.cache.constants.ttl_seconds_max_default);" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ19",
+        .what = "the engine's cache has no cap",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "        self.cache = cocuyo.Cache.init(memory.slots, memory.keys, seed, config.cache_ttl_seconds_max);", .new = "        self.cache = cocuyo.Cache.init(memory.slots, memory.keys, seed, std.math.maxInt(u32));" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ20",
+        .what = "the engine keys its cache by a constant, not by the seed it is given",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "        self.cache = cocuyo.Cache.init(memory.slots, memory.keys, seed, config.cache_ttl_seconds_max);", .new = "        self.cache = cocuyo.Cache.init(memory.slots, memory.keys, 0, config.cache_ttl_seconds_max);" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ21",
+        .what = "the engine builds its cache over the first slot alone",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "        self.cache = cocuyo.Cache.init(memory.slots, memory.keys, seed, config.cache_ttl_seconds_max);", .new = "        self.cache = cocuyo.Cache.init(memory.slots[0..1], memory.keys, seed, config.cache_ttl_seconds_max);" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ22",
+        .what = "reinit keeps the cache it had, whatever memory it is handed",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "    reset_tables(self, config, cache_memory, seed);\n    try self.sockets.open", .new = "    const held = self.cache;\n    reset_tables(self, config, null, seed);\n    self.cache = held;\n    if (self.cache) |*store| self.resolver.remember_with(cocuyo.remembered_by(store));\n    try self.sockets.open" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ23",
+        .what = "reinit builds its cache over the memory the engine held, when it held some",
+        .edits = .{
+            .{ .file = "io/io.zig", .old = "            try lifecycle.reinit(self, config, cache_memory, seed, now_ns);", .new = "            const held: ?cocuyo.cache.Slices = if (self.cache) |store| .{ .slots = store.slots, .keys = store.keys } else cache_memory;\n            try lifecycle.reinit(self, config, held, seed, now_ns);" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ24",
+        .what = "the README's engine block starts the engine without its cache memory, as before the ruling",
+        .edits = .{
+            .{ .file = "README.md", .old = "try resolver.init(&loop, &config, cache_memory.slices(), seed, now_ns);", .new = "try resolver.init(&loop, &config, seed, now_ns);" },
+        },
+        .caught_by = .{ .step = "readme-check" },
+    },
+    .{
+        .section = "The engine's cache over memory the caller hands it",
+        .id = "CZ26",
+        .what = "reinit opens its sockets before it builds its table and its cache, so a reinit that fails keeps the cache it had",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "    reset_tables(self, config, cache_memory, seed);\n    try self.sockets.open(self.loop, config, seed, @TypeOf(self.*).tag);", .new = "    try self.sockets.open(self.loop, config, seed, @TypeOf(self.*).tag);\n    reset_tables(self, config, cache_memory, seed);" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
 }

@@ -15,7 +15,6 @@ const endpoint_of = sim_test.endpoint_of;
 
 const Resolver = io.Resolver(.{
     .lookups = fixtures.small_lookups,
-    .cache_slots = fixtures.small_lookups,
     .group_buffers = fixtures.group_buffers,
 });
 const Rig = sim_test.RigOf(Resolver);

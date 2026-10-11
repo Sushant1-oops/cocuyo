@@ -59,10 +59,14 @@ fn verdict_of(output: []const u8) Verdict {
     return .{ .caught = null };
 }
 
-/// Whether `line` is the compiler's: `<file>.zig:<line>:<column>: error: ...`. A failed test says
-/// `error: '<name>' failed`, with no place before it.
+/// Whether `line` is the compiler's: `<file>.zig:<line>:<column>: error: ...`, from the line's
+/// first column. A failed test says `error: '<name>' failed`, with no place before it. A check
+/// that builds a package of its own quotes that build's output set in from the margin
+/// (`readme_check.zig`): a compile error there is what the check found in the README, and no
+/// sign that a mutation's text has stopped saying what the code does.
 fn is_compile_error(line: []const u8) bool {
     const at = std.mem.indexOf(u8, line, ": error: ") orelse return false;
+    if (std.ascii.isWhitespace(line[0])) return false;
     var place = std.mem.splitScalar(u8, line[0..at], ':');
     const file = place.next() orelse return false;
     const row = place.next() orelse return false;
@@ -96,4 +100,13 @@ test "a replay's failure names its walk, on a mismatch and on a panic" {
     try testing.expectEqual(Verdict.compile, verdict_of("src/a.zig:3:9: error: 'x' is not marked 'pub'\n"));
     try testing.expectEqual(Verdict{ .caught = null }, verdict_of("error: no step named 'test-nothing'\n"));
     try testing.expectEqual(Verdict{ .caught = null }, verdict_of("tools/run.sh:3:9: error: not the compiler's\n"));
+}
+
+test "a compile error a check quotes from a build of its own is what the check caught" {
+    const quoted = "readme-check: the README's code does not build:\n    main.zig:66:22: error: expected 5 argument(s), found 4\n";
+    try testing.expectEqual(Verdict{ .caught = null }, verdict_of(quoted));
+    try testing.expectEqual(Verdict{ .caught = null }, verdict_of("\tmain.zig:66:22: error: quoted with a tab\n"));
+    // At the margin the same line is this tree's, and a line that starts with the marker is none.
+    try testing.expectEqual(Verdict.compile, verdict_of("main.zig:66:22: error: expected 5 argument(s), found 4\n"));
+    try testing.expectEqual(Verdict{ .caught = null }, verdict_of(": error: no place before it\n"));
 }

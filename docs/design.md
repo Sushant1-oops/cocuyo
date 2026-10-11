@@ -125,7 +125,8 @@ src/wire/     wire.zig wire_header.zig wire_name.zig wire_question.zig wire_reco
 src/resolver/ resolver.zig lookup.zig lookup_poll.zig lookup_response.zig lookup_policy.zig
               entropy.zig constants.zig address_lookup.zig (§19 step 14)
 src/config/   resolv_conf.zig resolv_conf_options.zig constants.zig
-src/cache/    cache.zig cache_keys.zig cache_chain.zig cache_sweep.zig constants.zig
+src/cache/    cache.zig cache_keys.zig cache_chain.zig cache_sweep.zig cache_storage.zig
+              constants.zig
 src/sim/      sim.zig sim_types.zig sim_loop.zig sim_loop_perform.zig sim_network.zig
               sim_server.zig sim_buffers.zig constants.zig fixtures.zig sim_scenarios_test.zig
 io/           io.zig io_drive.zig io_events.zig io_udp.zig io_results.zig constants.zig
@@ -146,6 +147,7 @@ the entry point.
 | --- | --- | --- |
 | Lookup storage | `var slots: [N]cocuyo.Lookup = undefined;` | §9 gives the size |
 | Match keys | `var keys: [2*N]cocuyo.MatchKey = undefined;` | power-of-two length, §11 |
+| Cache memory | `var cache_memory: cocuyo.cache.Storage(M) = undefined;` | optional; §18 gives the size, the bounds and the form for a count read at run time |
 | Send buffer | `poll(now_ns, out)` | `out.len >= query_bytes_max` |
 | Receive buffer | the caller's own | at least `config.udp_payload_bytes` |
 | Servers and search list | `Config`, caller-owned slices | must outlive the lookups |
@@ -227,8 +229,15 @@ pub const Config = struct {
     socket_receive_bytes: u32 = 0,           // what the kernel is asked for on each socket; 0 leaves its own
     socket_send_bytes: u32 = 0,              // the same for the send buffer
     udp_queries_per_port: u32 = 0,           // queries one source port carries (udp_max_queries); 0 keeps it
+    cache_ttl_seconds_max: u32 = 3600,       // the cap on every TTL the engine's cache keeps (qcache_max_ttl)
 };
 ```
+
+`cache_ttl_seconds_max` joined on 2026-10-11 (§16 decision 37). Like `local_address` and the
+socket sizes, the engine reads it and a lookup never does: the engine hands it to the cache it
+builds, at `init` and at each `reinit` (§19 step 13). A caller that builds a `Cache` of its own
+hands `Cache.init` this field, or a cap of its own (§18). `assert_valid` requires at least 1 and
+at most seven days, `cache_ttl_seconds_max`, the cap RFC 8767 §4 recommends (decision 37).
 
 ### One lookup
 
@@ -1108,6 +1117,12 @@ to it, and a shorter one leaves the cap as it was. The cap is never lowered, so 
 applied over a file, or over a cap the caller raised, keeps the larger. Before 2026-10-09 the
 default cap was 30 s, and no `timeout:` could pass it.
 
+No line and no option sets `Config.cache_ttl_seconds_max`, so a parsed configuration keeps the
+default, an hour. macOS's `resolver(5)`, read on 2026-10-11, names no option for a cache, and
+Linux's `resolv.conf(5)` names none as recalled. c-ares takes its cap from the options a program
+fills in, and `ares_init_options(3)` names no line of `resolv.conf` for it (§19 step 13). A
+consumer that keeps the cap in a configuration file of its own sets the field after the parse.
+
 `parse` cannot fail. It returns the default `Config` for empty input, which is the localhost
 nameserver, matching the historical behaviour of the platform stubs.
 
@@ -1504,6 +1519,8 @@ written at the use site. Shared limits live in `src/core/constants.zig`.
 | `latency_window_minute_ns`, `_quarter_hour_ns`, `_hour_ns`, `_day_ns` | 1 min, 15 min, 1 h, 1 day | the spans of four of the five windows of samples, the fifth being since the table was built: c-ares's, read from its features page, not measured; `src/resolver/constants.zig` |
 | `port_ephemeral_min`, `_max` | 49152, 65535 | the IANA ephemeral range |
 | `lookup_slots_max` | 1024 | bounds a `Handle` index and the key table |
+| `cache_ttl_seconds_max_default` | 3600 s | the default of `Config.cache_ttl_seconds_max`, the cap on every TTL a cache keeps: c-ares's default (§18), and inside the seven days RFC 8767 §4 recommends; in `core` since 2026-10-11, because `Config` and the cache both read it, and `cache.constants.ttl_seconds_max_default` is the same constant by its older name |
+| `cache_ttl_seconds_max` | 604800 s | the most `Config.cache_ttl_seconds_max` may be, and the most `Cache.init` takes: seven days, "a recommended cap of 604,800 seconds (7 days)" (RFC 8767 §4); the owner's ruling of 2026-10-11 (§16 decision 37) |
 
 ## 13. Tests, mutation and fuzzing
 
@@ -1875,6 +1892,52 @@ step until `zig build test` passes.
     reading the window since the table was built only while a window with a span holds 3
     samples, which would still have left such a server's wait where it was until its day's
     window had passed. §5.
+37. **The engine's cache is built over memory the caller hands `init` and `reinit`, or there is
+    none, and its TTL cap is `Config.cache_ttl_seconds_max`.** Ruled by the owner on 2026-10-11,
+    in two answers: the caller hands the engine its cache memory at init, as the library's
+    `Cache.init` takes it, so the size can come from a configuration file; and the cap is a
+    `Config` field, 3,600 s by default, which the engine passes to its cache at `init` and
+    `reinit`. The engine builds the `Cache` itself, keyed by the seed of the call and capped by
+    its configuration, and an engine handed no memory has no cache. `init` and `reinit` change
+    signature, `Options.cache_slots` goes, and the engine no longer owns that memory. Rejected:
+    - The comptime option alone, which is what was. The size is fixed when the engine's type is
+      built, so no number read at run time reaches it. A size of zero trips `Cache.init`'s
+      assertion, so the cache cannot be turned off. And the cap was a constant.
+    - A built-in cache with a run-time override beside it. That is two ways to do one thing, and
+      a caller that hands over its own memory still holds the built-in arrays for nothing, 2.9
+      MiB at 1,024 slots.
+    - The caller handing over a built `Cache`. The engine keys its cache with each seed it is
+      given and caps it with its configuration, so it would build the caller's cache again at
+      `init` and at every `reinit`, and a cache built with another seed or cap in between would
+      be one more thing to get wrong.
+
+    What the ruling left open, chosen by whoever built it, each the smallest thing found:
+    - The sizing lives in the library's `cache` module, as `Slices`, `Storage`, `keys_for` and
+      `slot_count_valid` (§18, Sizing the memory), and the engine takes a `?cache.Slices`. The
+      rule is the cache's, `Cache.init` asserts it, and a caller of the library alone sizes the
+      same memory. The other place was the engine, which would have left that caller working
+      the key index out by hand. `Cache.init` keeps its signature.
+    - The cap is at most seven days, `cache_ttl_seconds_max`. "Values SHOULD be capped on the
+      order of days to weeks, with a recommended cap of 604,800 seconds (7 days)" (RFC 8767 §4),
+      and the owner ruled on 2026-10-11 that cocuyo follows it. `assert_valid` and `Cache.init`
+      refuse a longer cap, and `cache.ttl_seconds_max_valid` says whether a cap read at run time
+      is one a cache takes. Rejected: no upper bound, this change's first shape, on the ground
+      that any `u32` is a TTL and a cap only lowers one, as c-ares's cap does. That left the
+      RFC's SHOULD to each caller, and let one configuration keep an answer for 136 years.
+    - A cap of zero is refused, where c-ares reads zero as the cache turned off. Handing over no
+      memory is the one way to turn it off (§19 step 13).
+    - `engine_cache_slots_default` stays, as the size the README and the examples use and no
+      default the engine takes (§19 step 13).
+    - `cache_memory` sits after the configuration and before the seed, in both functions.
+    - A `reinit` that fails has taken the memory it was handed, as it has taken the
+      configuration and the seed of that call, and the memory it held before is the caller's
+      (§19 step 13, rule 5). Before the ruling `reinit` already built its table and then
+      opened its sockets, and the cache follows the table. The other choice was a failed
+      `reinit` that leaves the engine with no cache, so that it holds neither memory and a
+      caller's `errdefer` may free what it just got. That changes what `reinit` does, so it is
+      §17 question 33 and not built.
+
+    §4, §18, §19 step 13, §20, §24.
 
 ## 17. Questions for the owner
 
@@ -1929,7 +1992,7 @@ step until `zig build test` passes.
 14. **Should a get renew an expired entry in place?** Answered on 2026-09-22: yes. A get that
     found its entry expired evicted it, and the put after the miss inserted the name as new, at
     the newest end. The get now misses and leaves the entry, and the put renews it where it
-    stands. On the synthetic trace that is 3.0 points more hits at the default 1024 slots and
+    stands. On the synthetic trace that is 3.0 points more hits at 1024 slots and
     1.0 fewer at 4096 (§18). An expired entry holds its slot until its name is asked again or
     the hand meets it. The public surface is unchanged.
 15. **Should a port be replaced under load?** Answered on 2026-09-23: yes. A port that had
@@ -2015,6 +2078,37 @@ recommends, and none is taken until the owner answers.
     DoH and DoQ sample already carries the handshake of a connection the request opened,
     failover asks a server that does not answer last, and its wait rises to the cap as a silent
     server's does over UDP.
+
+### Asked on 2026-10-11, for the cache's memory
+
+§16 decision 37 records the ruling and six choices the ruling did not cover. These are the
+ones that touch the public surface, a limit or what a call does, which CLAUDE.md asks the owner
+about.
+
+29. **The sizing in the library.** `cocuyo.cache` gains `Slices`, `Storage`, `keys_for` and
+    `slot_count_valid`, and the engine's `init` and `reinit` take a `?cocuyo.cache.Slices`.
+    Should the names, or their place, be other than these? Recommended: as built. The rule is
+    the cache's, and a caller of the library alone needs it too.
+30. **No upper bound on `Config.cache_ttl_seconds_max`.** Answered on 2026-10-11: follow the
+    RFC. A cap is at most seven days, the cap RFC 8767 §4 recommends, under the named limit
+    `cache_ttl_seconds_max`. `assert_valid` and `Cache.init` hold it (§16 decision 37).
+31. **A cap of zero.** c-ares reads `qcache_max_ttl = 0` as the cache turned off, and cocuyo
+    asserts against it: no memory is the way to turn the cache off. Should zero be taken, and
+    mean off? Recommended: no, since it would be a second way that still holds the memory. What
+    that costs a consumer: a zero read from its own configuration file is input, and it reaches
+    `assert_valid` and stops the program unless the consumer turns it into no memory first. A
+    slot count has `slot_count_valid` for that, and since the answer to question 30 the cap has
+    `ttl_seconds_max_valid`, which refuses a zero and a cap past seven days.
+32. **`engine_cache_slots_default`.** It stays at 1,024, named, as the size the README and the
+    examples hand an engine. Should it go, or move to the `cache` module's constants, where a
+    caller of the library alone would find it? Recommended: as built, since the name and the
+    place are the ones consumers already read.
+33. **What a `reinit` that fails holds.** It holds the memory that call handed it, with that
+    call's configuration and seed, until a later `reinit` or `close` (§19 step 13, rule 5), so
+    a caller that got memory for the call must not free it on the error. Should a failed
+    `reinit` leave the engine with no cache instead, so that it holds neither the old memory
+    nor the new? Recommended: as built. The engine has taken the new configuration by then,
+    and a cache that follows the table is one rule, where a cache dropped on one path is two.
 
 ## 18. The cache
 
@@ -2103,6 +2197,23 @@ pub const Cache = struct {
     pub fn flush(self: *Cache) void;
     pub fn len(self: *const Cache) usize;
 };
+
+// Since 2026-10-11 (§16 decision 37, Sizing the memory below):
+
+/// The memory a cache is built over, as `Cache.init` takes it: slices into memory the caller owns.
+pub const Slices = struct {
+    slots: []Slot,
+    keys: []Key,
+    pub fn valid(self: Slices) bool; // what `Cache.init` asserts of the two
+};
+/// The same memory as arrays, for a caller that knows the slot count when it compiles.
+pub fn Storage(comptime slot_count: usize) type; // `slots`, `keys`, and `slices()`
+/// Whether a cache takes `slot_count` slots: 1 to `slots_max`.
+pub fn slot_count_valid(slot_count: usize) bool;
+/// Whether a cache takes this cap on its TTLs: 1 second to seven days (RFC 8767 §4).
+pub fn ttl_seconds_max_valid(ttl_seconds_max: u32) bool;
+/// The least key index `slot_count` slots take: `keys_per_slot_min` a slot, at a power of two.
+pub fn keys_for(slot_count: usize) usize;
 ```
 
 - The key is the folded name, the type, and whether the name was absolute, which is what a
@@ -2198,7 +2309,8 @@ entry in place.
 
 What it says:
 
-- **The cache earns its keep.** At the 1024 slots the engine takes by default, 2.9 MiB of the
+- **The cache earns its keep.** At 1024 slots, the size `engine_cache_slots_default` names (§19,
+  New limits) and the engine took by default until 2026-10-11, 2.9 MiB of the
   caller's memory answers 55% of the questions without a packet. That is the answer §17
   question 9 assumed and no measurement had given. It was 52.2% before question 14.
 - **Each fourfold step buys less.** From 256 slots to 1024 buys 6.9 points, to 4096 another
@@ -2250,7 +2362,7 @@ What it says:
 - **The policy is not what moves the hit rate on this trace.** With expired entries renewed in
   place, SIEVE and both readings of S3-FIFO are within 0.4 points of each other at every size.
 - **The expiry rule is.** Renewed in place, SIEVE gains 4.1 points at 64 slots, 4.6 at 256 and
-  3.0 at the default 1024, and loses 1.0 at 4096. The reading, which no measurement isolated:
+  3.0 at 1024, and loses 1.0 at 4096. The reading, which no measurement isolated:
   evicting on the get and putting the name back as new is a promotion given on a miss, which
   SIEVE exists not to give. A tail name asked once more after it expired goes to the newest
   end, the place farthest from the hand.
@@ -2271,7 +2383,7 @@ in expiry order, which is all the rule needs. It measures **61.07% hits, with at
 entries live at once.**
 
 - **SIEVE cannot beat it on hit rate, and does not.** A rule that never evicts a live entry is
-  the ceiling for a given trace and TTLs. The cache is 5.8 points under it at the default 1024
+  the ceiling for a given trace and TTLs. The cache is 5.8 points under it at 1024
   slots, 2.0 at 4096 and 0.4 at 16384.
 - **16384 slots, almost twice what c-ares ever holds, still fall 0.4 short.** The reading, which
   no measurement isolated: the hand takes the first unvisited or expired entry it meets, so it
@@ -2317,8 +2429,8 @@ Beside it, two policies that might do better:
 
 What it says:
 
-- **There is room at the sizes that matter.** The optimal is 5.7 points over the cache at the
-  default 1024 slots, 8.7 at 256 and 7.1 at 64. At 4096 it already reaches the ceiling, c-ares's
+- **There is room at the sizes that matter.** The optimal is 5.7 points over the cache at
+  1024 slots, 8.7 at 256 and 7.1 at 64. At 4096 it already reaches the ceiling, c-ares's
   61.07%, with fewer than half the entries c-ares holds; the cache is 2.0 under it there.
 - **The optimal wins by two moves.** It turns away a newcomer that is needed later than what it
   holds, and it drops first a name whose next request comes after it expires. An online policy
@@ -2358,7 +2470,7 @@ nothing until it is asked again.
 What it says:
 
 - **Neither form beats the cache.** The best, reuse with admission and 16 drawn, is 0.19 points
-  over it at the default 1024 slots and 0.67 under it at 16384.
+  over it at 1024 slots and 0.67 under it at 16384.
 - **Counting every ask is the worse estimate.** A name brought in by one ask reads as asked once a
   sample, and a sample is ten times the cache size in asks: 6.4 seconds of the trace at 64 slots.
   A one-hour TTL multiplies that into a worth above a popular name's with a one-minute TTL.
@@ -2383,7 +2495,7 @@ Two clients are set aside as stuck in a loop, by a rule `bench/log_replay.zig` s
 a hundred thousand questions, nine in ten of them for one name. One asks `samba.local.local`
 6,779,414 times in the day, a fifth of the log; the other asks `belbi.bg.ac.rs` for 94.4% of its
 107,123. Every policy hits such a name nearly every time, so they would pad every table as though
-they were a workload: before they were set aside, the default size read 75.04% over every client
+they were a workload: before they were set aside, 1024 slots read 75.04% over every client
 where it reads 68.94% without them. 27,992,378 questions remain, in time order throughout; the
 whole log has 638,748 names and 35,987 clients.
 
@@ -2442,8 +2554,8 @@ live, TTLs by hash, and 78.01% with at most 33,116, TTLs by rank.
 
 What it says:
 
-- **Where cocuyo is deployed, SIEVE is close to the best there is.** A cache a client, at the
-  default 1024 slots, is 2.0 points under the optimal with TTLs by hash and a quarter of a point
+- **Where cocuyo is deployed, SIEVE is close to the best there is.** A cache a client, at
+  1024 slots, is 2.0 points under the optimal with TTLs by hash and a quarter of a point
   with TTLs by rank. Past 4096 slots nothing is left to win. S3-FIFO gains 0.5 points at 1024
   and 2.1 at 64; W-TinyLFU nothing.
 - **At a resolver's scale S3-FIFO earns its place.** Every client through one cache, it leads
@@ -2457,7 +2569,7 @@ What it says:
 - **The control holds.** The SIEVE model is within 0.04 points of the cache in every row.
 
 So the cache keeps SIEVE: in one process on one host, which is what cocuyo is, the most any
-policy could add at the default size is two points, and S3-FIFO's lead is a resolver's. This is
+policy could add at 1024 slots is two points, and S3-FIFO's lead is a resolver's. This is
 one log, from one ISP over one day, with TTLs it did not carry; a second log could say otherwise.
 The busiest clients are weighed by what they ask.
 
@@ -2472,6 +2584,54 @@ octets an entry at two entries a slot, rounded up to a power of two. A thousand 
 index allow at `cache_slots_max`, cost 46.6 MiB and 256 KiB. The caller chooses, and an address-only cache pays
 for the buffer too, as §9 says of the lookup.
 
+### Sizing the memory
+
+Written on 2026-10-11, with §16 decision 37. A cache's memory is two things: `slots.len` slots,
+from 1 to `cache_slots_max`, and a key index whose length is a power of two at least
+`cache_keys_per_slot_min` times `slots.len`. `Cache.init` asserts both, and the engine's `init`
+and `reinit` assert them of the memory they are handed (§19 step 13). Until that day a caller
+worked the key index's length out by hand, and the engine did it in a function of its own that
+no caller could reach. The `cache` module now says it once, for both:
+
+- `keys_for(slot_count)` is the least key index a slot count takes: 2 for 1 slot, 4 for 2, 8 for
+  3, 2048 for 1024 and 32768 for 16384. A longer index of a power of two is taken too, and buys
+  shorter probes for 8 octets an entry.
+- `slot_count_valid(slot_count)` says whether a cache takes that many slots. It refuses 0 and
+  16385.
+- `ttl_seconds_max_valid(ttl_seconds_max)` says whether a cache takes that cap. It refuses 0 and
+  604,801: a cap is 1 second to seven days, `cache_ttl_seconds_max`, the cap RFC 8767 §4
+  recommends. A cap read from a configuration file is input, as a slot count is.
+- `Storage(slot_count)` declares both arrays for a count known when the caller compiles, and
+  `slices()` hands them over. `Storage(0)` and `Storage(16385)` do not compile, and the error
+  names the bounds. No step of the gate holds that, since a test cannot fail to compile: both
+  were compiled by hand on 2026-10-11.
+- `Slices` is the pair as `Cache.init` takes it, and `valid()` says what `Cache.init` asserts of
+  it.
+
+A caller whose count is known when it compiles writes two lines:
+
+```zig
+var cache_memory: cocuyo.cache.Storage(1024) = undefined;
+var store = cocuyo.Cache.init(&cache_memory.slots, &cache_memory.keys, seed, config.cache_ttl_seconds_max);
+```
+
+A caller that reads the count at run time, from a configuration file, checks it and then gets
+the memory however it gets memory. cocuyo allocates none of it (CLAUDE.md non-negotiable 2):
+
+```zig
+if (!cocuyo.cache.slot_count_valid(slot_count)) return error.CacheSlotsOutOfRange;
+const slots = try allocator.alloc(cocuyo.cache.Slot, slot_count);
+const keys = try allocator.alloc(cocuyo.cache.Key, cocuyo.cache.keys_for(slot_count));
+const cache_memory: cocuyo.cache.Slices = .{ .slots = slots, .keys = keys };
+```
+
+A count outside the bounds, or a key index of the wrong shape, is the caller's programmer error
+and stops the program at `Cache.init`, as a broken `Config` stops it at `assert_valid` (CLAUDE.md
+non-negotiable 3). The number in a configuration file is input, so the caller refuses a bad one
+with `slot_count_valid` before it reaches the assertion: the check and the assertion are two
+claims about one bound (non-negotiable 6). The memory needs no value before `Cache.init`, which
+writes every slot and every key, so `undefined` is enough.
+
 ### Limits
 
 | Constant | Value | Why |
@@ -2479,7 +2639,8 @@ for the buffer too, as §9 says of the lookup.
 | `cache_slots_max` | 16384 | a `u16` chain index with room for the sentinels, and a table nobody has asked for more of |
 | `cache_keys_per_slot_min` | 2 | the load factor that keeps a bounded probe short |
 | `cache_probe_max` | 16 | the longest chain a `get` walks before calling it a miss |
-| `cache_ttl_seconds_max_default` | 3600 | c-ares's default cap, so a consumer replacing it sees the same ceiling |
+| `cache_ttl_seconds_max_default` | 3600 | c-ares's default cap, so a consumer replacing it sees the same ceiling; since 2026-10-11 `core`'s constant of that name, which is also the default of `Config.cache_ttl_seconds_max` (§12) |
+| `cache_ttl_seconds_max` | 604800 | the most a cap may be: seven days, the cap RFC 8767 §4 recommends; `core`'s constant, since `Config` and the cache both hold a cap to it (2026-10-11) |
 | `cache_sweep_steps_max` | twice the slots | one pass clears every bit, the next must find one |
 
 ### Checks
@@ -2538,7 +2699,7 @@ Four places, in order of preference, so the core stays what §1 made it:
 | device binding by name | none | out: rotor opens the sockets and names no device | — |
 | the event thread, `sock_state_cb`, `ares_process_fd`, the socket callbacks | `Resolver`, driven by the caller | the engine over rotor, in the caller's loop and on no thread of its own (§16 decision 27) | 13 |
 | `ares_cancel`, the active count, wait-empty, `ares_reinit`, `ares_set_servers` | `Lookup.cancel` | engine | 13 |
-| the query cache | §18 | the engine wires it in | 13 |
+| the query cache, `ARES_OPT_QUERY_CACHE` and its `qcache_max_ttl` | §18 | the engine builds it over memory the caller hands `init` and `reinit`, or runs with none; the cap is `Config.cache_ttl_seconds_max` (2026-10-11) | 13 |
 | `ares_getaddrinfo`: `A` and `AAAA` together, the canonical name, numeric host and service, the hosts file, `V4MAPPED`, `ALL` | two lookups | `resolver`, as `AddressLookup` above the table | 14 |
 | `ares_gethostbyaddr`, `ares_getnameinfo` | a `PTR` lookup | `NameLookup` in `resolver`; service names are out | 14 |
 | RFC 6724 ordering, off with `ARES_AI_NOSORT` | none; `sortlist` was rejected in §16 | `core.address_order`, over routes the consumer learned; `no_sort` skips it | 15 |
@@ -3089,14 +3250,15 @@ scripted servers. The TCP path, port rotation, `reinit` and `cancel_all` follow.
 pub const Engine = struct {
     pub const Options = struct {
         lookups: u16 = engine_lookups_default,
-        cache_slots: u16 = engine_cache_slots_default,
+        // No `cache_slots` since 2026-10-11: the cache's memory is the caller's (decision 37).
         tag: u16 = engine_tag_default,          // the high bits of every user_data the engine submits
         udp_queries_per_port: u32 = udp_queries_per_port_default,
         tcp_idle_ns: u64 = tcp_idle_ns_default,
     };
     pub fn memory_bytes(options: Options) usize;
+    /// `cache_memory` is the cache's slots and key index, or null for an engine with no cache.
     pub fn init(self: *Engine, memory: []align(alignment) u8, loop: *rotor.Loop, config: *const Config,
-        hosts: ?*const Hosts, seed: u64, now_ns: u64, options: Options) Error!void;
+        hosts: ?*const Hosts, cache_memory: ?cache.Slices, seed: u64, now_ns: u64, options: Options) Error!void;
     pub fn deinit(self: *Engine) void;
 
     pub fn start(self: *Engine, question: Question, now_ns: u64) error{Full}!Handle;
@@ -3112,8 +3274,9 @@ pub const Engine = struct {
     /// are valid until the next call.
     pub fn take(self: *Engine, now_ns: u64) ?Result;
     /// New configuration: the cache is flushed, the sockets rebound, and the latency samples and
-    /// the marks of servers that lowercase the name forgotten, which is `ares_reinit`.
-    pub fn reinit(self: *Engine, config: *const Config, seed: u64, now_ns: u64) Error!void;
+    /// the marks of servers that lowercase the name forgotten, which is `ares_reinit`. The cache
+    /// is built again over `cache_memory`: the same memory, other memory, or none.
+    pub fn reinit(self: *Engine, config: *const Config, cache_memory: ?cache.Slices, seed: u64, now_ns: u64) Error!void;
 };
 
 pub const Result = struct {
@@ -3135,7 +3298,9 @@ pub const Result = struct {
   a callback per lookup, which is a function pointer and a context the consumer has to keep
   alive, where the consumer already loops on `tick`.
 - **The cache.** `start` and `address_info` ask it first; a hit is a result on the next `take`,
-  and a lookup that ends puts its answer, or its negative answer with the TTL of §18.
+  and a lookup that ends puts its answer, or its negative answer with the TTL of §18. Since
+  2026-10-11 that holds for an engine handed memory for a cache, and an engine handed none asks
+  its servers every time (The cache's memory, below).
 - **Threads.** One engine per loop, and one loop per thread (rotor decision 4). Work from other
   threads arrives through rotor's `post`, which is the consumer's to arrange.
 - **The deterministic twin first.** rotor's decision 10 has a backend be a module carrying its
@@ -3149,6 +3314,71 @@ pub const Result = struct {
 TCP path, timeouts, cookies and failover, with the invariants checked after every event and the
 trace byte-identical on replay; and one live test against real servers, opt in, because the
 gate must not need the network.
+
+**The cache's memory, ruled on 2026-10-11** (§16 decision 37). Until then the engine held its
+cache's slots and key index inside itself, sized by `Options.cache_slots` when the engine's type
+was built. So the size could not come from a number read at run time, an engine could not run
+without a cache, and the cap on a TTL was the constant of an hour. These rules replace that:
+
+1. `init` and `reinit` each take `cache_memory`, a `?cocuyo.cache.Slices`: the slots and the key
+   index as `Cache.init` takes them (§18, Sizing the memory), or null. It sits after the
+   configuration and before the seed. `Options.cache_slots` is gone, and the engine holds no
+   cache array.
+2. Handed memory, the engine builds a `Cache` over it, keyed by the seed of that call and capped
+   at that call's `config.cache_ttl_seconds_max`, and puts it under the table as a `Memory`
+   (§20). `Cache.init` writes every slot and every key, so the memory needs no value first and
+   the cache starts empty.
+3. Handed null, the engine has no cache. The table is given no `Memory`, every lookup goes to
+   its servers, and no answer is kept.
+4. `reinit` takes the memory again, as it takes the configuration and the seed again. The same
+   memory gives an empty cache keyed by the new seed, which is what `reinit` did before. Other
+   memory, of any valid size, gives a cache over it, and the engine never touches the old memory
+   again. Null turns the cache off, and memory after null turns it on.
+5. The memory is the caller's, and must stay valid and unmoved from the call that hands it over
+   until the engine's `close` returns, or until a `reinit` that hands over other memory or null
+   returns, whatever that `reinit` returns. Between those two, any call on the engine may read
+   or write it. No result points into it: a hit is copied into the lookup's slot (§20), so a
+   result outlives the memory it was read from. An `init` that fails leaves no engine, and the
+   memory is the caller's again at once. A `reinit` that fails is not like it. The engine is
+   still there, and it has taken what that call handed it: `reinit` builds the table and the
+   cache before it opens the sockets, so when they fail to open or to arm (`SocketFailed`,
+   `ReceiveFailed`) the engine holds the new configuration, the new seed and a cache over the
+   new memory, or none when it was handed null, and the memory it held before is the caller's.
+   The memory a failed `reinit` was handed stays the engine's until a later `reinit` or `close`
+   returns. A caller that got memory for that call does not free it on the error, as an
+   `errdefer` would: it hands it to the next `reinit`, or shuts the engine first.
+6. Each engine has memory of its own. Two engines are never handed the same slices, as they
+   share nothing else (§24, a thread per core). Nothing checks it: the engine sees two slices
+   and cannot know who else holds them.
+7. Slices `Cache.init` would refuse are the caller's programmer error, and `init` and `reinit`
+   assert `cache_memory.valid()` before they change anything. A caller that reads the slot count
+   at run time refuses a bad number itself with `cocuyo.cache.slot_count_valid`, before it gets
+   the memory.
+8. The cap is `Config.cache_ttl_seconds_max`, an hour by default, read at `init` and at each
+   `reinit` and never between. `assert_valid` requires it to be at least 1.
+
+This is c-ares's `ARES_OPT_QUERY_CACHE`. `ares_init_options(3)`, read on 2026-10-11 from c-ares
+1.34.8's installed page, gives the option one field, `qcache_max_ttl`, "the maximum number of
+seconds a query result may be cached", which overrides a larger TTL in the response. The page
+says the cache is on by default with a TTL of an hour since c-ares 1.31.0, that a value of zero
+turns it off, and that a change to the server configuration flushes it. It names no size, since
+c-ares's cache has no bound on its entries (§18), and no line of `resolv.conf`, so the parser
+of §10 does not set the cap. cocuyo differs in two ways. The cache is off unless the caller
+hands the engine memory, because the engine has none of its own to turn on. And a cap of zero is
+refused: handing no memory is the one way to turn the cache off, and a cap of zero over memory
+would be a second way that still holds the memory.
+
+`engine_cache_slots_default`, 1,024, stays a named number and no longer a default the engine
+takes. It is the size the README and the engine's examples hand an engine, and the size §18's
+measurements are quoted at: 2.9 MiB, and 49% to 60% of a real log's questions answered with no
+packet. A caller with no measurement of its own starts from it. Removing it was the other choice.
+It would have left the README and five examples each writing 1,024 on their own, and §18 calling
+a number the default that no code names.
+
+Neither model changes. The Lean models are of one lookup and of the `getaddrinfo` walks, and
+hold no cache. The TLA+ model of the engine leaves the cache out (spec/README.md), and its walks
+ask a new name at every start, so no cache answers one. The replay's engine is handed two slots
+of memory, the size it had as an option.
 
 ### Step 14: the `getaddrinfo` shape
 
@@ -3343,7 +3573,7 @@ cache hits).
 | `udp_queries_per_port_default` | 0 | c-ares's default: never replace the socket |
 | `tcp_idle_ns_default` | 10 s | chosen, not measured: a burst's worth, and short by RFC 7766 §6.2.3's standard |
 | `engine_lookups_default` | 256 | in flight at once; the caller sizes the memory |
-| `engine_cache_slots_default` | 1024 | 2.9 MiB of slots, the cost §18 measures |
+| `engine_cache_slots_default` | 1024 | 2.9 MiB of slots, the cost §18 measures; since 2026-10-11 the size the README and the engine's examples hand an engine, and no default the engine takes, since it holds no cache memory of its own (step 13, the cache's memory) |
 | `address_lookup_addresses_max` | 32 | both families' `addresses_max`, bounded the way one answer is; `truncated` past it |
 | `address_policy_rows` | 9 | RFC 6724 §2.1's default table |
 | `common_prefix_bits_v6_max` | 64 | RFC 6724 §2.2 stops at the source's prefix, and RFC 4291 §2.5.1 makes the interface identifier the low 64 bits |
@@ -3441,6 +3671,14 @@ a `Failure` to what may be kept: `NameNotFound` and `NoData` with the TTL the SO
 (RFC 2308 §5), and nothing else — not a timeout, not a refusal, not a malformed answer.
 `io/` then drops its own copy of that policy and passes a `Memory` like any other caller.
 
+**A table without a cache, since 2026-10-11.** The engine built its table and its cache in one
+function, so that no path built one without the other. One path does now, by the caller's
+choice (§19 step 13, the cache's memory; §16 decision 37): an engine handed no memory for a
+cache gives its table no `Memory`. Every lookup that table starts, the composed ones included,
+goes to its servers, and nothing is remembered. That is the table a caller of the library has
+had all along when it calls no `remember_with`. An engine handed memory builds both in that one
+function still.
+
 **A recalled answer carries the chain's end.** The cache is keyed by the question, and until
 §17 question 13 was answered it stored the answers and not the chain that reached them, so an
 answer that came through a CNAME lost its canonical name once remembered. The slot now keeps the
@@ -3516,6 +3754,8 @@ and nothing else, and `Started` goes away.
   a relative name whose first candidate is NXDOMAIN with no SOA and whose second answers is
   written once, with a TTL of zero (since 2026-10-08, c4milo/cocuyo#38).
 - A lookup seeded from the cache does not write back what it was handed.
+- An engine handed memory answers a repeated question from its cache and sends nothing, and an
+  engine handed none sends the question again (since 2026-10-11).
 - `zig build consumer-check` builds the dependent fixture, and the fixture that imports `sim`
   fails to build.
 - `zig build readme-check`, since 2026-09-26, builds every Zig block of the README in a package
@@ -4028,7 +4268,8 @@ The engine was written for a loop it does not own:
 - `loop_operations` says how many operations the loop must hold for it, so the caller sizes the
   loop's `Options` for every component it runs.
 - Nothing in it is global but chapulin's thread-local stream, and nothing allocates (CLAUDE.md
-  non-negotiable 2).
+  non-negotiable 2). The engine is a value its caller declares, and since 2026-10-11 its cache's
+  memory is a second one (the cache's memory, below).
 
 So a consumer that ticks its loop hands each event to the engine's `apply` first, and to its own
 handlers when `apply` says the event is not the engine's.
@@ -4498,6 +4739,8 @@ An image runs one loop on each core and one engine on each loop. Nothing crosses
 
 - Each engine has its own table, cache, connections, tickets and seeds. The seeds come from a
   CSPRNG, one set for each engine: two engines with one seed would draw the same transaction ids.
+  Since 2026-10-11 the caller hands each engine its cache's memory (the cache's memory, below),
+  and no two engines are handed the same.
 - A `Config` is read and never written, so every engine may hold a pointer to one.
 - A name one core resolved is a miss on another, and each core opens its own connection to
   each encrypted server. An image of `n` cores holds up to `n` times `servers_max` of them. A
@@ -4898,6 +5141,40 @@ identity of cocuyo's own (`io/testdata/`), the owner's ruling of 2026-09-28: a C
 test files or moves its clock to fit them. The interop check runs
 dnsproxy on the loopback over HTTP/3, and over HTTP/2 with no UDP listener. The live check runs
 against Google and Cloudflare.
+
+### The cache's memory, written on 2026-10-11
+
+§19 step 13 has the rules, and §16 decision 37 the ruling. This is what a consumer of
+`cocuyo_rotor` writes. With a size it knows when it compiles, the size the README recommends:
+
+```zig
+const cocuyo = @import("cocuyo");
+const dns = @import("cocuyo_rotor");
+
+const Resolver = dns.Resolver(.{});
+var resolver: Resolver = undefined;
+var cache_memory: cocuyo.cache.Storage(dns.constants.cache_slots_default) = undefined;
+
+try resolver.init(&loop, &config, cache_memory.slices(), seed, now_ns);
+```
+
+With a slot count its own configuration file gave it, it checks the count with
+`cocuyo.cache.slot_count_valid`, gets `slot_count` slots and `cocuyo.cache.keys_for(slot_count)`
+keys from wherever it gets memory, and hands them over as `.{ .slots = slots, .keys = keys }`
+(§18, Sizing the memory). With no cache, it hands over `null`. The cap on a TTL is the
+configuration's: `config.cache_ttl_seconds_max`, which the consumer may set from the same file.
+
+`reinit` takes the memory as `init` does, so a consumer whose configuration changed may hand
+over a cache of another size, or none, with the new servers. A consumer that hands over other
+memory may free the old once that `reinit` returns, whatever it returns. The memory it handed
+over is the engine's from then on, when that `reinit` fails too: the consumer keeps it for the
+next `reinit`, or until `close` (§19 step 13, rule 5).
+
+The engine and its cache's memory are two values now, and each must stay where it is: the loop
+and the table hold pointers into the engine, and the engine's cache holds the two slices. An
+engine on each core has a `Storage` on each core. `test/consumer/embed.zig` hands its resolver a
+`Storage` of two slots, so `zig build consumer-check` shows the types a consumer names are ones
+it can reach, and `examples/threads_rotor.zig` gives each of its two engines one of its own.
 
 ### New limits
 

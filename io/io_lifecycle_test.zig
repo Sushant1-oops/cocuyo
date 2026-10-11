@@ -52,7 +52,7 @@ test "reinit cancels what is in flight, empties the cache, and asks the new serv
 
     var servers = [_]cocuyo.Server{.{ .endpoint = endpoint_of(rotor.Network.server_address(1)) }};
     const replacement: cocuyo.Config = .{ .servers = &servers, .search = &.{} };
-    try rig.engine.reinit(&replacement, 22, rig.loop.now());
+    try rig.engine.reinit(&replacement, rig.cache_memory.slices(), 22, rig.loop.now());
     // The cache went with the servers that filled it, so the name is asked about again.
     _ = try rig.engine.start(question("example.com."), rig.loop.now());
     // Nothing is waiting to be taken, so the cache did not answer it: it goes to a server.

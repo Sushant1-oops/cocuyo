@@ -1,5 +1,4 @@
 //! What the cache's tests build on: a table of a few slots, questions and answers.
-const std = @import("std");
 const core = @import("core");
 const wire = @import("wire");
 const cache = @import("cache.zig");
@@ -13,10 +12,9 @@ pub const seed: u64 = 1;
 /// A table of `slot_count` slots and the smallest key index the load factor allows: a power of
 /// two at least `keys_per_slot_min` entries a slot.
 pub fn Fixture(comptime slot_count: usize) type {
-    const key_count = std.math.ceilPowerOfTwoAssert(usize, slot_count * constants.keys_per_slot_min);
     return struct {
         slots: [slot_count]cache.Slot = undefined,
-        keys: [key_count]cache.Key = undefined,
+        keys: [cache.keys_for(slot_count)]cache.Key = undefined,
 
         pub fn init(self: *@This()) cache.Cache {
             return cache.Cache.init(&self.slots, &self.keys, seed, constants.ttl_seconds_max_default);

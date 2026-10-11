@@ -1,11 +1,15 @@
 //! The limits of the I/O engine (docs/design.md §19 step 13): what one engine holds beside the
-//! lookups and the cache its options size.
+//! lookups its options size and the cache its caller hands it the memory of.
 const core = @import("cocuyo").core;
 
 /// The lookups an engine holds in flight, when the caller says nothing.
 pub const lookups_default = 256;
 
-/// The cache's slots, when the caller says nothing: a thousand, which §18 measures at 2.9 MiB.
+/// The slots of the cache a caller with no number of its own hands an engine: a thousand, which
+/// §18 measures at 2.9 MiB, and at 49% to 60% of a real log's questions answered with no packet.
+/// The README and the examples declare this many. It is no default the engine takes: an engine
+/// holds no cache memory, and has the cache it is handed the memory of, or none (docs/design.md
+/// §19 step 13, the cache's memory; §16 decision 37).
 pub const cache_slots_default = 1024;
 
 /// The high sixteen bits of every `user_data` the engine submits, so a caller sharing the loop
@@ -172,5 +176,8 @@ comptime {
     }
     if (buffer_bytes < core.constants.udp_payload_bytes_default + 192) {
         @compileError("a group buffer cannot hold the payload cocuyo advertises after rotor's prefix");
+    }
+    if (!@import("cocuyo").cache.slot_count_valid(cache_slots_default)) {
+        @compileError("the cache size the README and the examples declare is one no cache takes");
     }
 }

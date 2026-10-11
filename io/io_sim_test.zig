@@ -11,7 +11,6 @@ const fixtures = @import("fixtures.zig");
 
 const options: io.Options = .{
     .lookups = fixtures.lookups,
-    .cache_slots = fixtures.cache_slots,
     .group_buffers = fixtures.group_buffers,
 };
 const Resolver = io.Resolver(options);
@@ -35,14 +34,19 @@ pub fn tick_for(loop: *rotor.Loop, events: []rotor.Event, wait_ns: u64) !u32 {
     return 0;
 }
 
-/// Two scripted servers and an engine of type `EngineType` over them.
+/// Two scripted servers and an engine of type `EngineType` over them, with the memory of a
+/// cache as large as the engine's table of lookups, which is the cache every rig's engine held
+/// while its options sized both.
 pub fn RigOf(comptime EngineType: type) type {
     return struct {
         const RigType = @This();
         const loop_options: rotor.Loop.Options = .{ .operations = EngineType.loop_operations };
+        /// The engine's lookups, read from the table's slots it declares.
+        pub const cache_slots = @typeInfo(@FieldType(EngineType, "slots")).array.len;
 
         loop: rotor.Loop = undefined,
         memory: [0]u8 align(rotor.memory_alignment) = undefined,
+        cache_memory: cocuyo.cache.Storage(cache_slots) = .{},
         servers: [fixtures.servers]cocuyo.Server = .{
             .{ .endpoint = endpoint_of(rotor.Network.server_address(0)) },
             .{ .endpoint = endpoint_of(rotor.Network.server_address(1)) },
@@ -52,6 +56,18 @@ pub fn RigOf(comptime EngineType: type) type {
         events: [fixtures.events_max]rotor.Event = undefined,
 
         pub fn init(rig: *RigType, seed: u64, scripts: [fixtures.servers]rotor.server.Script, config: cocuyo.Config) !void {
+            try rig.init_with(seed, scripts, config, rig.cache_memory.slices());
+        }
+
+        /// As `init`, with the cache memory the test names: the rig's whole, part of it, or
+        /// none, which is an engine with no cache (docs/design.md §19 step 13).
+        pub fn init_with(
+            rig: *RigType,
+            seed: u64,
+            scripts: [fixtures.servers]rotor.server.Script,
+            config: cocuyo.Config,
+            cache_memory: ?cocuyo.cache.Slices,
+        ) !void {
             try rig.loop.init(&rig.memory, loop_options);
             rig.loop.seed(seed);
             rig.loop.network().scripts[0] = scripts[0];
@@ -59,7 +75,7 @@ pub fn RigOf(comptime EngineType: type) type {
             rig.loop.network().server_count = fixtures.servers;
             rig.config = config;
             rig.config.servers = &rig.servers;
-            try rig.engine.init(&rig.loop, &rig.config, seed, rig.loop.now());
+            try rig.engine.init(&rig.loop, &rig.config, cache_memory, seed, rig.loop.now());
         }
 
         /// A rig whose engine holds `config`, which other engines may hold too: a `Config` is read
@@ -70,7 +86,7 @@ pub fn RigOf(comptime EngineType: type) type {
             rig.loop.network().scripts[0] = scripts[0];
             rig.loop.network().scripts[1] = scripts[1];
             rig.loop.network().server_count = fixtures.servers;
-            try rig.engine.init(&rig.loop, config, seed, rig.loop.now());
+            try rig.engine.init(&rig.loop, config, rig.cache_memory.slices(), seed, rig.loop.now());
         }
 
         pub fn deinit(rig: *RigType) !void {
@@ -355,7 +371,7 @@ test "a send that fails at the socket costs no timeout: the next server is asked
     try rig.deinit();
 }
 
-const Small = io.Resolver(.{ .lookups = fixtures.small_lookups, .cache_slots = fixtures.small_lookups, .group_buffers = fixtures.small_group_buffers });
+const Small = io.Resolver(.{ .lookups = fixtures.small_lookups, .group_buffers = fixtures.small_group_buffers });
 
 test "the receive is armed again after the group runs dry, and every answer still arrives" {
     var loop: rotor.Loop = undefined;
@@ -367,7 +383,8 @@ test "the receive is armed again after the group runs dry, and every answer stil
     const servers = [_]cocuyo.Server{.{ .endpoint = endpoint_of(rotor.Network.server_address(0)) }};
     const config: cocuyo.Config = .{ .servers = &servers };
     var engine: Small = undefined;
-    try engine.init(&loop, &config, 8, loop.now());
+    var cache_memory: cocuyo.cache.Storage(fixtures.small_lookups) = .{};
+    try engine.init(&loop, &config, cache_memory.slices(), 8, loop.now());
     var buffer: [fixtures.name_text_bytes]u8 = undefined;
     var started: usize = 0;
     while (started < fixtures.small_lookups) : (started += 1) {
