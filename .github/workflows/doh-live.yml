@@ -1,7 +1,7 @@
 # DoH, live (docs/design.md §24 steps 5 and 7b), once a day and on demand: `tools/doh_live/run.sh`
 # resolves through two public resolvers, through colibri's channel (`cocuyo_doh`) with chapulin's
 # TLS in colibri's `tls`, resumes a ticket over a second connection, and refuses what HTTPS
-# refuses. It runs on macOS, whose system root store the check reads each resolver's root from,
+# refuses. It runs on macOS, whose system root store the check reads each resolver's roots from,
 # against colibri at the commit build.zig.zon pins (build/doh.zig).
 #
 # It is not a gate, because it depends on two public resolvers and the network. A failure here can

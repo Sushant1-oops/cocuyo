@@ -5,9 +5,10 @@
 //!     zig build example-dot-rotor -- \
 //!         <name>[,<name>...] <server address> <authentication name | pin-sha256:<pin>,...> <root certificate>...
 //!
-//! for instance `dns.google 8.8.8.8 dns.google gts-root-r1.der`. Each root is a DER certificate
-//! the server's chain is expected to end at; its subject Name and its SubjectPublicKeyInfo are the
-//! trust anchor chapulin checks the chain against, and the name is what the leaf must carry. A
+//! for instance `dns.google 8.8.8.8 dns.google gts-root-r1.der gts-root-r4.der`: Google shows a
+//! chain under either root, by the frontend a connection reaches. Each root is a DER certificate a
+//! chain of the server's is expected to end at; its subject Name and its SubjectPublicKeyInfo are
+//! the trust anchor chapulin checks the chain against, and the name is what the leaf must carry. A
 //! server known by its key alone takes pins in place of the name, and no root. A server on a port
 //! other than 853 (RFC 7858 §3.1) is named with it, as `127.0.0.1:8853` or `[::1]:8853`
 //! (`examples/server_text.zig`).

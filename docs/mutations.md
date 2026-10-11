@@ -1129,10 +1129,32 @@ R1 alone, so strict mode refused a WE2 frontend, as it must. Both now trust the 
 report the chain a server shows beside any failure. Every frontend reached from here shows WR2,
 so GR2 is the mutation this machine can see, and GR1 is the one CI saw.
 
+2026-10-11, a correction to the paragraph above. WE2 is issued by GTS Root R4. GlobalSign ECC
+Root CA - R4 issued neither chain, so the change of 2026-10-01 left a WE2 frontend refused: CI's
+DoT check in 1 scheduled run of 11 since then and its DoH check in 4 of 11. Each of those five
+logs prints the WE2 chain under GTS Root R4 beside the failure. The three failed runs before
+2026-10-01 print no chain, because the checks printed none until that day. That those three met
+a WE2 frontend is inferred from the five later logs: no log shows it. Both checks now hand in
+GTS Root R1 and GTS Root R4 (design §21 step 6).
+
+The change is to the two scripts and to no check of the Zig code, so the table gains no row.
+Its two rows now name the roots the checks hand in, and what was seen:
+
+- GR1 credited the three runs before 2026-10-01. It now credits the five later ones. Each
+  handed in GTS Root R1 and GlobalSign ECC Root CA - R4. No certificate of the WE2 chain names
+  that second root as its issuer, so for that chain each run was a run with GTS Root R1 alone.
+  chapulin's walk over a WE2 chain captured from a Google frontend agrees: it ends in
+  `unknown_ca` with those two roots, and with GTS Root R1 alone. A copy of each script with GTS
+  Root R1 alone passed here, where every frontend that answers DNS shows WR2.
+- GR2 named GlobalSign ECC Root CA - R4 alone, a root the checks no longer hand in. It now
+  names GTS Root R4 alone. A copy of each script with that one change, run here, failed both of
+  its lookups through Google with `AllServersFailed`, printed the WR2 chain beside the first,
+  and exited 2.
+
 | # | Mutation | Check it breaks | Caught by | Status |
 | --- | --- | --- | --- | --- |
-| GR1 | Google is trusted with GTS Root R1 alone | a WE2 frontend is answered | CI's DoT runs of 2026-09-27 and 09-30 and DoH run of 09-28, each refused | CAUGHT |
-| GR2 | Google is trusted with GlobalSign ECC Root CA - R4 alone | a WR2 frontend is answered | the DoT example here, refused with `AllServersFailed` | CAUGHT |
+| GR1 | Google is trusted with GTS Root R1 alone | a WE2 frontend is answered | CI's DoH runs of 2026-10-04, 10-06, 10-08 and 10-10 and DoT run of 10-05, each refused with the WE2 chain printed | CAUGHT |
+| GR2 | Google is trusted with GTS Root R4 alone | a WR2 frontend is answered | a copy of each live check here, which fails through Google with the WR2 chain printed | CAUGHT |
 
 ## chapulin's staging bound
 

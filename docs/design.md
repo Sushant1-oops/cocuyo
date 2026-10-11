@@ -4074,14 +4074,10 @@ the engine's send and held buffers, per slot.
    (c4milo/cocuyo#30). On 2026-09-27 it moved onto colibri's `tls.record.Client`, and the
    `chapulin` dependency went from cocuyo (§16 decision 32).
 6. A live check against the public resolvers that serve DoT: `dns.google`, `cloudflare-dns.com`
-   and `dns.quad9.net`. `tools/dot_live/run.sh` runs it, on macOS, with each resolver's root from
+   and `dns.quad9.net`. `tools/dot_live/run.sh` runs it, on macOS, with each resolver's roots from
    the system store. On 2026-09-24, with chapulin at `5f8e824`, all three resolved `example.com`:
    `dns.google` over an RSA chain ending at GTS Root R1, the other two over ECDSA chains ending at
-   SSL.com's ECC root and DigiCert Global Root G3. Google also holds certificates for `dns.google`
-   from WE2, under GlobalSign ECC Root CA - R4, and which chain a connection is shown depends on
-   the frontend it reaches: with GTS Root R1 alone, two runs in nine were refused, as strict mode
-   must refuse them, so the check trusts both roots since 2026-10-01. A name the certificate does
-   not carry, and a
+   SSL.com's ECC root and DigiCert Global Root G3. A name the certificate does not carry, and a
    root the chain does not end at, each failed the lookup, with no query sent in the clear. Only
    IPv4 was tried: the machine had no IPv6 route. Resumption was tried live the same day, with
    chapulin at `0cc5355`: the example resolves a second name once the first connection has closed
@@ -4104,7 +4100,22 @@ the engine's send and held buffers, per slot.
    2026-09-27 it passed over colibri's `tls.record.Client` at colibri `a6a4791` (§16 decision
    32): all three resolvers resolved and resumed, read AAAA, MX, TXT and HTTPS records, and refused
    a name the certificate does not carry and a root the chain does not end at, and Cloudflare, known
-   by its leaf key alone, resolved and resumed as well.
+   by its leaf key alone, resolved and resumed as well. Google shows one of two chains for
+   `dns.google`, by the frontend a connection reaches: the leaf issued by WR2, and WR2 by GTS
+   Root R1, or the leaf issued by WE2, and WE2 by GTS Root R4. With GTS Root R1 alone, two runs
+   in nine were refused through Google. Their logs print no chain, so that they met WE2 is
+   inferred from the later ones. On 2026-10-01 the check added GlobalSign ECC Root CA - R4,
+   which issued neither chain, so a WE2 frontend stayed refused, as strict mode must refuse it:
+   one scheduled run of eleven, and four of eleven of the DoH check, each log with the WE2 chain
+   printed beside the failure. Since 2026-10-11 the check hands in GTS Root R1 and GTS Root R4,
+   and says which chain a run met. Each chain carries a third certificate, its root's name and
+   key signed by GlobalSign Root CA, which chapulin's walk does not read once an anchor has
+   verified the second. That day every connection to 8.8.8.8 from here was shown the WR2 chain,
+   in ten runs of the check in a row. The WE2 chain was captured from a Google web frontend that
+   shows it for `dns.google` and answers no DNS. chapulin's walk verified it with the two roots,
+   and refused it with the roots of 2026-10-01. The DoT and DoH examples completed their
+   handshakes with that frontend with the two roots, and ended them during the handshake with
+   the roots of 2026-10-01.
 
 Checks, one for each piece:
 
@@ -5412,9 +5423,11 @@ value that means no session (docs/mutations.md QS1 to QS3).
    that resumed with the first one's ticket, and a template whose host the certificate does not
    carry and a root the chain does not end at each ended in `AllServersFailed`
    (`tools/doh_live/run.sh`, and the `doh-live` workflow once a day). On 2026-09-27 it passed
-   again over colibri's `tls.quic.Client` at colibri `a6a4791` (decision 32). Since 2026-10-01 it
-   trusts both of the roots Google's chains for `dns.google` end at, as the DoT check does (§21
-   step 6): with GTS Root R1 alone, one run in seven was refused.
+   again over colibri's `tls.quic.Client` at colibri `a6a4791` (decision 32). With GTS Root R1
+   alone, one run in seven was refused through Google. With the root added on 2026-10-01, which
+   issued neither of Google's chains, four scheduled runs of eleven were. Since 2026-10-11 it
+   hands in GTS Root R1 and GTS Root R4, the roots Google's two chains for `dns.google` end at,
+   as the DoT check does (§21 step 6).
 6. Two engines on two threads of one image, each on its own loop, resolving at once. Done
    2026-09-25. On the twin, two threads with one `Config` resolve the same names at once, and
    each takes every answer from its own servers. Over rotor, the two engines each took four of

@@ -17,7 +17,8 @@
 # must end in AllServersFailed, a refusal: one that ends in Timeout was not answered at all, which
 # is the network and not the certificate check (§16 decision 25). Each resolver is also asked
 # AAAA, MX, TXT and HTTPS at once, of a name that has each, and must answer each with records of
-# that type.
+# that type. Google, which shows one of two chains, is asked one name with each of its roots
+# alone, and the run says which chain it met.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -26,30 +27,28 @@ out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
 store=/System/Library/Keychains/SystemRootCertificates.keychain
 
-# A root from the system store, by its common name, as DER.
+# A root from the system store, by its common name, as DER. A name the store does not hold stops
+# the check here, by that name.
 root_der() {
-    security find-certificate -a -c "$1" -p "$store" | openssl x509 -outform DER -out "$out/$2.der"
-}
-# A root from the system store, as DER, by a common name several roots share and the unit name in
-# its subject that tells it from the others.
-root_der_unit() {
     security find-certificate -a -c "$1" -p "$store" |
-        awk -v dir="$out" '/BEGIN CERTIFICATE/ { n++ } { print > (dir "/candidate-" n ".pem") }'
-    for candidate in "$out"/candidate-*.pem; do
-        if openssl x509 -in "$candidate" -noout -subject | grep -q "$2"; then
-            openssl x509 -in "$candidate" -outform DER -out "$out/$3.der"
-        fi
-    done
-    rm -f "$out"/candidate-*.pem
-    test -s "$out/$3.der"
+        openssl x509 -outform DER -out "$out/$2.der" ||
+        { echo "NO ROOT named $1 in $store" >&2; exit 1; }
 }
-# Google holds certificates for dns.google from two issuers: WR2, issued by GTS Root R1, and WE2,
-# which Google's repository serves issued by GlobalSign ECC Root CA - R4, a root of Google's own.
-# Certificate Transparency held 21 of each on 2026-10-01, and which one a connection is shown
-# depends on the frontend it reaches. With GTS Root R1 alone, a run that reached a WE2 frontend was
-# refused, as HTTPS must refuse it: one run in seven until then, and two DoT runs in nine.
-root_der "GTS Root R1" google
-root_der_unit GlobalSign "GlobalSign ECC Root CA - R4" google-ecc-r4
+# Google shows one of two chains for dns.google, by the frontend a connection reaches, each of three
+# certificates, the leaf's key P-256 in both:
+#   - dns.google, issued by WR2 (RSA 2048), which GTS Root R1 (RSA 4096) issued;
+#   - dns.google, issued by WE2 (ECDSA P-256), which GTS Root R4 (ECDSA P-384) issued.
+# The third certificate is the root's own name and key signed by GlobalSign Root CA (RSA 2048, with
+# SHA-256), a cross-certificate that expires on 2028-01-28. chapulin looks for each certificate's
+# issuer among its anchors before it reads the next certificate, so with the two GTS roots its
+# walk ends at WR2 or WE2 and never reads the third: both chains verify, and will with the
+# cross-certificate gone. GlobalSign Root CA alone verifies both too, but only while Google sends
+# that certificate.
+# Until 2026-10-11 the check handed in GTS Root R1 and GlobalSign ECC Root CA - R4, which issued
+# neither chain, so a run that reached a WE2 frontend was refused, as HTTPS must refuse it:
+# 4 scheduled runs of 11 since 2026-10-01, and 1 of 11 of the DoT check.
+root_der "GTS Root R1" gts-root-r1
+root_der "GTS Root R4" gts-root-r4
 root_der "SSL.com Root Certification Authority ECC" cloudflare
 root_der "ISRG Root X1" unrelated
 
@@ -94,7 +93,7 @@ reads_types() {
 }
 
 failures=0
-for resolver in "8.8.8.8 https://dns.google/dns-query{?dns} google google-ecc-r4" \
+for resolver in "8.8.8.8 https://dns.google/dns-query{?dns} gts-root-r1 gts-root-r4" \
     "1.1.1.1 https://cloudflare-dns.com/dns-query{?dns} cloudflare"; do
     # An address, a template, and the roots its host's chains end at.
     set -- $resolver
@@ -122,18 +121,39 @@ for resolver in "8.8.8.8 https://dns.google/dns-query{?dns} google google-ecc-r4
     reads_types "$2" "$1" "$2" $roots
 done
 
+# Which of its two chains Google showed this run, which a run that passes would not say otherwise:
+# one name is asked with each root alone, and the root that answers alone is the one the chain
+# ended at. It is a report and fails nothing, since two connections may reach two frontends.
+ends_at() {
+    address=$1 template=$2
+    shift 2
+    ended=
+    for each in "$@"; do
+        if lookup_names example.com "$address" "$template" "$out/$each.der" >/dev/null; then
+            ended="$ended${ended:+ and }$each"
+        fi
+    done
+    echo "$template showed a chain that ends at ${ended:-neither root alone}"
+}
+ends_at 8.8.8.8 "https://dns.google/dns-query{?dns}" gts-root-r1 gts-root-r4
+
+# A lookup that must be refused: an address, a template, and the roots handed in.
 refuse() {
-    if answer=$(lookup "$@"); then
-        echo "RESOLVED what HTTPS refuses: $*" >&2
+    address=$1 template=$2
+    shift 2
+    with=
+    for each in "$@"; do with="$with${with:+ and }$(basename "$each")"; done
+    if answer=$(lookup "$address" "$template" "$@"); then
+        echo "RESOLVED what HTTPS refuses: $template at $address with $with" >&2
         failures=$((failures + 1))
     elif echo "$answer" | grep -q "^example.com: AllServersFailed$"; then
-        echo "refuses $2 with $(basename "$3")"
+        echo "refuses $template with $with"
     else
-        echo "DID NOT SEE a refusal of $2 with $(basename "$3"): $answer" >&2
+        echo "DID NOT SEE a refusal of $template with $with: $answer" >&2
         failures=$((failures + 1))
     fi
 }
-refuse 8.8.8.8 "https://dns.example/dns-query{?dns}" "$out/google.der"
+refuse 8.8.8.8 "https://dns.example/dns-query{?dns}" "$out/gts-root-r1.der" "$out/gts-root-r4.der"
 refuse 8.8.8.8 "https://dns.google/dns-query{?dns}" "$out/unrelated.der"
 
 exit "$failures"
