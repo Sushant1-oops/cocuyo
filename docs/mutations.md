@@ -4493,3 +4493,135 @@ nothing a test can see.
 | CZ28 | `readme-check` prints the nested build's output at the margin, as it did | the nested build's output is quoted, set in from the margin | the quotation test of `readme_check.zig`, `test-tools` | CAUGHT |
 | CZ29 | a cache takes a cap of zero | §18, a cap of 1 second to `cache_ttl_seconds_max` | the cap test of `cache_ttl_test.zig`, `test-cache` | CAUGHT |
 | CZ30 | a cache takes a cap past seven days | §18, a cap of 1 second to `cache_ttl_seconds_max`, the cap RFC 8767 §4 recommends | the cap test of `cache_ttl_test.zig`, `test-cache` | CAUGHT |
+
+## cocuyo_quic's session with no default
+
+2026-10-11. The owner ruled that `cocuyo_quic.Options.Session` has no default and must be set
+(design §16 decision 38). Until then it defaulted to `Plain`, the wrapper of the plain session
+of `io/io_quic_plain.zig`, since 8b9fa5b of 2026-09-25, in v0.2.0 to v0.5.0. The gate runs
+colibri's QUIC over that session (decision 29), which encrypts nothing and authenticates
+nobody. A consumer that left the option unset ran it, and the build never said so. What the
+run did depended on who answered (design §24, the session a connection names):
+
+- A server that speaks DoQ opened nothing in the session's packets: "Initial packets apply the
+  packet protection process" (RFC 9001 §5.2), and the session's apply none. No handshake
+  ended, no query left, and every lookup failed. The run said so.
+- A peer that sends the session's made-up messages completed the handshake on `doq`. Such a
+  peer is cocuyo's own test server, or an attacker who answers in the server's place. Each
+  query went to it in the clear and its answers were taken, and the run said nothing.
+
+`SECURITY.md` lists `cocuyo_quic` in scope. The session's own faults, two sums and a message
+taken twice, were fixed in 1765131 (Sums at the most their operands reach, above). This change
+is about the default alone.
+
+`Options.Session` is now a field with no default value. A consumer that names no session does
+not compile: the compiler stops where the options are written, with `missing struct field:
+Session`. `plain`, `Plain` and `server` stay exported under the names they had, for tests.
+Their comments, design §24 and the README say that they encrypt nothing, authenticate nobody,
+and are never for a network. The change breaks `cocuyo_quic`'s public API, as the owner asked,
+and changes nothing else of it.
+
+The design changed first: §24 (the request interface, colibri under the request interface, the
+session a connection names, the checks, and step 4), §16 decision 38, with the two alternatives
+it beat, and §17 question 34. No model changed. The Lean models are of one lookup and of the
+`getaddrinfo` walks. The engine's TLA+ model takes a request connection's handshake as it ends
+or fails and never says which type runs it, and the replay drives the twin's `sim.quic`: a
+search of `spec/` and `tools/spec_replay/` for `cocuyo_quic` finds nothing.
+`zig build spec-lean` and the replays of `zig build test` agree.
+
+Two users in the tree relied on the default, and each now writes its session:
+
+- The module's own tests, in `io/io_quic.zig`, write `.Session = Plain`.
+- The engine's tests over colibri on the twin, in `io/io_quic_test.zig`, write
+  `.Session = cocuyo_quic.Plain`.
+
+`examples/doq_rotor.zig` named chapulin's session already. Nothing else names a connection of
+`cocuyo_quic`: a search of `bench/`, `test/consumer/`, `tools/`, the other examples and the
+README's blocks finds none. `zig build examples`, `consumer-check`, `readme-check`,
+`bench-cares` and `test-cares` each ran after the change and passed. `zig build examples`
+installs four examples and not the DoQ one, which `zig build test` builds.
+
+The check is the no-default test of `io/io_quic.zig`. It reads the fields of `Options` when it
+compiles, and requires two things of `Session`: that it carries no default value, and that its
+type is `type`. Three mutations break it:
+
+- QS1 puts the default back, as the line stood before the ruling.
+- QS2 makes the field a `?type` that defaults to null, and has a connection that reads null run
+  the plain session. That is the old default by another spelling.
+- QS3 makes the field a `?type` with no default, and has a connection that reads null run the
+  plain session. A consumer must then write the field, and `.Session = null` gets it no
+  protection.
+
+Each was broken by hand against `zig build test-cocuyo_quic`, to read what fails: QS1 and QS2
+at the test's first expectation, QS3 at its second, eight of the module's nine tests passing
+each time. Then `zig build mutations -- engine` ran the three, after running the step once with
+nothing mutated, and caught each. Three new mutations, three `CAUGHT`.
+
+That a consumer which names no session does not compile is the compiler's rule, and no check
+of cocuyo's, so it has no row: the tool reads a compile error of this tree's own as a mutation
+whose text no longer applies. It was shown by hand, twice. With `.Session = Plain` taken out of
+the module's tests, `zig build test-cocuyo_quic` stops where `Pair` writes its options, in
+`io/io_quic.zig`, with `error: missing struct field: Session`. With
+`.Session = cocuyo_quic.Plain` taken out of the engine's tests, `zig build test-io` stops where
+`io/io_quic_test.zig` writes its options, with the same words.
+
+Rows of the engine's set ran again by the tool, since the two rigs now name their session and
+the comments of `io/io_quic_plain.zig`, `io/io_quic_server.zig` and the README changed, each
+`CAUGHT` as before:
+
+- The five older rows that `test-cocuyo_quic` catches: TR4, QO12, QO13, QO17 and QO18.
+- The twenty-two that `test-io` catches: ET12, ET13, SQ3, SQ4, CE4, CE18, CE20, CE21, QO8 to
+  QO11, CZ15 to CZ23 and CZ26.
+- CZ24, which `readme-check` catches.
+
+The other 109 rows of the engine's set did not run again, since no file their edits touch
+changed:
+
+- The fifty-four the short walks catch and the twenty-two the picked walks catch. The replay
+  names no `cocuyo_quic`.
+- The twenty-eight that `test-cocuyo_doh` catches, DC1 to DC28.
+- The three that `test-sim` catches, QO14 to QO16.
+- The two that `spec-engine` catches, RF5 and FR13.
+
+A review the same day found the first account of the old default wrong. It said the handshake
+ended and the answers came, whoever answered. That holds against a peer that sends the plain
+session's messages, and not against a server that speaks DoQ. The two cases at the head of this
+section, decision 38 and design §24 now say so. Both are read from the code and the RFCs, and
+the gate's tests run the second against the test server. The first was then run by hand, with
+two tests written for the run and taken out after it:
+
+- One, in `io/io_quic.zig`, printed the first datagram of the module's test client. It is
+  1,200 octets. Its first octet is 0xc0, a long header's with no header protection over it,
+  and its CRYPTO frame carries the made-up hello and its `doq` as they are.
+- The other, in `io/io_doh_channel_quic_test.zig`, handed that datagram to colibri's server
+  over chapulin's QUIC, the one `cocuyo_doh`'s tests answer with. The server owed it nothing,
+  then or ten seconds on. Handed the first datagram of a client over chapulin's QUIC, from the
+  same address, the same server owed 48 octets at once.
+
+That server selects `h3` and not `doq`, which it never came to read. No public resolver was
+sent the datagram. No peer was written to play the attacker: the test server sends the
+messages one would.
+
+The review asked how a consumer reaches the session it must name, since the build registers no
+module for it. The README and design §24 now say what the module is made of, and design §17
+question 34 asks the owner whether the build should register one. No check of the gate builds
+such a consumer, since `test/consumer/` binds no colibri, so a package outside the tree was
+built by hand. It depends on cocuyo by path, and on colibri and rotor at the pins of
+`build.zig.zon`. Its build binds `cocuyo_quic`'s `quic` import to colibri's, and makes the
+session's module from `cocuyo.path("io/io_chapulin_quic.zig")` with the imports `build/doq.zig`
+gives it. What it showed:
+
+- With the two lines design §24 gives, it built, and its program started a lookup whose first
+  datagram, 1,200 octets, reached a socket on the loopback.
+- With `.Session` left out of the same options, it stopped where its program writes them, with
+  `error: missing struct field: Session`.
+
+The review's changes touched two files that rows edit, so those rows ran again by the tool,
+each `CAUGHT` as before: QS1 to QS3, for the comments of `io/io_quic.zig`, and CZ24, for the
+README. TR4, QO12, QO13, QO17 and QO18 ran with them.
+
+| # | Mutation | Check it breaks | Caught by | Status |
+| --- | --- | --- | --- | --- |
+| QS1 | `Options.Session` defaults to `Plain`, as before the ruling | design §16 decision 38, the options carry no default session | the no-default test, at its first expectation, `test-cocuyo_quic` | CAUGHT |
+| QS2 | `Options.Session` is a `?type` that defaults to null, and a connection with none runs the plain session | decision 38, no default under any spelling | the no-default test, at its first expectation, `test-cocuyo_quic` | CAUGHT |
+| QS3 | `Options.Session` is a `?type` with no default, and a connection handed null runs the plain session | decision 38, the options hold no value that means no session | the no-default test, at its second expectation, `test-cocuyo_quic` | CAUGHT |

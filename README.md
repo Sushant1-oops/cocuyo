@@ -157,8 +157,9 @@ failover and cache stay as they are over UDP; what changes is the connection a q
   [chapulin](https://github.com/c4milo/chapulin)'s TLS 1.3, through
   [colibri](https://github.com/c4milo/colibri)'s `tls` module, as a session behind an interface of
   cocuyo's.
-- **DNS over QUIC** (RFC 9250) goes over colibri's QUIC, in the module `cocuyo_quic`, with
-  chapulin's QUIC mode, through colibri's `tls`, as its TLS.
+- **DNS over QUIC** (RFC 9250) goes over colibri's QUIC, in the module `cocuyo_quic`, with the
+  TLS session your build names (below). This repository's example and its daily checks name
+  chapulin's QUIC mode, through colibri's `tls`.
 - **DNS over HTTPS** (RFC 8484) goes through colibri's HTTP client, in the module `cocuyo_doh`,
   which tries HTTP/3 over QUIC first, and HTTP/2 or HTTP/1.1 over TCP when QUIC is not answered in
   time. A DoH server is named by its URI template.
@@ -169,6 +170,16 @@ failover and cache stay as they are over UDP; what changes is the connection a q
   `cocuyo_quic`, whose `quic` import a consumer that speaks DoQ binds to colibri's; and HTTPS
   through `cocuyo_doh`, whose `client` and `tls` imports a consumer that speaks DoH binds to
   colibri's.
+- `cocuyo_quic` takes its TLS as a type, in `Options.Session`, and the option has no default: a
+  consumer that names no session does not compile. The session to name is the one over chapulin,
+  `Session` of `io/io_chapulin_quic.zig`, as `examples/doq_rotor.zig` does. The package ships
+  that file and registers no module for it, so your build makes one, as `build/doq.zig` does. Its
+  root is `cocuyo.path("io/io_chapulin_quic.zig")`, it links libc, and it imports `cocuyo`,
+  `cocuyo_quic` and `chapulin_hooks`, which are cocuyo's modules, and `quic` and `tls`, which
+  are colibri's.
+- `cocuyo_quic` also exports `plain`, `Plain` and `server`, for tests: a session, the same
+  session behind the option's interface, and a DoQ server over it. They encrypt nothing,
+  authenticate nobody, and are never for a network.
 
 They are checked every day against public resolvers: Google, Cloudflare and Quad9 over TLS,
 AdGuard and NextDNS over QUIC, Google and Cloudflare over HTTPS. Each resolves twice,

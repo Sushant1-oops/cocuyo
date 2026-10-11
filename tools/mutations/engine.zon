@@ -1239,4 +1239,33 @@
         },
         .caught_by = .{ .step = "test-io" },
     },
+    .{
+        .section = "cocuyo_quic's session with no default",
+        .id = "QS1",
+        .what = "the options default to the plain session, as before the ruling",
+        .edits = .{
+            .{ .file = "io/io_quic.zig", .old = "    Session: type,\n", .new = "    Session: type = Plain,\n" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_quic" },
+    },
+    .{
+        .section = "cocuyo_quic's session with no default",
+        .id = "QS2",
+        .what = "the session is an optional that defaults to null, and a connection with none runs the plain session",
+        .edits = .{
+            .{ .file = "io/io_quic.zig", .old = "    Session: type,\n", .new = "    Session: ?type = null,\n" },
+            .{ .file = "io/io_quic.zig", .old = "        const Session = options.Session;", .new = "        const Session = options.Session orelse Plain;" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_quic" },
+    },
+    .{
+        .section = "cocuyo_quic's session with no default",
+        .id = "QS3",
+        .what = "the session is an optional with no default, and a connection handed null runs the plain session",
+        .edits = .{
+            .{ .file = "io/io_quic.zig", .old = "    Session: type,\n", .new = "    Session: ?type,\n" },
+            .{ .file = "io/io_quic.zig", .old = "        const Session = options.Session;", .new = "        const Session = options.Session orelse Plain;" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_quic" },
+    },
 }

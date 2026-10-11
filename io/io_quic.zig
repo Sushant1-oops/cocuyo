@@ -4,10 +4,12 @@
 //! colibri, so a consumer that speaks no DoQ binds nothing more.
 //!
 //! The type is generic over its TLS: a session that is colibri's TLS provider and packet suite at
-//! once. chapulin's QUIC object is the consumer's; `plain` encrypts nothing and is for tests. What
-//! colibri asks of the type that holds it is in the design: state read rather than events, a
-//! request's bytes kept until the server has them, cancelled streams drained, and the timer read
-//! after each call.
+//! once, which `Options.Session` names. The option has no default, so a consumer that names no
+//! session does not compile (docs/design.md §16 decision 38). chapulin's QUIC session is the
+//! consumer's (`io_chapulin_quic.zig`). `plain`, `Plain` and `server` are for tests: they encrypt
+//! nothing, authenticate nobody, and are never for a network. What colibri asks of the type that
+//! holds it is in the design: state read rather than events, a request's bytes kept until the
+//! server has them, cancelled streams drained, and the timer read after each call.
 const std = @import("std");
 const assert = std.debug.assert;
 const cocuyo = @import("cocuyo");
@@ -15,22 +17,32 @@ const quic = @import("quic");
 const streams_module = @import("io_quic_streams.zig");
 const connection_module = @import("io_quic_connection.zig");
 pub const constants = @import("io_quic_constants.zig");
-/// A TLS session that encrypts nothing, and a DoQ server over it, for tests (`io_quic_plain.zig`,
-/// `io_quic_server.zig`).
+/// A TLS session for tests (`io_quic_plain.zig`). It encrypts nothing and authenticates nobody: a
+/// packet goes as it is, and any peer that sends its made-up messages completes its handshake. It
+/// is never for a network.
 pub const plain = @import("io_quic_plain.zig");
+/// A DoQ server over `plain`, for tests (`io_quic_server.zig`). It encrypts nothing either, takes
+/// any client, and is never for a network.
 pub const server = @import("io_quic_server.zig");
 
 pub const Options = struct {
     /// The TLS: colibri's provider and suite at once, with `start`, `provider`, `suite`,
-    /// `take_ticket`, `lifetime_ns` and `wipe`, and its `Context` and `Ticket`.
-    Session: type = Plain,
+    /// `take_ticket`, `lifetime_ns` and `wipe`, and its `Context` and `Ticket`. It has no default:
+    /// a consumer names the session that encrypts its queries and authenticates its server, as
+    /// "DoQ stubs SHOULD use a Strict usage profile" (RFC 9250 §5.1), and one that names none does
+    /// not compile (docs/design.md §16 decision 38). A test may name `Plain`.
+    Session: type,
     /// The requests one connection holds at once: the engine's `lookups`, one each at most.
     streams: u16,
     /// colibri's receive pool, a multiple of its 1,024-octet blocks.
     receive_bytes: usize = constants.receive_bytes_default,
 };
 
-/// `plain.Session` behind the interface a connection's session has.
+/// `plain.Session` behind the interface a connection's session has, for tests. A connection over it
+/// encrypts nothing and authenticates nobody: whoever reads the path reads each query, and a peer
+/// that answers with the session's made-up messages is taken for the server. A server that speaks
+/// DoQ opens none of its packets, so no handshake with one ends (RFC 9001 §5.2). It is never for a
+/// network, and never a default: a test that wants it writes `.Session = Plain`.
 pub const Plain = struct {
     pub const Context = struct {};
     pub const Ticket = struct {};
@@ -148,7 +160,7 @@ const testing = std.testing;
 /// A client and a server, carried to each other in memory a datagram at a time each way, on a
 /// clock that moves a millisecond a round, until neither has anything to send.
 const Pair = struct {
-    const Client = Connection(.{ .streams = test_streams });
+    const Client = Connection(.{ .Session = Plain, .streams = test_streams });
     const Server = server.Server(test_streams);
     const test_streams = 4;
     const round_ns = 1_000_000;
@@ -262,6 +274,16 @@ test "a cancelled stream keeps its slot until its answer is read, which ends its
         .unopened => false,
     };
     try testing.expect(ended);
+}
+
+test "the options carry no session of their own, so a consumer that names none does not compile" {
+    // A field with no default value must be written wherever the options are (docs/design.md §16
+    // decision 38): until 2026-10-11 the default was `Plain`, and a consumer that left the field
+    // unset ran the session that encrypts nothing and authenticates nobody. A `type` holds no null
+    // either, so no value means no session.
+    const session = comptime std.meta.fieldInfo(Options, .Session);
+    try testing.expectEqual(@as(?*const anyopaque, null), session.default_value_ptr);
+    try testing.expect(session.type == type);
 }
 
 test {

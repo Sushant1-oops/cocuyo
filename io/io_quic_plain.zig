@@ -4,6 +4,11 @@
 //! recovery, with nothing sealed. It is written from colibri's two vtables and RFC 9001, and it is
 //! for tests: a consumer's connection runs chapulin's QUIC object instead.
 //!
+//! It encrypts nothing, authenticates nobody, and is never for a network. Whoever reads the path
+//! reads every packet, whoever writes to it can change one, and any peer that sends the made-up
+//! messages below completes the handshake. No option of `cocuyo_quic` defaults to it
+//! (docs/design.md §16 decision 38): a test names it.
+//!
 //! The handshake's messages are made-up octets at the Initial, Handshake and 1-RTT levels of RFC
 //! 9001 §4, in the order §4.1.5's Figure 5 puts them, each framed as RFC 9846 §4 frames a message:
 //! a type octet, a 24-bit length, the body. The client's hello carries the ALPN it offers and its
@@ -35,7 +40,8 @@ const level_bytes_max = 512;
 /// The protocol a server scripted to select another names, which is not DoQ's.
 pub const other_protocol = "h2";
 
-/// One side of one connection's handshake, and its keys.
+/// One side of one connection's handshake, and its keys, which are flags and no secret: the
+/// session encrypts nothing and authenticates nobody. For tests, and never for a network.
 pub const Session = struct {
     role: Role,
     /// Whether a server selects another protocol than the one offered, for a test.

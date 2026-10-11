@@ -19,7 +19,7 @@ const Resolver = io.Resolver(.{
     .lookups = fixtures.small_lookups,
     .group_buffers = fixtures.group_buffers,
     .tcp_connections = 0,
-    .quic = cocuyo_quic.Connection(.{ .streams = fixtures.small_lookups }),
+    .quic = cocuyo_quic.Connection(.{ .Session = cocuyo_quic.Plain, .streams = fixtures.small_lookups }),
 });
 const Rig = sim_test.RigOf(Resolver);
 

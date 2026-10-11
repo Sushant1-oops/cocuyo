@@ -1938,6 +1938,45 @@ step until `zig build test` passes.
       §17 question 33 and not built.
 
     §4, §18, §19 step 13, §20, §24.
+38. **`cocuyo_quic`'s `Options.Session` has no default, and a consumer names its TLS.** Ruled by
+    the owner on 2026-10-11. The option names the TLS one of the module's connections runs:
+    colibri's provider and its packet suite at once (§24, colibri under the request interface).
+    Since 8b9fa5b, of 2026-09-25, in v0.2.0 to v0.5.0, it defaulted to `Plain`, the wrapper of
+    the plain session of `io/io_quic_plain.zig`, which the gate runs colibri over (decision 29).
+    That session encrypts nothing and authenticates nobody, and a consumer that left the option
+    unset ran it. What came of that depended on who answered (§24, the session a connection
+    names). A server that speaks DoQ opened nothing in the session's packets: "Initial packets
+    apply the packet protection process" (RFC 9001 §5.2), and the session's apply none. So no
+    handshake ended, no query left, and every lookup that server was asked failed. A peer that
+    sends the session's made-up messages completed the handshake on `doq`. Such a peer is
+    cocuyo's own test server, or an attacker who answers in the server's place. Each query
+    then went to it in the clear, and its answers were taken, where "DoQ stubs SHOULD use a
+    Strict usage profile" (RFC 9250 §5.1). Now a consumer that names no session does not
+    compile. That breaks the build of every consumer that relied on the default, as the owner
+    asked. Rejected:
+    - The plain session as the default, which is what was. It saved each of the gate's tests
+      one field. It cost a consumer every protection DoQ is chosen for, and the build never
+      said so. The run said so against a DoQ server, where every lookup failed. Against an
+      attacker it said nothing: the handshake ended, on `doq`, and the attacker's answers came.
+    - A default that refuses at run time: a session whose `start` fails, as the engine's
+      `quic.None` refuses a DoQ configuration at `init`. The mistake then shows when the first
+      connection starts, in whatever process runs it, which is later than the compiler finds
+      it. It also keeps in every such image a connection type that can never be up.
+
+    What the ruling left open, chosen by whoever built it, each the smallest thing found:
+    - `Plain`, `plain` and `server` stay exported under the names they had, since the ruling
+      changes nothing else of the public API, and a consumer's own tests may run the engine
+      over colibri's QUIC with them, as the gate's do. Their comments, §24 and the README say
+      what they are: they encrypt nothing, authenticate nobody, and are never for a network.
+    - The compiler's own words tell the consumer: `missing struct field: Session`. A message of
+      cocuyo's would need the option to be a `?type` that defaults to null, with a
+      `@compileError` where a connection reads it. That is a default again. The check below
+      reads the fields, and a field that defaults to null reads the same there whether a
+      connection then stops the build or runs the plain session.
+    - The check reads the fields of `Options` when it compiles: `Session` carries no default
+      value, and its type is `type`, so the options hold no value that means no session.
+
+    §24.
 
 ## 17. Questions for the owner
 
@@ -2109,6 +2148,21 @@ about.
     `reinit` leave the engine with no cache instead, so that it holds neither the old memory
     nor the new? Recommended: as built. The engine has taken the new configuration by then,
     and a cache that follows the table is one rule, where a cache dropped on one path is two.
+
+### Asked on 2026-10-11, for the session a connection names
+
+§16 decision 38 records the ruling. It left one question that touches the public surface.
+
+34. **A module for the session over chapulin.** `cocuyo_quic` exports no session that protects
+    anything. The one over chapulin is `io/io_chapulin_quic.zig`, which the package ships and
+    no registered module names, so a consumer's build makes the module itself (§24, the session
+    a connection names). A consumer the compiler stops for want of a session finds only `Plain`
+    among the module's exports. Should the build register a module for the session, with its
+    `quic` and `tls` imports left for the consumer to bind, as `cocuyo_doh`'s `client` and
+    `tls` are? Recommended: yes, since it is the session every consumer on a network names.
+    Not built: it adds a name to the public surface, which is the owner's to rule. Until then
+    no check of the gate builds a consumer that makes the module, since `test/consumer/` binds
+    no colibri.
 
 ## 18. The cache
 
@@ -4478,7 +4532,8 @@ Three types fill it:
 
 - `io/io_quic.zig` fills it from colibri's `quic` and `h3`, over chapulin's QUIC session in
   colibri's `tls`. It is built where the build resolves colibri, a lazy dependency (decisions 29
-  and 32), as `io/io_chapulin.zig` is.
+  and 32), as `io/io_chapulin.zig` is. Since 2026-10-11 its session is the one the consumer
+  names, and chapulin's is the one a consumer on a network names (decision 38).
 - The twin fills it with `sim.quic`, whose datagrams carry what happened in one octet and the
   stream it happened on, as `sim.tls`'s records carry a handshake step. The twin's servers script
   it, and the replay drives the model's steps with it one by one.
@@ -4522,7 +4577,9 @@ that holds it:
   `deadline` gives the value `io/io_quic.zig` read after its last call.
 - **ALPN is the engine's to check.** colibri never reads it; the provider says what was negotiated.
 
-So `io/io_quic.zig` is generic over the provider and its suite:
+So `io/io_quic.zig` is generic over the provider and its suite, which its `Options.Session`
+names. Since 2026-10-11 the option has no default (decision 38, and the session a connection
+names, below):
 
 - `io/io_chapulin_quic.zig` puts colibri's `tls.quic.Client`, chapulin's QUIC session, behind
   both vtables (decision 32). It is built where the build resolves colibri, as the DoT session
@@ -4531,7 +4588,8 @@ So `io/io_quic.zig` is generic over the provider and its suite:
   handshake's messages are made-up octets at the Initial, Handshake and 1-RTT levels of RFC 9001
   §4, in the order §4.1.5's Figure 5 puts them. A packet is sealed by appending sixteen octets,
   the length of the tag every QUIC cipher suite adds (RFC 9001 §5.3), which check nothing but the
-  length. It is written from colibri's two vtables and RFC 9001, and it is test-only.
+  length. It is written from colibri's two vtables and RFC 9001, and it is test-only: it
+  authenticates nobody, and it is never for a network.
 
 ### chapulin under colibri, written on 2026-09-25
 
@@ -5176,6 +5234,96 @@ engine on each core has a `Storage` on each core. `test/consumer/embed.zig` hand
 `Storage` of two slots, so `zig build consumer-check` shows the types a consumer names are ones
 it can reach, and `examples/threads_rotor.zig` gives each of its two engines one of its own.
 
+### The session a connection names, written on 2026-10-11
+
+§16 decision 38 has the ruling. `cocuyo_quic.Options` has three fields, and the first names the
+TLS a connection runs:
+
+- `Session`, a type: colibri's provider and its packet suite at once, with `start`, `provider`,
+  `suite`, `take_ticket`, `lifetime_ns` and `wipe`, and its `Context` and `Ticket` (colibri
+  under the request interface, above). It has no default.
+- `streams`, the requests one connection holds at once. It has no default either.
+- `receive_bytes`, colibri's receive pool, `receive_bytes_default` when the consumer names none.
+
+A consumer that names no session does not compile. The compiler stops where the options are
+written, with `missing struct field: Session`. A consumer writes its options as
+`examples/doq_rotor.zig` does, with the session over chapulin of `io/io_chapulin_quic.zig`.
+Here `dns` is `cocuyo_rotor`, where the example has an engine its own build makes:
+
+```zig
+const Quic = cocuyo_quic.Connection(.{ .Session = chapulin.Session, .streams = at_once_max });
+const Resolver = dns.Resolver(.{ .lookups = at_once_max + 1, .tcp_connections = 0, .quic = Quic });
+```
+
+The build registers no module for that session. `build/doq.zig` makes one from the file, which
+the package ships, for the example and for the session's own tests, as `build/dot.zig` does for
+the DoT session. So `cocuyo_quic` by itself exports no session that protects anything, and a
+consumer's build makes the session's module as `build/doq.zig` does:
+
+- Its root is the file, which a dependent names as `cocuyo.path("io/io_chapulin_quic.zig")`,
+  where `cocuyo` is its dependency on this package.
+- It links libc, which chapulin's object needs.
+- It imports `cocuyo`, `cocuyo_quic` and `chapulin_hooks`, three modules this build registers,
+  and `quic` and `tls`, which are colibri's. The `cocuyo_quic` it imports is the one whose
+  `quic` import the consumer bound to the same colibri.
+
+No check of the gate builds a consumer that does, since `test/consumer/` binds no colibri. A
+package outside the tree did on 2026-10-11, built by hand (docs/mutations.md, cocuyo_quic's
+session with no default). Whether the build registers a module for the session is §17
+question 34.
+
+Until the ruling the option defaulted to `cocuyo_quic.Plain`. A consumer that wrote
+`Connection(.{ .streams = at_once_max })` built, and its connections ran the plain session.
+What its lookups did then depended on who answered:
+
+- **A server that speaks DoQ.** No handshake ended, no query left, and every try at the server
+  ran out, as at a server that never answers. "Initial packets apply the packet protection
+  process" (RFC 9001 §5.2), under keys both sides derive from the client's first Destination
+  Connection ID, and a server "proceeds with the handshake" on "an Initial packet fully
+  conforming with the specification" (RFC 9000 §5.2.2). The plain session's Initial carries
+  its header and its made-up hello as they are, then sixteen zero octets where the tag goes.
+  A server finds no protection to remove and reads no hello. A request has a stream only on a
+  connection that is up (request rule 4), so its query never leaves. A configuration's servers
+  are all spoken to one way (§22, §23), so every lookup failed, and the run said so.
+- **A peer that sends the plain session's messages.** The handshake ended on `doq`, each query
+  went to the peer in the clear, and the peer's answers were taken. The messages are in
+  `io/io_quic_plain.zig` for anyone to send, and the session checks none of them against a
+  key. Such a peer is cocuyo's own test server, or an attacker who answers in the server's
+  place. Against the attacker the run said nothing. This is the attack a Strict profile is
+  for: it "mitigates both passive and active attacks" (RFC 8310 §5).
+
+So the default carried no query to a DoQ resolver in the clear: to a resolver it carried none.
+What it cost a consumer under attack is every protection DoQ is chosen for. Both halves are
+read from the code and the RFCs. Of the first, what a server makes of the plain session's first
+datagram was run against one server on 2026-10-11, and of the second, the gate's tests run the
+handshake and a query against the test server (docs/mutations.md, cocuyo_quic's session with
+no default).
+
+`cocuyo_quic` still exports three things for tests, under the names they had:
+
+- `plain`, the session of `io/io_quic_plain.zig`: a provider and a suite for either role.
+- `Plain`, that session behind the interface `Options.Session` asks for, in the client's role.
+- `server`, a DoQ server over colibri and `plain` (`io/io_quic_server.zig`).
+
+This is true of each of the three:
+
+- It encrypts nothing. A packet's payload and its header go as they are, and the sixteen
+  octets after them are read for their count alone.
+- It authenticates nobody. It has no certificate, no name and no pin, and its handshake's
+  messages are made-up octets any peer can send.
+- It is never for a network. A test names it, and carries its datagrams from one side to the
+  other in memory or over the twin.
+
+A test that runs colibri's QUIC without chapulin writes `.Session = cocuyo_quic.Plain`, so the
+choice stands in the test's own text. The module's tests do (`io/io_quic.zig`), and so do the
+engine's over colibri on the twin (`io/io_quic_test.zig`). Nothing else in the tree left the
+option unset: the example names chapulin's session, and the benchmarks, `test/consumer/` and
+the README's blocks name no connection of `cocuyo_quic`.
+
+The check is a test of `io/io_quic.zig` that reads the fields of `Options` when it compiles. It
+requires `Session` to carry no default value and to be a `type`, so that the options hold no
+value that means no session (docs/mutations.md QS1 to QS3).
+
 ### New limits
 
 | Constant | Value | Why |
@@ -5251,7 +5399,9 @@ it can reach, and `examples/threads_rotor.zig` gives each of its two engines one
    2026-09-27 the session moved onto colibri's `tls.quic.Client` at colibri `a6a4791` (decision
    32), and the check passed again: both resolvers resolved and resumed, read AAAA, MX, TXT and
    HTTPS records, and refused what strict mode refuses, and AdGuard, known by its leaf key alone,
-   resolved and resumed as well.
+   resolved and resumed as well. On 2026-10-11 `cocuyo_quic`'s `Options.Session` lost its
+   default, the session that encrypts nothing: a consumer names its session, and the gate's
+   tests name the plain one (decision 38, docs/mutations.md QS1 to QS3).
 5. DoH over HTTP/3, with a live check against Cloudflare and Google. Done 2026-09-25. The engine
    reads a server's template for the port, the name and the path (docs/mutations.md UT1 to UT23),
    and speaks DoH on the twin (DE1 to DE8). `cocuyo_quic` reads a response's `Age` and media type
@@ -5357,6 +5507,7 @@ Checks, one for each piece:
 - A link's socket opens only when its channel asks, and closes when the channel says.
 - A server that selects `http/1.1`, or no protocol, answers over HTTP/1.1.
 - An idle channel shuts down, and a request taken meanwhile opens the next channel.
+- `cocuyo_quic`'s options carry no default session, and no value that means none.
 
 The checks over HTTP/2 and over TCP went on 2026-09-29 with the code they checked. A channel's
 links hold the rules they held over TCP, and `cocuyo_doh`'s tests what they held of HTTP/2.

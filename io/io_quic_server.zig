@@ -3,6 +3,9 @@
 //! server: real packets, streams and flow control on the twin's clock. It takes the client's first
 //! Initial, reads each stream's query once all of it has arrived, and answers it on the same
 //! stream, then FIN (RFC 9250 §4.2), with what an `Answerer` makes of it.
+//!
+//! Its session is `plain`'s, so it encrypts nothing and authenticates nobody: it has no
+//! certificate, and takes any client. It is never for a network.
 const std = @import("std");
 const assert = std.debug.assert;
 const cocuyo = @import("cocuyo");
