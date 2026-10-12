@@ -85,12 +85,14 @@ pub fn Connection(comptime options: Options) type {
         pub const output_bytes_max = quic.constants.datagram_len_min;
         pub const request_bytes_max = cocuyo.constants.query_bytes_max;
         pub const Error = error{Failed};
-        /// What every connection starts from: the session's, and the stream its connection IDs are
-        /// drawn from, which the consumer seeds from a CSPRNG (RFC 9000 §7.2: "an unpredictable
-        /// value"). The default seed is for tests.
+        /// What every connection starts from (docs/design.md §24, the context a session starts
+        /// from): the session's context, and the stream its connection IDs are drawn from, which
+        /// the consumer keys with 32 octets of its CSPRNG, drawn apart from the session's seed
+        /// (RFC 9000 §7.2: "an unpredictable value"). Neither field has a default, so a consumer
+        /// writes both (§16 decision 39).
         pub const Context = struct {
-            session: Session.Context = .{},
-            stream: std.Random.ChaCha = std.Random.ChaCha.init(@splat(0)),
+            session: Session.Context,
+            stream: std.Random.ChaCha,
         };
         pub const Ticket = Session.Ticket;
         pub const Answered = struct { stream: u64, len: usize };
@@ -168,8 +170,15 @@ const Pair = struct {
 
     client: Client = .{},
     server: Server = .{},
-    context: Client.Context = .{},
+    context: Client.Context = test_context(),
     now_ns: u64 = 1,
+
+    /// A connection's context for a test: the plain session's, which holds nothing, and a stream
+    /// of connection IDs seeded with zeros, so each run draws what the last drew. Never for a
+    /// network, whose seed comes from a CSPRNG.
+    fn test_context() Client.Context {
+        return .{ .session = .{}, .stream = std.Random.ChaCha.init(@splat(0)) };
+    }
 
     fn start(pair: *Pair) !void {
         try pair.client.start(.{
@@ -274,6 +283,15 @@ test "a cancelled stream keeps its slot until its answer is read, which ends its
         .unopened => false,
     };
     try testing.expect(ended);
+}
+
+test "a connection's context carries no default, so a consumer writes its session's and its stream" {
+    // Until 2026-10-11 the session's context defaulted to its own defaults and the stream to one
+    // seeded with zeros, and so did the engine's context when no consumer set one (docs/design.md
+    // §16 decision 39).
+    inline for (comptime std.meta.fields(Pair.Client.Context)) |field| {
+        try testing.expectEqual(@as(?*const anyopaque, null), field.default_value_ptr);
+    }
 }
 
 test "the options carry no session of their own, so a consumer that names none does not compile" {

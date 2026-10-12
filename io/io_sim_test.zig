@@ -89,6 +89,15 @@ pub fn RigOf(comptime EngineType: type) type {
             try rig.engine.init(&rig.loop, config, rig.cache_memory.slices(), seed, rig.loop.now());
         }
 
+        /// Hands the engine a test's context for each encrypted transport it speaks over one of
+        /// the twin's types, as a consumer names its own after `init`: the engine has none until
+        /// then (docs/design.md §16 decision 39). The twin's contexts are structs of no fields,
+        /// since its sessions draw nothing, check no certificate and read no clock. A transport
+        /// over any other type, as colibri's QUIC is, is its own test's to name. Test-only.
+        pub fn use_test_contexts(rig: *RigType) void {
+            use_empty_contexts(&rig.engine);
+        }
+
         pub fn deinit(rig: *RigType) !void {
             rig.engine.deinit();
             try rig.loop.drain(&rig.events);
@@ -116,6 +125,21 @@ pub fn RigOf(comptime EngineType: type) type {
             return error.NoResult;
         }
     };
+}
+
+/// Names the empty context of each transport `engine` speaks whose context holds nothing, for
+/// `use_test_contexts`. Test-only.
+fn use_empty_contexts(engine: anytype) void {
+    const Engine = @TypeOf(engine.*);
+    if (comptime carries_nothing(Engine.Tls)) engine.use_tls(.{});
+    if (comptime carries_nothing(Engine.Quic)) engine.use_quic(.{});
+    if (comptime carries_nothing(Engine.Doh)) engine.use_doh(.{});
+}
+
+/// Whether `Transport` is one an engine speaks whose context is a struct of no fields, as each of
+/// the twin's is.
+fn carries_nothing(comptime Transport: type) bool {
+    return Transport.enabled and @typeInfo(Transport.Context).@"struct".fields.len == 0;
 }
 
 pub fn endpoint_of(address: rotor.Address) cocuyo.Endpoint {

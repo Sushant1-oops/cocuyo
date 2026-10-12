@@ -1977,6 +1977,60 @@ step until `zig build test` passes.
       value, and its type is `type`, so the options hold no value that means no session.
 
     §24.
+39. **The engine holds no default context, and a lookup whose transport's context was never set
+    stops it.** Ruled by the owner on 2026-10-11, on a finding of the same day: "No default
+    context. An engine asked to open a DoT, DoQ or DoH session whose context was never set
+    stops with an assertion, since forgetting it is a programmer error. Tests name their test
+    contexts on purpose." A context is what every session of one transport starts from: the
+    anchors, the wall clock, and the stream chapulin and the QUIC connection IDs draw from
+    (§21, the session interface; §24, the context a session starts from). A consumer hands the
+    engine one with `use_tls`, `use_quic` or `use_doh`. Until the ruling `init` set all three
+    to defaults, and nothing checked that a consumer replaced them. A default held values for
+    tests: no anchor, a wall clock of zero, and a stream seeded with zeros for DoQ and DoH and
+    left undefined for DoT. An engine whose consumer skipped the call refused a server known
+    by a name alone, for want of an anchor, and with a server known by pins it ran the
+    handshake over those values.
+    Now the engine holds no context until its consumer sets one, the context types carry no
+    default, and `start` asserts that the transport its configuration speaks has its context.
+    A consumer that skipped a call stops at its first lookup, and one that wrote a context with
+    a field left out does not compile, as the owner asked. Rejected:
+    - The defaults, which is what was. A consumer that skipped a call ran a handshake over
+      values meant for tests, and neither the build nor the run said so.
+    - `init` and `reinit` taking the contexts as arguments. The compiler would hold the rule,
+      where an assertion holds it now. It changes two signatures that this release already
+      changed once, for the cache's memory (decision 37), and a consumer that speaks plain DNS
+      would write three arguments for transports it never uses.
+
+    What the ruling left open, chosen by whoever built it, each the smallest thing found:
+    - The engine holds each context as an optional, null until its `use_` call. A flag beside
+      the value was the other way, and it leaves a value that code can read without asking the
+      flag. One file reads the three, `io/io_context.zig`, and hands a session its context
+      only after asserting there is one.
+    - The assertion is in `start`, the first call that can reach a server, and again where a
+      session takes its context. `init` cannot hold it: a consumer calls `use_` after `init`,
+      as the three examples do, and `init` starts no session.
+    - The predicate the assertion reads is public, `has_context`: whether the transport the
+      engine's configuration speaks has its context, which is always so for plain DNS. The
+      tests call it, and a consumer may before a lookup (§17 question 35).
+    - `init` leaves the engine with no context, where it left the defaults, so a consumer that
+      closes an engine and starts it again names its contexts again. `reinit` keeps the
+      contexts as they are, as it did: it never reset one, and drops only the tickets.
+    - A context handed to the engine again is built from a new draw of its seed, as `reinit`
+      takes a new seed (§19 step 10). The `use_` functions take a context by value, so one
+      built again from the octets of a context before it starts its stream where that one
+      started. The engine cannot see this either, and §24 states it as the consumer's rule.
+    - The engine checks that a context was set, which is the programmer error it can see. It
+      cannot tell a seed drawn from a CSPRNG from any other 32 octets, or a wall clock that is
+      right from one that is not. Those stay the consumer's, and the doc comments and the
+      README say so.
+    - The helpers that build a context for a test are the tests' own, and none is exported:
+      the ruling changes nothing else of the public API.
+    - The contexts of the twin's three types, of `cocuyo_quic.Plain`, and of the three types
+      that refuse a transport are structs of no fields. None carries a default, since none
+      carries a value, and an engine over the twin still has no context until its test names
+      one.
+
+    §21, §24.
 
 ## 17. Questions for the owner
 
@@ -2163,6 +2217,22 @@ about.
     Not built: it adds a name to the public surface, which is the owner's to rule. Until then
     no check of the gate builds a consumer that makes the module, since `test/consumer/` binds
     no colibri.
+
+### Asked on 2026-10-11, for the context a session starts from
+
+§16 decision 39 records the ruling. It left one question that touches the public surface.
+
+35. **`has_context`.** The engine gains one public function, the predicate `start` asserts:
+    whether the transport its configuration speaks has its context. The ruling asked for the
+    assertion and for no other change to the API. A predicate is what lets a test break the
+    rule and see a test fail (CLAUDE.md non-negotiable 10), and it lets a consumer ask before
+    its first lookup, where it could otherwise learn of a missing call only by stopping.
+    Should it be public, and under this name? Recommended: as built. It was built before the
+    owner answered, where question 34 left its name unbuilt, because the tests and the
+    assertion need the predicate either way and only its being public is in question. If the
+    answer is no, the method, the README's sentence and the doc comments' mentions of it go,
+    `start` asserts `held` of `io/io_context.zig`, and the tests ask `held`: the mutation rows
+    stand, since each edits `held` or what it reads.
 
 ## 18. The cache
 
@@ -3837,7 +3907,10 @@ rulings of that day with the facts that led to them. Each piece lands with its c
   CSPRNG at init and expands it with ChaCha20, one stream per engine, which each session hands
   colibri's `start` since colibri#71. A certificate's validity needs the wall clock: the caller gives Unix seconds pinned to
   a `now_ns` at init and at `reinit`, and the engine adds the elapsed `now_ns`. chapulin's own
-  DRBG was the alternative, and it is one stream for every session in the process.
+  DRBG was the alternative, and it is one stream for every session in the process. As built,
+  neither is an argument of `init` or of `reinit`: the caller puts the seed and the clock in
+  the context it hands `use_tls` after `init`, and `reinit` neither reads nor writes a context
+  (the session interface, below; §24, the context a session starts from, rules 4 and 5).
 - chapulin changes first, in three pieces, before DoT lands here:
   1. After the handshake, `ch_read` pulls records through a `recv` callback. A record that
      holds only a session ticket makes it read another, and a `recv` with nothing to give fails
@@ -4013,6 +4086,13 @@ chapulin's session starts from a `Context` the caller hands `Resolver.use_tls`:
   `ch_assert_fail`, and the owner ruled the same day that `chapulin_hooks` drops its
   `ch_rand_bytes`, `enter` and `leave`.
 
+Since 2026-10-11 the engine has no context of its own (§16 decision 39). It holds none until
+`use_tls` has run, and a lookup started against a TLS configuration before that stops the
+program at an assertion, since forgetting the call is a programmer error. The `Context` carries
+no default either. `Context.init` takes all of it: the anchors, the 32-octet seed, and the
+wall clock with the `now_ns` it was read at. §24, the context a session starts from, says what
+a context must carry for each of the three transports, and what the engine checks of it.
+
 The session collects what chapulin makes as soon as chapulin makes it. chapulin says it is
 connected only once the client's last flight has been collected, so a session that left it for
 `take_out` could not tell the engine the handshake had ended.
@@ -4131,6 +4211,8 @@ Checks, one for each piece:
   query goes out on port 53.
 - A lookup whose every handshake failed ends in `AllServersFailed`, and one no server answered
   in `Timeout` (§16 decision 25).
+- An engine over a TLS configuration has no context until `use_tls` names one, and the
+  session's `Context` carries no default (§16 decision 39).
 
 ## 22. DNS over HTTPS, the DNS half
 
@@ -4515,7 +4597,9 @@ colibri's `quic` and `h3` over chapulin's QUIC object, in the engine's words:
 
 - `start` begins a connection to a server, from its `Tls` (the name, the pins), the protocol the
   configuration's kind asks (`doq` for a QUIC server, `h3` for an HTTPS one), a kept ticket, the
-  wall clock and the engine's seeded stream. It makes the first flight.
+  wall clock and the engine's seeded stream. It makes the first flight. The wall clock and the
+  stream are the context's, which the consumer hands `use_quic`, and since 2026-10-11 the engine
+  holds none until it does (the context a session starts from, below).
 - `receive` takes one datagram. What it did is read with `next`, one thing at a time: the
   handshake ended, and on which protocol; the handshake failed; a stream was answered; a stream was
   reset; the connection closed, by the server, an error or the idle timeout; a ticket came. An
@@ -5144,8 +5228,9 @@ Three types fill it:
   The buffer is `message_bytes_max` long whatever `tcp_message_bytes` says: a DoH response's
   content is the message alone, with no prefix (RFC 8484 §6).
   Its context is the DoQ session's: the anchors, the stream chapulin and the QUIC connection IDs
-  draw from, and the wall clock. It keeps a copy of the ticket each link resumes with, which it
-  wipes once the link's connection has ended.
+  draw from, and the wall clock. The consumer hands it to `use_doh`, and since 2026-10-11 the
+  engine holds none until it does (the context a session starts from, below). It keeps a copy
+  of the ticket each link resumes with, which it wipes once the link's connection has ended.
 - The twin fills it with `sim.channel`, which says exactly the steps a test or the replay queues,
   one at each of the engine's reads. While it has one queued it is due at once, so the engine's
   timer brings the read when nothing else does. Its links carry an item of the twin's QUIC that
@@ -5335,6 +5420,116 @@ The check is a test of `io/io_quic.zig` that reads the fields of `Options` when 
 requires `Session` to carry no default value and to be a `type`, so that the options hold no
 value that means no session (docs/mutations.md QS1 to QS3).
 
+### The context a session starts from, written on 2026-10-11
+
+§16 decision 39 has the ruling. A context is the value every session of one encrypted transport
+starts from. The consumer builds it and hands it to the engine once, after `init` and before
+the first lookup:
+
+- **DoT.** `use_tls` takes the `Context` of `Options.tls`. The one of chapulin's session is
+  built by `Context.init`, from the anchors, a 32-octet seed, and the wall clock with the
+  `now_ns` it was read at (§21, the session interface).
+- **DoQ.** `use_quic` takes the `Context` of `Options.quic`. `cocuyo_quic`'s has two fields, and
+  the consumer writes both. `session` is the context of the session its options name, and
+  chapulin's is built as the DoT one is. `stream` is a ChaCha20 stream of a second seed, which
+  the connection IDs are drawn from: "an unpredictable value" (RFC 9000 §7.2).
+- **DoH.** `use_doh` takes the `Context` of `Options.doh`. `cocuyo_doh`'s is built by
+  `Context.init` as the DoT one is. Its one stream serves chapulin, the connection IDs and the
+  grease of the channel's QUIC link.
+
+**What a context carries.** A context that a network may see carries three things, and the
+consumer supplies each, as it supplies the engine's seed and its clock (§3):
+
+- **A stream seeded from the consumer's CSPRNG.** The seed is 32 octets, drawn for this context
+  and for nothing else. chapulin draws the handshake's random and its key shares from the
+  stream, so the seed is never a constant, never the clock, and never the `u64` seed of `init`
+  (CLAUDE.md non-negotiable 4). A context built again takes a new draw (rules 4 and 5). DoQ's
+  context takes two draws, one for the session's stream and one for the connection IDs'.
+- **The anchors, or the pins.** A server known by a name is checked against the context's
+  anchors, 12 roots at most, each a subject Name and a SubjectPublicKeyInfo as DER. A server
+  known by pins alone carries them in its `Tls`, in the configuration, and is checked against
+  no anchor (§21). So a context with no anchors serves a configuration whose every server is
+  known by pins, and under it a server known by a name alone is refused. A DoH server is known
+  by its template's host, so a DoH context needs anchors.
+- **The wall clock.** Unix seconds at a `now_ns` of the consumer's clock, which the context
+  carries forward by the `now_ns` that has passed since. A chain's dates are judged against
+  it. A server known by pins alone reads no clock.
+
+**What the engine holds.** Until 2026-10-11 `init` set the three contexts to defaults: no
+anchor, a wall clock of zero, and a stream seeded with zeros for DoQ and DoH and left undefined
+for DoT. Those were values for tests, and nothing checked that a consumer replaced them. The
+rules now:
+
+1. The engine holds no context for a transport until that transport's `use_` call has run.
+   Each context is an optional, null after `init`. `io/io_context.zig` is the one file that
+   reads them, and a session gets its context from there, after an assertion that one was set.
+2. `has_context` says whether the transport the engine's configuration speaks has its context.
+   A configuration's servers are all spoken to one way (§22, §23), so it reads one context:
+   DoT's for a TLS configuration, DoQ's for a QUIC one, DoH's for an HTTPS one. A configuration
+   of plain DNS needs none, and for it the answer is always yes.
+3. `start` asserts `has_context`. Forgetting the call is a programmer error (CLAUDE.md
+   non-negotiable 3), so the program stops at its first lookup, in every build, since
+   assertions stay on. A lookup is the first call that can reach a server: `init` and `reinit`
+   start no session.
+4. `init` leaves the engine with no context, whatever its memory held. An engine closed and
+   started again is handed its contexts again, each built from a new draw of its seed. The
+   `use_` functions take a context by value, so the consumer's own copy still holds its stream
+   as it was built: handed again, or built again from the same octets, it starts the stream
+   where the first one started, and its handshakes draw what the first one's drew.
+5. `reinit` keeps the contexts. It drops the tickets, which were the old servers', and neither
+   reads nor writes a context, as before the ruling. A kept context's stream goes on from where
+   it was. A consumer whose new configuration speaks another transport sets that transport's
+   context before its next lookup, on either side of the `reinit`. One that wants the wall
+   clock pinned again calls `use_` again, with a context built from a new draw, as rule 4
+   says and as `reinit` itself takes a new seed (§19 step 10).
+6. The context types carry no default. Each of chapulin's two sessions and `cocuyo_doh` builds
+   its context with `init`, every argument written, and `cocuyo_quic`'s is its two fields.
+
+**What the engine cannot check.** It checks that the consumer set a context, which is the
+programmer error it can see. It cannot tell a seed drawn from a CSPRNG from any other 32
+octets, a seed drawn anew from one used before, a wall clock that is right from one that is
+not, or the anchors the consumer meant from others. Those are the consumer's to get right, as
+the `u64` seed of `init` is (§7).
+
+**Contexts that carry nothing.** Seven context types are structs of no fields. Three are the
+twin's (`sim.tls`, `sim.quic` and `sim.channel`), whose sessions draw nothing, check no
+certificate and read no clock. One is `cocuyo_quic.Plain`'s. Three are those of `tls.None`,
+`quic.None` and `channel.None`, which refuse their transport at `init`. None carries a default,
+since none carries a value, and an engine over the twin still has no context until its test
+names one.
+
+**Tests name their contexts.** A test builds its context through a helper whose name says it is
+a test's, and none of the helpers is exported:
+
+- `test_context`, in the tests of the two sessions over chapulin and of `cocuyo_quic`, and in
+  the engine's tests over colibri on the twin. Each seeds its stream with one octet repeated.
+- `identity.test_context`, for `cocuyo_doh`'s tests: the test identity's CA for the anchors and
+  an instant inside its validity for the wall clock (`io/io_doh_channel_identity.zig`).
+- `use_test_contexts`, on the twin's rig (`io/io_sim_test.zig`): it hands an engine the empty
+  context of each of the twin's types it speaks.
+
+A fixture that holds a context holds one of these from where the fixture is built, as its
+field's default. None is left `undefined` for a later statement to fill.
+
+The replay's world hands its engine the twin's context for the transport a walk configures
+(`tools/spec_replay/engine_world.zig`).
+
+**The models.** None holds a context. The engine's TLA+ model starts a handshake and says how
+it ends, and never what it started from, and the Lean models are of one lookup and of the
+`getaddrinfo` walks. No transition of §5 and no rule of §19 steps 13 and 14 changes, so no
+model does.
+
+**The checks.** The engine's are tests on the twin (`io/io_context_test.zig`): for each of the
+three transports the predicate refuses an engine whose context was never set and takes it
+after the `use_` call; a configuration of plain DNS needs none; the context of one transport
+does not count for another; `reinit` keeps each, and a lookup started after it is answered over
+each; and `init` leaves none. Each context type has a test that reads its fields when it
+compiles and requires that none carries a default, as decision 38's check reads
+`Options.Session`. Thirty mutations break the rules, and the tests catch each
+(docs/mutations.md, the context a session starts from, TC1 to TC30). The assertion itself has
+no row, since taking one away changes nothing a test can see: it was shown by hand to stop a
+lookup over each transport.
+
 ### New limits
 
 | Constant | Value | Why |
@@ -5521,6 +5716,9 @@ Checks, one for each piece:
 - A server that selects `http/1.1`, or no protocol, answers over HTTP/1.1.
 - An idle channel shuts down, and a request taken meanwhile opens the next channel.
 - `cocuyo_quic`'s options carry no default session, and no value that means none.
+- An engine has no context for an encrypted transport until its `use_` call, a configuration of
+  plain DNS needs none, `init` leaves none, `reinit` keeps each, and no context type carries a
+  default.
 
 The checks over HTTP/2 and over TCP went on 2026-09-29 with the code they checked. A channel's
 links hold the rules they held over TCP, and `cocuyo_doh`'s tests what they held of HTTP/2.

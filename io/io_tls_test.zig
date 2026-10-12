@@ -32,6 +32,7 @@ fn encrypt(rig: anytype) !void {
 fn start(rig: *Rig, seed: u64, scripts: [fixtures.servers]rotor.server.Script) !void {
     try encrypt(rig);
     try rig.init(seed, scripts, .{ .servers = &.{}, .timeout_ns = fixtures.stream_timeout_ns, .timeout_ns_max = fixtures.stream_timeout_ns, .failover_retry_chance = 0 });
+    rig.use_test_contexts();
 }
 
 test "a lookup over TLS handshakes, then is answered on the stream, and no UDP socket is opened" {
@@ -250,6 +251,7 @@ fn expect_fails_over(seed: u64, at: Failure) !void {
     var rig: FailingRig = .{};
     try encrypt(&rig);
     try rig.init(seed, .{ .{}, .{} }, .{ .servers = &.{}, .timeout_ns = fixtures.stream_timeout_ns, .timeout_ns_max = fixtures.stream_timeout_ns, .failover_retry_chance = 0 });
+    rig.use_test_contexts();
     _ = try rig.engine.start(question("example.com."), rig.loop.now());
     const result = try rig.until_result();
     try testing.expectEqual(@as(usize, 1), result.outcome.answer.addresses.len);

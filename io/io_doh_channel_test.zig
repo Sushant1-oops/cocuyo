@@ -32,7 +32,6 @@ const qr_bit = 0x80;
 const port = 8443;
 const endpoint: cocuyo.Endpoint = .{ .address = cocuyo.Address.from_text("192.0.2.1").?, .port = port };
 const template = .{ .authority = "dns.example:8443", .host = "dns.example", .port = port, .path = "/dns-query{?dns}" };
-const anchors = [_]@TypeOf(identity.anchor){identity.anchor};
 /// A query of a header alone, ID 0, as DoH asks (RFC 8484 §4.1), recursion desired: the server
 /// echoes it, so it need not ask anything.
 const query = [_]u8{ 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
@@ -50,7 +49,9 @@ fn echo(context: *anyopaque, asked: []const u8, out: []u8) ?usize {
 /// The type, colibri's server, and what the type said, on the heap: a channel is over a megabyte.
 const Pair = struct {
     doh: Doh = .{},
-    context: Doh.Context = .{},
+    /// A test's context, built where the pair is, at the pair's first instant: no pair holds one
+    /// that nobody named.
+    context: Doh.Context = identity.test_context(seed_octet, round_ns),
     server: server_module.Server = .{},
     wire: [Doh.output_bytes_max]u8 = undefined,
     said: [said_max]Event = undefined,
@@ -68,7 +69,6 @@ const Pair = struct {
         const pair = try testing.allocator.create(Pair);
         errdefer testing.allocator.destroy(pair);
         pair.* = .{};
-        pair.context = .init(&anchors, @splat(seed_octet), identity.unix_seconds, pair.now_ns);
         try pair.open(script);
         return pair;
     }

@@ -11,16 +11,21 @@ const constants = @import("io_doh_channel_constants.zig");
 const exchange_module = @import("io_doh_channel_exchange.zig");
 const read_module = @import("io_doh_channel_read.zig");
 
-/// What every channel starts from: the roots a named server's chain may end at, the stream chapulin
-/// and the QUIC connection IDs draw from, and the wall clock at an instant of the caller's. The
-/// anchors are the caller's and outlive the engine.
+/// What every channel starts from (docs/design.md §24, the context a session starts from): the
+/// roots a named server's chain may end at, the stream chapulin and the QUIC connection IDs draw
+/// from, and the wall clock at an instant of the caller's. No field has a default, so a context is
+/// built by `init`, with each of them named (§16 decision 39). The anchors are the caller's and
+/// outlive the engine.
 pub const Context = struct {
-    anchors: []const tls.Anchor = &.{},
-    stream: std.Random.ChaCha = std.Random.ChaCha.init(@splat(0)),
-    unix_seconds: u64 = 0,
-    at_ns: u64 = 0,
+    anchors: []const tls.Anchor,
+    stream: std.Random.ChaCha,
+    unix_seconds: u64,
+    at_ns: u64,
 
-    /// `seed` must come from a CSPRNG; `unix_seconds` is the wall clock at the caller's `now_ns`.
+    /// `seed` must be 32 octets of a CSPRNG, drawn for this context alone: chapulin draws each
+    /// handshake's random and its key shares from the stream they key, and the QUIC link its
+    /// connection IDs. `unix_seconds` is the wall clock at the caller's `now_ns`. A DoH server is
+    /// known by its template's host, so `anchors` holds the roots its chain may end at.
     pub fn init(anchors: []const tls.Anchor, seed: [std.Random.ChaCha.secret_seed_length]u8, unix_seconds: u64, now_ns: u64) Context {
         assert(anchors.len <= tls.record.ClientConfig.anchors_max);
         return .{ .anchors = anchors, .stream = std.Random.ChaCha.init(seed), .unix_seconds = unix_seconds, .at_ns = now_ns };
@@ -116,4 +121,17 @@ fn trust_of(server: *const cocuyo.Tls, anchors: []const tls.Anchor, hostname: *[
     const server_name = hostname[0..length];
     if (anchors.len == 0) return .{ .pins = .{ .pins = pins, .server_name = server_name } };
     return .{ .web_pki = .{ .anchors = anchors, .server_name = server_name, .pins = pins } };
+}
+
+// Tests.
+
+const testing = std.testing;
+
+test "the context carries no default, so each of its fields is named where one is built" {
+    // Until 2026-10-11 the fields defaulted to no anchors, a stream seeded with zeros and a wall
+    // clock of zero, and so did the engine's context when no consumer set one (docs/design.md §16
+    // decision 39).
+    inline for (comptime std.meta.fields(Context)) |field| {
+        try testing.expectEqual(@as(?*const anyopaque, null), field.default_value_ptr);
+    }
 }

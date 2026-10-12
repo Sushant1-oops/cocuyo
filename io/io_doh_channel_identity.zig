@@ -2,7 +2,7 @@
 //! colibri's client, the owner's ruling of 2026-09-28): a CA and a leaf for `dns.example`, both on
 //! P-256, valid from 2026-01-01 to 2126-01-01, so a test's clock may sit anywhere in that century.
 //! It was made once with OpenSSL 3.6.4, and is kept in `testdata/`. Its key is a test's, and names
-//! no server anyone runs.
+//! no server anyone runs. `test_context` builds the context a test's channel starts from under it.
 //!
 //!     openssl ecparam -name prime256v1 -genkey -noout -out ca.key
 //!     openssl req -x509 -new -key ca.key -sha256 -not_before 20260101000000Z \
@@ -25,6 +25,7 @@
 //! octets of `openssl ec -in leaf.key -pubout -outform DER`, after the 0x04 that marks it
 //! uncompressed.
 const tls = @import("tls");
+const start_module = @import("io_doh_channel_start.zig");
 
 /// The leaf, then nothing: the server's chain (RFC 9846 §4.5.1).
 pub const chain = [_][]const u8{@embedFile("testdata/identity.leaf.der")};
@@ -42,3 +43,13 @@ pub const server_name = "dns.example";
 
 /// An instant inside the identity's validity, 2026-06-01T00:00:00Z, for a test's wall clock.
 pub const unix_seconds: u64 = 1_780_272_000;
+
+/// The roots a test's context trusts: the identity's CA alone.
+pub const anchors = [_]tls.Anchor{anchor};
+
+/// A channel's context for a test over the identity: its CA for the anchors, `unix_seconds` for the
+/// wall clock at `now_ns`, and a stream seeded with `seed_octet` repeated, so each run draws what
+/// the last drew. Never for a network, whose seed comes from a CSPRNG.
+pub fn test_context(seed_octet: u8, now_ns: u64) start_module.Context {
+    return .init(&anchors, @splat(seed_octet), unix_seconds, now_ns);
+}

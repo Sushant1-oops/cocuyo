@@ -14,6 +14,7 @@ const tcp = @import("io_tcp.zig");
 const queue_module = @import("io_tcp_queue.zig");
 const ring = @import("io_tcp_queue_ring.zig");
 const reset_module = @import("io_reset.zig");
+const context_module = @import("io_context.zig");
 
 /// No TLS: the engine's default. It holds nothing, and `init` refuses a TLS configuration, so
 /// none of its functions is ever called.
@@ -126,7 +127,7 @@ pub fn begin(self: anytype, at: u8, now_ns: u64) void {
         .tls = &server.tls.?,
         .ticket = connection.tls.ticket,
         .ticket_age_ns = now_ns -| connection.tls.ticket_since_ns,
-        .context = &self.tls_context,
+        .context = context_module.of_tls(self),
         .now_ns = now_ns,
     }) catch return tcp.fail(self, at, now_ns);
     _ = make_records(self, at, now_ns);

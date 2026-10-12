@@ -165,6 +165,18 @@ failover and cache stay as they are over UDP; what changes is the connection a q
   time. A DoH server is named by its URI template.
 - Every server is authenticated, strictly (RFC 8310): by the name its certificate must carry, by
   SPKI pins of its key, or by both. A server that cannot be authenticated is not asked.
+- Each encrypted transport starts its sessions from a context you hand the engine: `use_tls` for
+  DoT, `use_quic` for DoQ, `use_doh` for DoH. A context carries a stream seeded with 32 octets
+  from your secure random source, the roots a named server's chain may end at, and the wall
+  clock. DoQ's carries a second stream, for its connection IDs, seeded with a second draw of 32
+  octets. The three examples each build one. The call is required, after `init` and before the
+  first lookup that reaches a server of that transport. The engine has no context of its own:
+  a lookup started against a DoT, DoQ or DoH configuration whose context was never set stops
+  the program at an assertion, in every build. `has_context` says whether the engine has the
+  context its configuration needs. The engine cannot check the seed or the clock you hand it.
+  `reinit` keeps the contexts, and `init` forgets them. A context you hand over again is built
+  from a new draw. No context type has a default, so every field of one is written where it is
+  built.
 - cocuyo's library depends on none of them. The engine speaks TLS through a session interface,
   which this repository fills with chapulin's session in colibri's `tls`; QUIC through
   `cocuyo_quic`, whose `quic` import a consumer that speaks DoQ binds to colibri's; and HTTPS

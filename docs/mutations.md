@@ -4647,3 +4647,217 @@ README. TR4, QO12, QO13, QO17 and QO18 ran with them.
 | QS1 | `Options.Session` defaults to `Plain`, as before the ruling | design §16 decision 38, the options carry no default session | the no-default test, at its first expectation, `test-cocuyo_quic` | CAUGHT |
 | QS2 | `Options.Session` is a `?type` that defaults to null, and a connection with none runs the plain session | decision 38, no default under any spelling | the no-default test, at its first expectation, `test-cocuyo_quic` | CAUGHT |
 | QS3 | `Options.Session` is a `?type` with no default, and a connection handed null runs the plain session | decision 38, the options hold no value that means no session | the no-default test, at its second expectation, `test-cocuyo_quic` | CAUGHT |
+
+## The context a session starts from
+
+2026-10-11. The owner ruled that the engine holds no default context: "No default context. An
+engine asked to open a DoT, DoQ or DoH session whose context was never set stops with an
+assertion, since forgetting it is a programmer error. Tests name their test contexts on
+purpose" (design §16 decision 39). A context is what every session of one encrypted transport
+starts from, and a consumer hands the engine one with `use_tls`, `use_quic` or `use_doh`. Until
+then `init` set all three to defaults, and nothing checked that a consumer replaced them. A
+default held values for tests: no anchor, a wall clock of zero, and a stream seeded with zeros
+for DoQ and DoH and left undefined for DoT.
+
+What the engine does now (design §24, the context a session starts from):
+
+- It holds each context as an optional, null from `init` until its `use_` call.
+  `io/io_context.zig` is the one file that reads the three, and it hands a session its context
+  after an assertion that one was set.
+- `has_context` says whether the transport the engine's configuration speaks has its context.
+  A configuration of plain DNS needs none.
+- `start` asserts `has_context`. A lookup against a DoT, DoQ or DoH configuration whose
+  context was never set stops the program there.
+- The four context types that carried defaults carry none: the DoT session's and the DoQ
+  session's over chapulin, `cocuyo_quic`'s connection's and `cocuyo_doh`'s.
+
+The change breaks the engine's public API, as the owner asked. A consumer that skipped a `use_`
+call stops at its first lookup, and one that wrote a context with a field left out does not
+compile. It adds one name, `has_context` (design §17 question 35), and changes nothing else of
+the API.
+
+The design changed first: §21 (the ruling of 2026-09-23 on the seed and the clock, the session
+interface and the checks), §24 (the request interface, DoH over colibri's client, the context a
+session starts from, and the checks), §16 decision 39 with the two alternatives it beat, and
+§17 question 35. No model changed. The engine's TLA+ model starts a handshake and says how it
+ends, and never what it started from, and the Lean models are of one lookup and of the
+`getaddrinfo` walks: a search of `spec/` for a context, an anchor or a `use_` call finds none.
+`zig build spec-lean` and the replays of `zig build test` agree.
+
+What the calls did before, as read from the code:
+
+- **The order a consumer follows.** `examples/dot_rotor.zig`, `examples/doq_rotor.zig` and
+  `examples/doh_rotor.zig` each call their `use_` function on the line after `init`, before
+  any lookup. So the assertion is in `start`, and `init` holds none.
+- **`init`.** It set the three contexts to their defaults. It now sets them to none, so an
+  engine closed and started again in the same memory is handed its contexts again, each built
+  from a new draw of its seed.
+- **`reinit`.** It reset no context. It drops the tickets of all three transports, which were
+  the old servers', and it neither reads nor writes a context. That stands. A context set
+  before a `reinit` still counts after it, its stream goes on from where it was, and one never
+  set is still missing.
+- **The `use_` functions.** Each takes its context by value and the engine keeps the copy, which
+  its sessions draw from. The consumer's own copy still holds its stream as it was built, so a
+  context handed again from that copy, or built again from the same 32 octets, starts the
+  stream where the first one started. The engine cannot see that, and the design, the doc
+  comments and the README state it as the consumer's rule (§24, rules 4 and 5).
+
+Every user in the tree, and what each needed:
+
+- The engine's tests on the twin. The rigs of `io_tls_test.zig`, `io_request_test.zig`,
+  `io_request_failure_test.zig` and `io_channel_test.zig` call `use_test_contexts` after
+  `init`, a helper of `io_sim_test.zig` that names the empty context of each of the twin's
+  types an engine speaks. `io_channel_link_test.zig` starts through `io_channel_test.zig`.
+- The engine's tests over colibri on the twin, `io_quic_test.zig`, name a `test_context`: the
+  plain session's, and a stream of connection IDs seeded with zeros.
+- The sessions' tests, in `io_chapulin.zig` and `io_chapulin_quic_test.zig`, built each context
+  with `init` already. They now build it through a `test_context` of their own.
+- `cocuyo_quic`'s tests, in `io_quic.zig`, held a context of defaults. They name a
+  `test_context`.
+- `cocuyo_doh`'s tests build theirs with `identity.test_context`, over the test identity. Each
+  of the two fixtures holds it as its field's default, from where the fixture is built, and
+  none is left `undefined` for a later statement to fill. The engine's test over it wrote the
+  engine's field, and now calls `use_doh`.
+- The replay's world, `tools/spec_replay/engine_world.zig`, names the twin's context for the
+  transport a walk configures.
+- The three examples above called their `use_` function already, and each gained a comment.
+  The other examples, `test/consumer/`, `bench/` and the README's blocks speak plain DNS and
+  name no context: a search of them for `.tls =`, `.quic =` and `.doh =` in an engine's
+  options finds none. `zig build examples`, `consumer-check`, `readme-check`, `bench-cares` and
+  `test-cares` each ran after the change and passed.
+
+The checks are tests. Six are in `io/io_context_test.zig`, on an engine that speaks all three
+of the twin's types:
+
+- The DoT test, the DoQ test and the DoH test. Each starts an engine over a configuration of
+  its transport and requires three things of `has_context`: no before any call, no still once
+  the other two transports have their contexts, and yes after its own `use_` call. Then a
+  lookup is started and answered, which passes `start`'s assertion and hands the session its
+  context.
+- The plain test. A configuration of plain DNS has what it needs with no context set, and its
+  lookup is answered.
+- The reinit test. It walks one engine from DoT to DoQ, back to DoT, to DoQ, to DoH, to DoT
+  and to DoH. A transport never named is still missing after the `reinit` that reaches it, and
+  each one named is still there when a later `reinit` comes back to it. For each of the three
+  a lookup is then started and answered over the context a `reinit` kept, so a session takes a
+  kept context.
+- The init test. For each transport, an engine with all three contexts set is closed and
+  started again in the same memory, and has none.
+
+Four more are the no-default tests, one for each context type: in `io/io_chapulin.zig`,
+`io/io_chapulin_quic_test.zig`, `io/io_quic.zig` and `io/io_doh_channel_start.zig`. Each reads
+the type's fields when it compiles and requires that none carries a default value, as the
+no-default test of `Options.Session` does (QS1 to QS3, above). Each default the four types
+lost has a row, TC17 to TC30: the stream, the anchors, the wall clock and its instant of the
+three contexts that `init` builds, and the two fields of `cocuyo_quic`'s.
+
+Each of TC1 to TC30 was broken by hand against the step its row names, to read which tests
+fail. Then `zig build mutations -- engine` ran the thirty, after running each of the five
+steps once with nothing mutated, and caught each. Thirty new mutations, thirty `CAUGHT`.
+
+Two things have no row:
+
+- **The assertions.** `start` asserts the predicate, and the three readers of
+  `io/io_context.zig` each assert that the configuration speaks their transport and that its
+  context is set. Taking an assertion away changes nothing a test can see, as with Z10 and
+  T11. That `start` stops the program was shown by hand, three times, with
+  `use_test_contexts` taken out of one rig each time and `zig build test-io` run. Without it
+  in the rig of `io_tls_test.zig`, seven tests stop; in `io_request_test.zig`, sixteen; in
+  `io_channel_test.zig`, fifteen. Each stops at the assertion in `start`, and the other tests
+  pass.
+- **That a context with a field left out does not compile.** It is the compiler's rule, and
+  the tool reads a compile error of this tree's own as a mutation whose text no longer
+  applies. It was shown by hand in the three examples. With `.stream` taken out of the context
+  `examples/doq_rotor.zig` writes, `zig build example-doq-rotor` stops with `missing struct
+  field: stream`. With `use_tls(.{})` and `use_doh(.{})` in place of the two `init` calls, the
+  DoT and DoH examples each stop with `missing struct field: anchors`.
+
+The readers cannot be weakened into reading a default: no context type has one left, so a
+reader that met null has no value to hand over.
+
+The rows are named `TC`, as two older sets of rows are: the TCP request connections' and the
+text parsers' fuzz target's. In the engine's set these are the only rows of that name.
+
+The engine's whole set then ran again by the tool, after the last edit to the code: 170 rows,
+in three runs of `zig build mutations -- engine` one after another, none interrupted. The rigs
+and the replay's world now name their contexts, and seven files that older rows edit changed,
+with the README: `io/io.zig`, `io/io_tls.zig`, `io/io_lifecycle.zig`,
+`io/io_request_connection.zig`, `io/io_channel.zig`, `io/io_quic.zig` and
+`io/io_doh_channel_start.zig`. Each of the 140 older rows is `CAUGHT` as before:
+
+- The twenty-two that `test-io` catches: ET12, ET13, SQ3, SQ4, CE4, CE18, CE20, CE21, QO8 to
+  QO11, CZ15 to CZ23 and CZ26.
+- The eight that `test-cocuyo_quic` catches: TR4, QO12, QO13, QO17, QO18 and QS1 to QS3.
+- The twenty-eight that `test-cocuyo_doh` catches, DC1 to DC28.
+- CZ24, which `readme-check` catches.
+- QO14 to QO16, which `test-sim` catches.
+- RF5 and FR13, which `spec-engine` catches.
+- The fifty-four the committed short walks catch, by those walks.
+- The twenty-two the picked walks catch. TLC wrote the full run, 2,000 walks of 201 states for
+  each configuration, and it replays in agreement with nothing mutated. The short walks catch
+  six of the rows and miss sixteen. The full run first catches those at walks 4, 8, 13, 2002,
+  4020, 4212, 8046, 12011, 13182, 16008, 16068, 16478 and 17842, which are the thirteen the
+  committed picks hold, so no walk is picked anew.
+
+The three examples each resolved `example.com` against a public resolver the same day, by
+hand, with the context each one builds: `example-dot-rotor` through Cloudflare's 1.1.1.1,
+known as `cloudflare-dns.com`; `example-doq-rotor` through AdGuard's 94.140.14.14, known as
+`dns.adguard-dns.com`; and `example-doh-rotor` through Cloudflare's template, which came up on
+HTTP/3. Each was answered after a full handshake.
+
+Two reviews read the change the same day, before any of it was committed. What they changed,
+which the paragraphs above already describe as it stands:
+
+- Design §21's ruling of 2026-09-23 said the engine takes the seed at `init`, and the wall
+  clock at `init` and at `reinit`. No code did, and the bullet now says where both arrive: in
+  the context `use_tls` takes.
+- The doc comments of `init` and of `reinit` say what each does to the contexts, where only
+  `use_tls`'s did.
+- A context handed again is built from a new draw. Design §16 decision 39 and §24 rules 4 and
+  5, the README and the doc comments of the three `use_` functions say so.
+- The README says DoQ's context takes a second draw, for the stream of its connection IDs.
+- `cocuyo_doh`'s two fixtures left their context `undefined` until `create` built it, and a
+  test that opened a pair without `create` had to build it by hand. Each fixture now holds a
+  test's context as its field's default.
+- The reinit test asked the predicate and started no lookup after the `reinit` calls that came
+  back to DoQ and to DoH. It starts one after each, as above.
+- The DoQ session's context and `cocuyo_doh`'s each had a row for the stream alone. TC25 to
+  TC30 are the rows for the anchors, the wall clock and its instant of each.
+- Twenty-seven older rows had not run again: the twenty-two of the picked walks, QO14 to QO16,
+  RF5 and FR13. The whole set ran, as above.
+- `has_context` is public before the owner has answered design §17 question 35. The question
+  now says what goes if the answer is no: the method and what names it, with `start` and the
+  tests asking `held` of `io/io_context.zig`.
+
+| # | Mutation | Check it breaks | Caught by | Status |
+| --- | --- | --- | --- | --- |
+| TC1 | an engine over DoT is taken as having its context when none was set | design §24, the context a session starts from, rule 2 | the DoT test, at its first expectation, and the init test, `test-io` | CAUGHT |
+| TC2 | an engine over DoQ is taken as having its context when none was set | rule 2 | the DoQ test, at its first expectation, the reinit test and the init test, `test-io` | CAUGHT |
+| TC3 | an engine over DoH is taken as having its context when none was set | rule 2 | the DoH test, at its first expectation, the reinit test and the init test, `test-io` | CAUGHT |
+| TC4 | a configuration of plain DNS is asked for the TLS context | rule 2, plain DNS needs none | the plain test; forty-eight tests that start a lookup over plain DNS, by the assertion in `start`, `test-io` | CAUGHT |
+| TC5 | the context of any transport counts for a DoT configuration | rule 2, one context is read | the DoT test, at its second expectation, `test-io` | CAUGHT |
+| TC6 | the context of any transport counts for a DoQ configuration | rule 2, one context is read | the DoQ test, at its second expectation, and the reinit test, `test-io` | CAUGHT |
+| TC7 | the context of any transport counts for a DoH configuration | rule 2, one context is read | the DoH test, at its second expectation, and the reinit test, `test-io` | CAUGHT |
+| TC8 | `use_tls` sets no context | rule 1, a context is held once its call has run | the DoT test, at its third expectation, and the init test; the reinit test and the eight tests of `io_tls_test.zig` that start a lookup, by the assertion in `start`, `test-io` | CAUGHT |
+| TC9 | `use_quic` sets no context | rule 1 | the DoQ test and the init test; the reinit test and twenty-nine tests of `io_request_test.zig`, `io_request_failure_test.zig` and `io_quic_test.zig`, by the assertion in `start`, `test-io` | CAUGHT |
+| TC10 | `use_doh` sets no context | rule 1 | the DoH test and the init test; the reinit test and sixteen tests of `io_channel_test.zig` and `io_channel_link_test.zig`, by the assertion in `start`, `test-io` | CAUGHT |
+| TC11 | `init` keeps the TLS context its memory held | rule 4, `init` leaves none | the init test, `test-io` | CAUGHT |
+| TC12 | `init` keeps the QUIC context its memory held | rule 4 | the init test, `test-io` | CAUGHT |
+| TC13 | `init` keeps the DoH context its memory held | rule 4 | the init test, `test-io` | CAUGHT |
+| TC14 | `reinit` forgets the TLS context | rule 5, `reinit` keeps the contexts | the reinit test, `test-io` | CAUGHT |
+| TC15 | `reinit` forgets the QUIC context | rule 5 | the reinit test, `test-io` | CAUGHT |
+| TC16 | `reinit` forgets the DoH context | rule 5 | the reinit test, `test-io` | CAUGHT |
+| TC17 | the DoT session's context leaves its stream undefined by default, as before the ruling | rule 6, no context type carries a default | the no-default test of `io_chapulin.zig`, `test-chapulin` | CAUGHT |
+| TC18 | the DoT session's context has no anchors by default, as before the ruling | rule 6 | the no-default test of `io_chapulin.zig`, `test-chapulin` | CAUGHT |
+| TC19 | the DoT session's context has a wall clock of zero by default, as before the ruling | rule 6 | the no-default test of `io_chapulin.zig`, `test-chapulin` | CAUGHT |
+| TC20 | the DoT session's context pins its wall clock to instant zero by default, as before the ruling | rule 6 | the no-default test of `io_chapulin.zig`, `test-chapulin` | CAUGHT |
+| TC21 | the DoQ session's context seeds its stream with zeros by default, as before the ruling | rule 6 | the no-default test of `io_chapulin_quic_test.zig`, `test-chapulin-quic` | CAUGHT |
+| TC22 | a `cocuyo_quic` connection's context seeds its stream with zeros by default, as before the ruling | rule 6 | the no-default test of `io_quic.zig`, `test-cocuyo_quic` | CAUGHT |
+| TC23 | a `cocuyo_quic` connection's context holds its session's defaults by default, as before the ruling | rule 6 | the no-default test of `io_quic.zig`, `test-cocuyo_quic` | CAUGHT |
+| TC24 | `cocuyo_doh`'s context seeds its stream with zeros by default, as before the ruling | rule 6 | the no-default test of `io_doh_channel_start.zig`, `test-cocuyo_doh` | CAUGHT |
+| TC25 | the DoQ session's context has no anchors by default, as before the ruling | rule 6 | the no-default test of `io_chapulin_quic_test.zig`, `test-chapulin-quic` | CAUGHT |
+| TC26 | the DoQ session's context has a wall clock of zero by default, as before the ruling | rule 6 | the no-default test of `io_chapulin_quic_test.zig`, `test-chapulin-quic` | CAUGHT |
+| TC27 | the DoQ session's context pins its wall clock to instant zero by default, as before the ruling | rule 6 | the no-default test of `io_chapulin_quic_test.zig`, `test-chapulin-quic` | CAUGHT |
+| TC28 | `cocuyo_doh`'s context has no anchors by default, as before the ruling | rule 6 | the no-default test of `io_doh_channel_start.zig`, `test-cocuyo_doh` | CAUGHT |
+| TC29 | `cocuyo_doh`'s context has a wall clock of zero by default, as before the ruling | rule 6 | the no-default test of `io_doh_channel_start.zig`, `test-cocuyo_doh` | CAUGHT |
+| TC30 | `cocuyo_doh`'s context pins its wall clock to instant zero by default, as before the ruling | rule 6 | the no-default test of `io_doh_channel_start.zig`, `test-cocuyo_doh` | CAUGHT |

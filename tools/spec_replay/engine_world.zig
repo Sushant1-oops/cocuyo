@@ -115,9 +115,19 @@ pub fn begin(self: anytype, transport: Transport) !void {
     self.now_ns = 1;
     self.names = 0;
     try self.engine.init(&self.loop, &self.config, self.cache_memory.slices(), seed, self.now_ns);
+    use_twin_context(self, transport);
     self.engine.tcp_idle_ns = idle_ns;
     self.engine.quic.idle_ns = idle_ns;
     self.engine.doh.idle_ns = idle_ns;
+}
+
+/// Hands the engine the twin's context for the transport the walk configures, as a consumer names
+/// its own after `init`: the engine has none until then, and `start` asserts it has (docs/design.md
+/// §16 decision 39). The twin's contexts are structs of no fields, and the model holds none.
+fn use_twin_context(self: anytype, transport: Transport) void {
+    if (transport.tls) self.engine.use_tls(.{});
+    if (transport.request and !transport.channel) self.engine.use_quic(.{});
+    if (transport.channel) self.engine.use_doh(.{});
 }
 
 /// One event of the transcript, then the timers the engine let go of, ended. Every

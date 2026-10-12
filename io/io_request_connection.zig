@@ -19,6 +19,7 @@ const udp = @import("io_udp.zig");
 const tls = @import("io_tls.zig");
 const request_module = @import("io_request.zig");
 const tend_module = @import("io_request_connection_tend.zig");
+const context_module = @import("io_context.zig");
 const Kind = @import("io.zig").Kind;
 
 /// One opening of a server's connection slot: its stage, its socket and receive, the transport's
@@ -70,14 +71,16 @@ pub fn Connection(comptime Quic: type, comptime lookups: u16) type {
 
 /// The engine's request connections: a slot for each server, what the loop borrows from each, the
 /// newest ticket each server's connections were given, what every session starts from, and how
-/// long a connection with no request on it is kept (request rules 1, 8, 9 and 10). An engine with
-/// no request transport holds no slot.
+/// long a connection with no request on it is kept (request rules 1, 8, 9 and 10). The context is
+/// null until `use_quic` names it, since the engine has none of its own (docs/design.md §16
+/// decision 39), and `io_context.zig` is what reads it. An engine with no request transport holds
+/// no slot.
 pub fn Set(comptime Quic: type, comptime servers: usize, comptime lookups: u16) type {
     return struct {
         connections: [servers]Connection(Quic, lookups) = @splat(.{}),
         sends: [servers]Send(Quic) = @splat(.{}),
         tickets: [servers]?tls.Kept(Quic) = @splat(null),
-        context: Quic.Context = .{},
+        context: ?Quic.Context = null,
         idle_ns: u64 = constants.quic_idle_ns_default,
     };
 }
@@ -195,7 +198,7 @@ fn start(self: anytype, server: u8, now_ns: u64) bool {
         .alpn = constants.quic_alpn_doq,
         .ticket = if (kept) |ticket| ticket.ticket else null,
         .ticket_age_ns = if (kept) |ticket| now_ns -| ticket.since_ns else 0,
-        .context = &self.quic.context,
+        .context = context_module.of_quic(self),
         .now_ns = now_ns,
     }) catch {
         shut(self, server);

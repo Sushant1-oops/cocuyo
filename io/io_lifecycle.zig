@@ -80,6 +80,12 @@ pub fn reset_tables(self: anytype, config: *const cocuyo.Config, cache_memory: ?
 /// `reinit`. The table and its client cookies are drawn from it again, so the same seed
 /// sends the same fresh client cookies again, which RFC 9018 §3 and §8.1 forbid; a caller
 /// whose address changed calls `reinit` for exactly that (docs/design.md §19 step 10).
+///
+/// The contexts of DoT, DoQ and DoH stay as they are: `reinit` neither reads nor writes one. A
+/// context set before it still counts after it, and its stream goes on from where it was. One
+/// never set is still missing, so a configuration that speaks another transport needs that
+/// transport's `use_` call before its next lookup (§24, the context a session starts from,
+/// rule 5; §16 decision 39).
 pub fn reinit(
     self: anytype,
     config: *const cocuyo.Config,

@@ -35,6 +35,7 @@ pub const quic = @import("io_request.zig");
 /// colibri's client).
 pub const channel = @import("io_channel.zig");
 const channel_link = @import("io_channel_link.zig");
+const context_module = @import("io_context.zig");
 const request_connection = @import("io_request_connection.zig");
 const request_tend = @import("io_request_connection_tend.zig");
 const request_events = @import("io_request_events.zig");
@@ -147,10 +148,12 @@ pub fn Resolver(comptime options: Options) type {
         connections: [options.tcp_connections]tcp.Connection(options.tcp_message_bytes, options.lookups, options.tls),
         tcp_connection: [options.lookups]?u8,
         tcp_group: tcp.Group(options.tcp_group_buffers),
-        /// The newest ticket each server's sessions were given, kept for its next connection,
-        /// and what every session starts from (docs/design.md §21, TLS rule 8).
+        /// The newest ticket each server's sessions were given, kept for its next connection
+        /// (docs/design.md §21, TLS rule 8).
         tls_tickets: [cocuyo.constants.servers_max]?tls.Kept(options.tls),
-        tls_context: options.tls.Context,
+        /// What every TLS session starts from, or null until `use_tls` names it: the engine has
+        /// no context of its own (§16 decision 39). `io_context.zig` is what reads it.
+        tls_context: ?options.tls.Context,
         tcp_idle_ns: u64,
         /// The QUIC connections, a slot for each server, and a request slot for each lookup
         /// (docs/design.md §24, request rules 1, 3 and 8).
@@ -213,7 +216,9 @@ pub fn Resolver(comptime options: Options) type {
         /// returns, or until a `reinit` that is handed other memory or none returns
         /// (docs/design.md §19 step 13, the cache's memory). Slices `Cache.init` would refuse
         /// are a programmer error: `cocuyo.cache.slot_count_valid` and `keys_for` say what it
-        /// takes.
+        /// takes. The engine starts with no context for DoT, DoQ or DoH, whatever its memory
+        /// held: a consumer that speaks one calls `use_tls`, `use_quic` or `use_doh` next, before
+        /// its first lookup (§24, the context a session starts from, rule 4).
         pub fn init(
             self: *Self,
             loop: *rotor.Loop,
@@ -238,7 +243,9 @@ pub fn Resolver(comptime options: Options) type {
             self.tcp_connection = @splat(null);
             self.tcp_idle_ns = constants.tcp_idle_ns_default;
             self.tls_tickets = @splat(null);
-            self.tls_context = .{};
+            // No context, whatever the memory held: the consumer names each after `init`, and a
+            // set of connections or of channels starts with none (§16 decision 39).
+            self.tls_context = null;
             self.quic = .{};
             self.doh = .{};
             self.requests = @splat(.{});
@@ -272,9 +279,14 @@ pub fn Resolver(comptime options: Options) type {
 
         /// Starts a lookup. Its result comes through `take`, and one the cache already holds is
         /// there by the time this returns: the table asks the cache at the lookup's first poll,
-        /// which the drive below makes (docs/design.md §20).
+        /// which the drive below makes (docs/design.md §20). The transport the configuration's
+        /// servers speak must have its context by now: `has_context` says whether it has.
         pub fn start(self: *Self, question: cocuyo.Question, now_ns: u64) error{Full}!cocuyo.Handle {
             assert(!self.closing);
+            // A lookup is the first call that can reach a server, and a session never starts from
+            // a context nobody named: forgetting `use_tls`, `use_quic` or `use_doh` is a
+            // programmer error (docs/design.md §24, the context a session starts from, rule 3).
+            assert(self.has_context());
             const handle = self.resolver.start(question) catch return error.Full;
             self.handles[handle.index] = handle;
             // The buffer may still be lent to a send of the lookup the slot held before: it stays
@@ -299,20 +311,43 @@ pub fn Resolver(comptime options: Options) type {
             assert(config.servers.len <= options.tcp_connections);
         }
 
-        /// What every TLS session starts from (docs/design.md §21): for chapulin, the anchors,
-        /// the wall clock and the seed's stream. The twin's needs nothing.
+        /// Whether the transport the configuration's servers speak has its context: DoT's from
+        /// `use_tls`, DoQ's from `use_quic`, DoH's from `use_doh`. Plain DNS needs none, so a
+        /// configuration of plain DNS always has what it needs. `start` asserts this, and a
+        /// consumer may ask it first (docs/design.md §24, the context a session starts from).
+        pub fn has_context(self: *const Self) bool {
+            return context_module.held(self);
+        }
+
+        /// Names what every TLS session starts from (docs/design.md §21, and §24, the context a
+        /// session starts from): for chapulin's session the anchors, the wall clock, and a stream
+        /// keyed by 32 octets of the caller's CSPRNG. The call is required, after `init` and
+        /// before any lookup reaches a TLS server. The engine has no context of its own, and a
+        /// `start` against a TLS configuration whose context was never set stops the program at
+        /// an assertion (§16 decision 39). The engine checks that a context was set, and cannot
+        /// check the seed or the clock in it. `reinit` keeps the context, and `init` forgets it.
+        /// A context handed again, after an `init` or to pin the clock again, is built from a
+        /// new draw of 32 octets: built from the octets of one before, it starts its stream
+        /// where that one started. The twin's context holds nothing, and a test names it all
+        /// the same.
         pub fn use_tls(self: *Self, context: options.tls.Context) void {
             self.tls_context = context;
         }
 
-        /// What every QUIC connection starts from (docs/design.md §24), as `use_tls` says for
-        /// TLS. The twin's needs nothing.
+        /// Names what every QUIC connection starts from (docs/design.md §24): the session's
+        /// context, and the stream the connection IDs are drawn from, each keyed by a draw of its
+        /// own. The call is required, after `init` and before any lookup reaches a DoQ server:
+        /// without it a `start` against a DoQ configuration stops the program at an assertion,
+        /// as `use_tls` says for TLS, and a context handed again takes new draws.
         pub fn use_quic(self: *Self, context: options.quic.Context) void {
             self.quic.context = context;
         }
 
-        /// What every channel starts from (docs/design.md §24, DoH over colibri's client), as
-        /// `use_quic` says for QUIC. The twin's needs nothing.
+        /// Names what every channel starts from (docs/design.md §24, DoH over colibri's client):
+        /// the anchors, the wall clock and the stream. The call is required, after `init` and
+        /// before any lookup reaches a DoH server: without it a `start` against a DoH
+        /// configuration stops the program at an assertion, as `use_tls` says for TLS, and a
+        /// context handed again takes a new draw.
         pub fn use_doh(self: *Self, context: options.doh.Context) void {
             self.doh.context = context;
         }
@@ -331,7 +366,9 @@ pub fn Resolver(comptime options: Options) type {
         /// `Cache.init` takes, or null for no cache from here on. Memory the engine held before
         /// and is not handed again is the caller's to free once this returns, whatever it
         /// returns. A `reinit` that fails has still taken the memory it was handed, which is the
-        /// engine's until a later `reinit` or `close` returns: never free it on the error.
+        /// engine's until a later `reinit` or `close` returns: never free it on the error. The
+        /// contexts of DoT, DoQ and DoH stay as they are: one set before still counts, and one
+        /// never set is still missing (§24, the context a session starts from, rule 5).
         pub fn reinit(
             self: *Self,
             config: *const cocuyo.Config,
@@ -406,6 +443,7 @@ test {
     _ = request_events;
     _ = channel;
     _ = channel_link;
+    _ = context_module;
     _ = @import("io_request_template.zig");
     _ = @import("io_tcp_queue_ring.zig");
     _ = @import("io_reset.zig");
@@ -420,6 +458,7 @@ test {
         _ = @import("io_request_failure_test.zig");
         _ = @import("io_channel_test.zig");
         _ = @import("io_channel_link_test.zig");
+        _ = @import("io_context_test.zig");
         _ = @import("io_quic_test.zig");
         _ = @import("io_threads_test.zig");
     }

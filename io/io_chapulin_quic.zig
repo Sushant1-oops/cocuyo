@@ -31,16 +31,20 @@ pub const Session = struct {
     /// `CH_WEBPKI_ANCHOR_MAX`.
     pub const anchors_max = tls.quic.ClientConfig.anchors_max;
 
-    /// What every session starts from: the anchors, the wall clock, and the stream chapulin draws
-    /// from, seeded from a CSPRNG. The anchors are the caller's and outlive the engine.
+    /// What every session starts from (docs/design.md §24, the context a session starts from): the
+    /// anchors, the wall clock, and the stream chapulin draws from, seeded from a CSPRNG. No field
+    /// has a default, so a context is built by `init`, with each of them named (§16 decision 39).
+    /// The anchors are the caller's and outlive the engine.
     pub const Context = struct {
-        anchors: []const Anchor = &.{},
-        stream: std.Random.ChaCha = std.Random.ChaCha.init(@splat(0)),
-        unix_seconds: u64 = 0,
-        at_ns: u64 = 0,
+        anchors: []const Anchor,
+        stream: std.Random.ChaCha,
+        unix_seconds: u64,
+        at_ns: u64,
 
-        /// `seed` must come from a CSPRNG; `unix_seconds` is the wall clock at the caller's
-        /// `now_ns`.
+        /// `seed` must be 32 octets of a CSPRNG, drawn for this context alone: chapulin draws
+        /// each handshake's random and its key shares from the stream they key. `unix_seconds` is
+        /// the wall clock at the caller's `now_ns`. `anchors` may be none when every server is
+        /// known by its pins.
         pub fn init(anchors: []const Anchor, seed: [std.Random.ChaCha.secret_seed_length]u8, unix_seconds: u64, now_ns: u64) Context {
             assert(anchors.len <= anchors_max);
             return .{ .anchors = anchors, .stream = std.Random.ChaCha.init(seed), .unix_seconds = unix_seconds, .at_ns = now_ns };

@@ -129,6 +129,7 @@ fn tiny_failure(seed: u64, text: []const u8) !?cocuyo.Error {
     for (&rig.servers) |*server| server.quic = quic;
     const bare: rotor.server.Script = .{ .cookies = false };
     try rig.init(seed, .{ bare, bare }, .{ .servers = &.{}, .timeout_ns = fixtures.stream_timeout_ns, .timeout_ns_max = fixtures.stream_timeout_ns, .failover_retry_chance = 0 });
+    rig.use_test_contexts();
     _ = try rig.engine.start(question(text), rig.loop.now());
     const result = try rig.until_result();
     const failure: ?cocuyo.Error = switch (result.outcome) {

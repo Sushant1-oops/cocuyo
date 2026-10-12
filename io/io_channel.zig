@@ -20,6 +20,7 @@ const tls = @import("io_tls.zig");
 const request_module = @import("io_request.zig");
 const request_template = @import("io_request_template.zig");
 const link_module = @import("io_channel_link.zig");
+const context_module = @import("io_context.zig");
 
 /// No channel type: the engine's default. It holds nothing, and `init` refuses a DoH
 /// configuration, so none of its functions is ever called.
@@ -155,13 +156,15 @@ pub fn Send(comptime Doh: type) type {
 
 /// The engine's channels: a slot for each server, what the loop borrows from each link, the newest
 /// ticket of each link's transport (rule 23), what every channel starts from, and how long a channel
-/// with no request on it is kept (rule 24). An engine with no channel type holds a set of no slots.
+/// with no request on it is kept (rule 24). The context is null until `use_doh` names it, since the
+/// engine has none of its own (docs/design.md §16 decision 39), and `io_context.zig` is what reads
+/// it. An engine with no channel type holds a set of no slots.
 pub fn Set(comptime Doh: type, comptime servers: usize, comptime lookups: u16) type {
     return struct {
         slots: [servers]Slot(Doh, lookups) = @splat(.{}),
         sends: [servers][links_of(Doh)]Send(Doh) = @splat(@splat(.{})),
         tickets: [servers][links_of(Doh)]?tls.Kept(Doh) = @splat(@splat(null)),
-        context: Doh.Context = .{},
+        context: ?Doh.Context = null,
         idle_ns: u64 = constants.quic_idle_ns_default,
 
         /// The channel type the set's slots hold.
@@ -300,7 +303,7 @@ fn open(self: anytype, server: u8, now_ns: u64) bool {
         .tls = &named,
         .https = template,
         .alternative = slot.alternative,
-        .context = &self.doh.context,
+        .context = context_module.of_doh(self),
         .now_ns = now_ns,
     }) catch return false;
     slot.state = .open;

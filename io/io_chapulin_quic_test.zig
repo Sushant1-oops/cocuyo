@@ -14,6 +14,21 @@ const testing = std.testing;
 /// A context as `cocuyo_quic`'s connections hold one, with the session's inside.
 const Context = struct { session: Session.Context };
 
+/// The wall clock the tests' contexts are made at, and the `now_ns` it is pinned to.
+const test_seconds = 1;
+const test_ns = 1;
+
+/// A session's context for a test: the stream seeded with `seed_octet` repeated, so each run draws
+/// what the last drew. Never for a network, whose seed comes from a CSPRNG.
+fn test_context(anchors: []const tls.Anchor, seed_octet: u8) Session.Context {
+    return test_context_at(anchors, seed_octet, test_seconds, test_ns);
+}
+
+/// As `test_context`, with the wall clock the test names: `unix_seconds` at `now_ns`.
+fn test_context_at(anchors: []const tls.Anchor, seed_octet: u8, unix_seconds: u64, now_ns: u64) Session.Context {
+    return .init(anchors, @splat(seed_octet), unix_seconds, now_ns);
+}
+
 /// max_idle_timeout, of 30,000 milliseconds (RFC 9000 §18.2), which chapulin carries without
 /// reading: its ID, its length, and its value as a two-octet varint.
 const transport_parameters = "\x01\x02\x75\x30";
@@ -55,10 +70,19 @@ fn finish(session: *Session) void {
 const anchor_octet = "\x30";
 const anchors_test = [_]tls.Anchor{.{ .subject = anchor_octet, .spki = anchor_octet }};
 
+test "the context carries no default, so each of its fields is named where one is built" {
+    // Until 2026-10-11 the fields defaulted to no anchors, a stream seeded with zeros and a wall
+    // clock of zero, and so did the engine's context when no consumer set one (docs/design.md §16
+    // decision 39).
+    inline for (comptime std.meta.fields(Session.Context)) |field| {
+        try testing.expectEqual(@as(?*const anyopaque, null), field.default_value_ptr);
+    }
+}
+
 test "a server known by pins alone is judged by its key, though the context has anchors" {
     // chapulin refuses pins beside anchors with no hostname (its decision 64), so the anchors, for
     // named servers, are not this one's (RFC 8310 §6.3's "SPKI + IP").
-    const context: Session.Context = .init(&anchors_test, @splat(0), 1, 1);
+    const context = test_context(&anchors_test, 0);
     const pins = [_]cocuyo.Pin{@splat(0)};
     var hostname: [cocuyo.constants.name_text_bytes_max]u8 = undefined;
     const trust = Session.trust(&.{ .pins = &pins }, &context, &hostname);
@@ -70,7 +94,7 @@ test "a server known by pins alone is judged by its key, though the context has 
 test "a server known by a name and pins is checked by both" {
     // "both must pass" (RFC 8310 §6.4): the chain against the anchors and the name, a key on it
     // against the pins.
-    const context: Session.Context = .init(&anchors_test, @splat(0), 1, 1);
+    const context = test_context(&anchors_test, 0);
     const pins = [_]cocuyo.Pin{@splat(0)};
     var hostname: [cocuyo.constants.name_text_bytes_max]u8 = undefined;
     const trust = Session.trust(&.{ .name = try cocuyo.Name.from_text("dns.example."), .pins = &pins }, &context, &hostname);
@@ -82,7 +106,7 @@ test "a server known by a name and pins is checked by both" {
 }
 
 test "a named server with no anchors to check it is judged by its pins, its name still sent" {
-    const context: Session.Context = .init(&.{}, @splat(0), 1, 1);
+    const context = test_context(&.{}, 0);
     const pins = [_]cocuyo.Pin{@splat(0)};
     var hostname: [cocuyo.constants.name_text_bytes_max]u8 = undefined;
     const trust = Session.trust(&.{ .name = try cocuyo.Name.from_text("dns.example."), .pins = &pins }, &context, &hostname);
@@ -93,14 +117,14 @@ test "a named server with no anchors to check it is judged by its pins, its name
 
 test "the wall clock a chain is judged at is carried forward from the context's instant" {
     const seconds = 1_700_000_000;
-    const context: Session.Context = .init(&.{}, @splat(0), seconds, constants.ns_per_second);
+    const context = test_context_at(&.{}, 0, seconds, constants.ns_per_second);
     try testing.expectEqual(@as(u64, seconds + 4), context.seconds_at(5 * constants.ns_per_second));
     // An instant before the context's is its own.
     try testing.expectEqual(@as(u64, seconds), context.seconds_at(0));
 }
 
 test "a server known by a name with no anchor to check it against is refused by chapulin" {
-    var context: Context = .{ .session = .init(&.{}, @splat(0), 1, 1) };
+    var context: Context = .{ .session = test_context(&.{}, 0) };
     const name = try cocuyo.Name.from_text("dns.example.");
     try testing.expectError(error.TlsFailed, started(&.{ .name = name }, &context, null));
 }
@@ -111,7 +135,7 @@ const Hello = struct {
     len: usize = 0,
 
     fn of(seed: u8) !Hello {
-        var context: Context = .{ .session = .init(&.{}, @splat(seed), 1, 1) };
+        var context: Context = .{ .session = test_context(&.{}, seed) };
         const pins = [_]cocuyo.Pin{@splat(pin_octet)};
         const session = try started(&.{ .pins = &pins }, &context, null);
         defer finish(session);
@@ -140,7 +164,7 @@ test "chapulin starts at the transport parameters, and draws its hello from the 
 test "the ticket a session would resume with is zeroed when it is wiped, or when its start fails" {
     // The copy holds the resumption secret (RFC 9846 §4.6.1), which nothing may keep past the
     // session it was for.
-    var context: Context = .{ .session = .init(&.{}, @splat(0), 1, 1) };
+    var context: Context = .{ .session = test_context(&.{}, 0) };
     const pins = [_]cocuyo.Pin{@splat(pin_octet)};
     var ticket = std.mem.zeroes(Session.Ticket);
     ticket.identity_len = 1;
@@ -163,7 +187,7 @@ test "the ticket a session would resume with is zeroed when it is wiped, or when
 }
 
 test "the provider's calls reach colibri's client once the session has started" {
-    var context: Context = .{ .session = .init(&.{}, @splat(0), 1, 1) };
+    var context: Context = .{ .session = test_context(&.{}, 0) };
     const pins = [_]cocuyo.Pin{@splat(pin_octet)};
     const session = try started(&.{ .pins = &pins }, &context, null);
     defer finish(session);

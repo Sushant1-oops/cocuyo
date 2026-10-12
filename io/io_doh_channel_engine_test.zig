@@ -33,7 +33,6 @@ const template = "https://dns.example/dns-query{?dns}";
 const quic_template = "https://dns.example:853/dns-query{?dns}";
 /// The port the QUIC server sees each datagram come from. Test-only.
 const client_port = 50_000;
-const anchors = [_]@TypeOf(identity.anchor){identity.anchor};
 /// A lookup's deadline, long past the fallback delay and a handshake after it.
 const timeout_s = 25;
 const timeout_ns = timeout_s * std.time.ns_per_s;
@@ -198,7 +197,9 @@ const World = struct {
         }
         world.config = .{ .servers = &world.servers, .timeout_ns = timeout_ns, .timeout_ns_max = timeout_ns, .failover_retry_chance = 0 };
         try world.engine.init(&world.loop, &world.config, world.cache_memory.slices(), seed, world.loop.now());
-        world.engine.doh.context = .init(&anchors, @splat(@truncate(seed)), identity.unix_seconds, world.loop.now());
+        // The engine has no context of its own (docs/design.md §16 decision 39): a test's, as a
+        // consumer names its own after `init`.
+        world.engine.use_doh(identity.test_context(@truncate(seed), world.loop.now()));
         for (&world.sides, &world.quic_sides, 0..) |*side, *quic_side, index| {
             side.* = .{ .index = @intCast(index), .network = world.loop.network(), .script = script };
             world.loop.network().stream_responders[index] = side.responder();

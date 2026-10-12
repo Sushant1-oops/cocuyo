@@ -93,6 +93,8 @@ pub fn main(init: std.process.Init) !void {
     defer loop.deinit();
     var events: [events_max]rotor.Event = undefined;
     try engine.init(&loop, &config, cache_memory.slices(), std.mem.readInt(u64, &engine_seed, .little), clock.read());
+    // The engine has no context of its own, and a lookup started before this call would stop the
+    // program at an assertion (docs/design.md §16 decision 39).
     engine.use_doh(.init(anchors[0..roots.len], seed, unix_seconds, clock.read()));
     defer {
         engine.deinit();

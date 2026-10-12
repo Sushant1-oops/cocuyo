@@ -1268,4 +1268,274 @@
         },
         .caught_by = .{ .step = "test-cocuyo_quic" },
     },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC1",
+        .what = "an engine over DoT is taken as having its context when none was set",
+        .edits = .{
+            .{ .file = "io/io_context.zig", .old = "        .tls => self.tls_context != null,", .new = "        .tls => true," },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC2",
+        .what = "an engine over DoQ is taken as having its context when none was set",
+        .edits = .{
+            .{ .file = "io/io_context.zig", .old = "        .quic => self.quic.context != null,", .new = "        .quic => true," },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC3",
+        .what = "an engine over DoH is taken as having its context when none was set",
+        .edits = .{
+            .{ .file = "io/io_context.zig", .old = "        .https => self.doh.context != null,", .new = "        .https => true," },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC4",
+        .what = "a configuration of plain DNS is asked for the TLS context",
+        .edits = .{
+            .{ .file = "io/io_context.zig", .old = "        .cleartext => true,", .new = "        .cleartext => self.tls_context != null," },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC5",
+        .what = "the context of any transport counts for a DoT configuration",
+        .edits = .{
+            .{ .file = "io/io_context.zig", .old = "        .tls => self.tls_context != null,", .new = "        .tls => self.tls_context != null or self.quic.context != null or self.doh.context != null," },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC6",
+        .what = "the context of any transport counts for a DoQ configuration",
+        .edits = .{
+            .{ .file = "io/io_context.zig", .old = "        .quic => self.quic.context != null,", .new = "        .quic => self.quic.context != null or self.tls_context != null or self.doh.context != null," },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC7",
+        .what = "the context of any transport counts for a DoH configuration",
+        .edits = .{
+            .{ .file = "io/io_context.zig", .old = "        .https => self.doh.context != null,", .new = "        .https => self.doh.context != null or self.tls_context != null or self.quic.context != null," },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC8",
+        .what = "use_tls sets no context",
+        .edits = .{
+            .{ .file = "io/io.zig", .old = "            self.tls_context = context;\n", .new = "            _ = self;\n            _ = context;\n" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC9",
+        .what = "use_quic sets no context",
+        .edits = .{
+            .{ .file = "io/io.zig", .old = "            self.quic.context = context;\n", .new = "            _ = self;\n            _ = context;\n" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC10",
+        .what = "use_doh sets no context",
+        .edits = .{
+            .{ .file = "io/io.zig", .old = "            self.doh.context = context;\n", .new = "            _ = self;\n            _ = context;\n" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC11",
+        .what = "init keeps the TLS context its memory held",
+        .edits = .{
+            .{ .file = "io/io.zig", .old = "            self.tls_context = null;\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC12",
+        .what = "init keeps the QUIC context its memory held",
+        .edits = .{
+            .{ .file = "io/io.zig", .old = "            self.quic = .{};\n", .new = "            const quic_context = self.quic.context;\n            self.quic = .{ .context = quic_context };\n" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC13",
+        .what = "init keeps the DoH context its memory held",
+        .edits = .{
+            .{ .file = "io/io.zig", .old = "            self.doh = .{};\n", .new = "            const doh_context = self.doh.context;\n            self.doh = .{ .context = doh_context };\n" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC14",
+        .what = "reinit forgets the TLS context",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "    self.tls_tickets = @splat(null);\n", .new = "    self.tls_tickets = @splat(null);\n    self.tls_context = null;\n" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC15",
+        .what = "reinit forgets the QUIC context",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "    self.quic.tickets = @splat(null);\n", .new = "    self.quic.tickets = @splat(null);\n    self.quic.context = null;\n" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC16",
+        .what = "reinit forgets the DoH context",
+        .edits = .{
+            .{ .file = "io/io_channel.zig", .old = "    self.doh.tickets = @splat(@splat(null));\n", .new = "    self.doh.tickets = @splat(@splat(null));\n    self.doh.context = null;\n" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC17",
+        .what = "the DoT session's context leaves its stream undefined by default, as before the ruling",
+        .edits = .{
+            .{ .file = "io/io_chapulin.zig", .old = "        stream: std.Random.ChaCha,\n", .new = "        stream: std.Random.ChaCha = undefined,\n" },
+        },
+        .caught_by = .{ .step = "test-chapulin" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC18",
+        .what = "the DoT session's context has no anchors by default, as before the ruling",
+        .edits = .{
+            .{ .file = "io/io_chapulin.zig", .old = "        anchors: []const Anchor,\n", .new = "        anchors: []const Anchor = &.{},\n" },
+        },
+        .caught_by = .{ .step = "test-chapulin" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC19",
+        .what = "the DoT session's context has a wall clock of zero by default, as before the ruling",
+        .edits = .{
+            .{ .file = "io/io_chapulin.zig", .old = "        unix_seconds: u64,\n", .new = "        unix_seconds: u64 = 0,\n" },
+        },
+        .caught_by = .{ .step = "test-chapulin" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC20",
+        .what = "the DoT session's context pins its wall clock to instant zero by default, as before the ruling",
+        .edits = .{
+            .{ .file = "io/io_chapulin.zig", .old = "        at_ns: u64,\n", .new = "        at_ns: u64 = 0,\n" },
+        },
+        .caught_by = .{ .step = "test-chapulin" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC21",
+        .what = "the DoQ session's context seeds its stream with zeros by default, as before the ruling",
+        .edits = .{
+            .{ .file = "io/io_chapulin_quic.zig", .old = "        stream: std.Random.ChaCha,\n", .new = "        stream: std.Random.ChaCha = std.Random.ChaCha.init(@splat(0)),\n" },
+        },
+        .caught_by = .{ .step = "test-chapulin-quic" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC22",
+        .what = "a cocuyo_quic connection's context seeds its stream with zeros by default, as before the ruling",
+        .edits = .{
+            .{ .file = "io/io_quic.zig", .old = "            stream: std.Random.ChaCha,\n", .new = "            stream: std.Random.ChaCha = std.Random.ChaCha.init(@splat(0)),\n" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_quic" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC23",
+        .what = "a cocuyo_quic connection's context holds its session's defaults by default, as before the ruling",
+        .edits = .{
+            .{ .file = "io/io_quic.zig", .old = "            session: Session.Context,\n", .new = "            session: Session.Context = .{},\n" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_quic" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC24",
+        .what = "cocuyo_doh's context seeds its stream with zeros by default, as before the ruling",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_start.zig", .old = "    stream: std.Random.ChaCha,\n", .new = "    stream: std.Random.ChaCha = std.Random.ChaCha.init(@splat(0)),\n" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC25",
+        .what = "the DoQ session's context has no anchors by default, as before the ruling",
+        .edits = .{
+            .{ .file = "io/io_chapulin_quic.zig", .old = "        anchors: []const Anchor,\n", .new = "        anchors: []const Anchor = &.{},\n" },
+        },
+        .caught_by = .{ .step = "test-chapulin-quic" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC26",
+        .what = "the DoQ session's context has a wall clock of zero by default, as before the ruling",
+        .edits = .{
+            .{ .file = "io/io_chapulin_quic.zig", .old = "        unix_seconds: u64,\n", .new = "        unix_seconds: u64 = 0,\n" },
+        },
+        .caught_by = .{ .step = "test-chapulin-quic" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC27",
+        .what = "the DoQ session's context pins its wall clock to instant zero by default, as before the ruling",
+        .edits = .{
+            .{ .file = "io/io_chapulin_quic.zig", .old = "        at_ns: u64,\n", .new = "        at_ns: u64 = 0,\n" },
+        },
+        .caught_by = .{ .step = "test-chapulin-quic" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC28",
+        .what = "cocuyo_doh's context has no anchors by default, as before the ruling",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_start.zig", .old = "    anchors: []const tls.Anchor,\n", .new = "    anchors: []const tls.Anchor = &.{},\n" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC29",
+        .what = "cocuyo_doh's context has a wall clock of zero by default, as before the ruling",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_start.zig", .old = "    unix_seconds: u64,\n", .new = "    unix_seconds: u64 = 0,\n" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "The context a session starts from",
+        .id = "TC30",
+        .what = "cocuyo_doh's context pins its wall clock to instant zero by default, as before the ruling",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_start.zig", .old = "    at_ns: u64,\n", .new = "    at_ns: u64 = 0,\n" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
 }

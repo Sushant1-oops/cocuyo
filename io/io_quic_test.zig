@@ -183,6 +183,7 @@ const World = struct {
         const tls: cocuyo.Tls = .{ .name = try cocuyo.Name.from_text("dns.example.") };
         for (&world.rig.servers) |*server| server.quic = tls;
         try world.rig.init(seed, scripts, .{ .servers = &.{}, .timeout_ns = fixtures.stream_timeout_ns, .timeout_ns_max = fixtures.stream_timeout_ns, .failover_retry_chance = 0 });
+        world.rig.engine.use_quic(test_context());
         for (&world.sides, 0..) |*side, index| {
             side.* = .{ .index = @intCast(index), .network = world.rig.loop.network() };
             world.rig.loop.network().responders[index] = side.responder();
@@ -194,6 +195,13 @@ const World = struct {
         testing.allocator.destroy(world);
     }
 };
+
+/// The context of a test's connections over colibri: the plain session's, which holds nothing, and
+/// a stream of connection IDs seeded with zeros, so each run draws what the last drew. Never for a
+/// network, whose seed comes from a CSPRNG.
+fn test_context() Resolver.Quic.Context {
+    return .{ .session = .{}, .stream = std.Random.ChaCha.init(@splat(0)) };
+}
 
 test "a lookup over DoQ is answered through colibri's client and colibri's server on the twin" {
     const world = try World.create(91, .{ .{}, .{} });
