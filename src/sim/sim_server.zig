@@ -107,7 +107,7 @@ fn address_kind(kind: core.Kind) bool {
 fn write_answer(name: *const Name, kind: core.Kind, ttl_seconds: u32, out: []u8) usize {
     const octet: u8 = @truncate(core.mix.next(std.hash.Wyhash.hash(0, name.wire())));
     var len: usize = 0;
-    wire.integer.write_u16(out, len, wire.constants.label_kind_pointer << wire.constants.octet_bits | core.constants.header_bytes);
+    wire.integer.write_u16(out, len, @as(u16, wire.constants.label_kind_pointer) << wire.constants.octet_bits | core.constants.header_bytes);
     len += wire.constants.u16_bytes;
     wire.integer.write_u16(out, len, kind.code());
     len += wire.constants.u16_bytes;

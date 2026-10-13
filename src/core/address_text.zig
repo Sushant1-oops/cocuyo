@@ -114,7 +114,9 @@ fn fill_quad(text: []const u8, out: []u16, written: u8) ?u8 {
         const octet = group * constants.address_v6_group_bytes;
         out[written + group] = (@as(u16, quad[octet]) << constants.octet_bits) | quad[octet + 1];
     }
-    return written + constants.groups_per_quad;
+    const filled = written + constants.groups_per_quad;
+    assert(filled <= constants.address_v6_groups);
+    return @intCast(filled);
 }
 
 fn parse_group(text: []const u8) ?u16 {
@@ -172,6 +174,9 @@ test "a malformed quad is refused rather than guessed at" {
     try testing.expectEqual(@as(?Address, null), parse("1.2.3"));
     try testing.expectEqual(@as(?Address, null), parse("1.2.3.4.5"));
     try testing.expectEqual(@as(?Address, null), parse("1.2.3.256"));
+    // 999 is the largest value of three digits. The octet's sum reaches it, and the octet is
+    // refused.
+    try testing.expectEqual(@as(?Address, null), parse("1.2.3.999"));
     try testing.expectEqual(@as(?Address, null), parse("1.2.3."));
     try testing.expectEqual(@as(?Address, null), parse(".1.2.3"));
     try testing.expectEqual(@as(?Address, null), parse("1.2.3.x"));

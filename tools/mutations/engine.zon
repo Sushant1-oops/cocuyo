@@ -1046,6 +1046,7 @@
         .id = "QO8",
         .what = "both offsets of a question are summed in the octet a name's length is held in, under the engine",
         .edits = .{
+            .{ .file = "src/core/constants.zig", .old = "pub const header_bytes: usize = 12;", .new = "pub const header_bytes = 12;" },
             .{ .file = "src/wire/question.zig", .old = "    const start: usize = core.constants.header_bytes;\n    const end = start + section_bytes(name);", .new = "    const start = core.constants.header_bytes;\n    const end = start + section_bytes(name);" },
         },
         .caught_by = .{ .step = "test-io" },
@@ -1055,6 +1056,7 @@
         .id = "QO9",
         .what = "a stream's length prefix and its own two octets are summed in the sixteen bits the prefix reads as",
         .edits = .{
+            .{ .file = "src/core/constants.zig", .old = "pub const tcp_prefix_bytes: usize = 2;", .new = "pub const tcp_prefix_bytes = 2;" },
             .{ .file = "io/io_tcp.zig", .old = "        const length: usize = cocuyo.message_len(connection.frame[0..prefix]);", .new = "        const length = cocuyo.message_len(connection.frame[0..prefix]);" },
         },
         .caught_by = .{ .step = "test-io" },
@@ -1100,6 +1102,8 @@
         .id = "QO14",
         .what = "the twin sums a record's length and its header in the sixteen bits the length reads as",
         .edits = .{
+            .{ .file = "src/sim/constants.zig", .old = "pub const tls_record_header_bytes: usize = 5;", .new = "pub const tls_record_header_bytes = 5;" },
+            .{ .file = "src/sim/constants.zig", .old = "        const untyped = @TypeOf(@field(@This(), declaration.name)) == comptime_int;", .new = "        const untyped = false;" },
             .{ .file = "src/sim/sim_tls.zig", .old = "    const length: usize = std.mem.readInt(u16, bytes[constants.tls_record_length_at..][0..@sizeOf(u16)], .big);", .new = "    const length = std.mem.readInt(u16, bytes[constants.tls_record_length_at..][0..@sizeOf(u16)], .big);" },
         },
         .caught_by = .{ .step = "test-sim" },
@@ -1109,6 +1113,8 @@
         .id = "QO15",
         .what = "the twin sums a QUIC item's length and its header in the sixteen bits the length reads as",
         .edits = .{
+            .{ .file = "src/sim/constants.zig", .old = "pub const quic_item_header_bytes: usize = 7;", .new = "pub const quic_item_header_bytes = 7;" },
+            .{ .file = "src/sim/constants.zig", .old = "        const untyped = @TypeOf(@field(@This(), declaration.name)) == comptime_int;", .new = "        const untyped = false;" },
             .{ .file = "src/sim/sim_quic.zig", .old = "    const length: usize = std.mem.readInt(u16, bytes[constants.quic_item_length_at..][0..@sizeOf(u16)], .big);", .new = "    const length = std.mem.readInt(u16, bytes[constants.quic_item_length_at..][0..@sizeOf(u16)], .big);" },
         },
         .caught_by = .{ .step = "test-sim" },
@@ -1118,6 +1124,7 @@
         .id = "QO16",
         .what = "the twin's TLS server sums a query's length prefix and its own two octets in sixteen bits",
         .edits = .{
+            .{ .file = "src/core/constants.zig", .old = "pub const tcp_prefix_bytes: usize = 2;", .new = "pub const tcp_prefix_bytes = 2;" },
             .{ .file = "src/sim/sim_loop_perform.zig", .old = "    const message_len: usize = wire.message_len(data[0..prefix]);", .new = "    const message_len = wire.message_len(data[0..prefix]);" },
         },
         .caught_by = .{ .step = "test-sim" },
@@ -1535,6 +1542,51 @@
         .what = "cocuyo_doh's context pins its wall clock to instant zero by default, as before the ruling",
         .edits = .{
             .{ .file = "io/io_doh_channel_start.zig", .old = "    at_ns: u64,\n", .new = "    at_ns: u64 = 0,\n" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY32",
+        .what = "the twin's operation bound loses its type",
+        .edits = .{
+            .{ .file = "src/sim/constants.zig", .old = "pub const operations_max: usize = 4096;", .new = "pub const operations_max = 4096;" },
+        },
+        .caught_by = .{ .step = "test-sim" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY33",
+        .what = "the engine's default lookups lose their type",
+        .edits = .{
+            .{ .file = "io/constants.zig", .old = "pub const lookups_default: usize = 256;", .new = "pub const lookups_default = 256;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY34",
+        .what = "the length of a QUIC connection ID loses its type",
+        .edits = .{
+            .{ .file = "io/io_quic_constants.zig", .old = "pub const connection_id_bytes: usize = 8;", .new = "pub const connection_id_bytes = 8;" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_quic" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY35",
+        .what = "the bound of a DoH request loses its type",
+        .edits = .{
+            .{ .file = "io/io_doh_constants.zig", .old = "pub const doh_request_bytes_max: usize = 1536;", .new = "pub const doh_request_bytes_max = 1536;" },
+        },
+        .caught_by = .{ .step = "test-doh" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY36",
+        .what = "the length of a TLS record's header loses its type, in the DoH channel",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_constants.zig", .old = "pub const record_header_bytes: usize = 5;", .new = "pub const record_header_bytes = 5;" },
         },
         .caught_by = .{ .step = "test-cocuyo_doh" },
     },

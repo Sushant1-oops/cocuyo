@@ -3996,9 +3996,11 @@ to a narrow value an input sets, and a sum no limit bounds. This change fixes wh
 
 Each sum now has its type written where the narrow value is read, and the failover sum
 saturates. `core.constants.header_bytes` and `tcp_prefix_bytes` keep no type: both are used
-across the tree, and a type on either is the owner's to rule. `wire.header.message_len` still
-returns a `u16`, so a driver of a caller's own that adds the prefix's two octets to it has the
-engine's fault. Its comment and design §5 now say to widen it first.
+across the tree, and a type on either is the owner's to rule. The owner ruled on 2026-10-13, and
+since then both are a `usize` (A type on every integer constant, below).
+`wire.header.message_len` still returns a `u16`, so a driver of a caller's own that adds the
+prefix's two octets to it has the engine's fault. Its comment and design §5 now say to widen it
+first.
 
 A review of the same day found one more panic on a peer's octets in the plain session, and it is
 no sum. A client owed a Finished for each Finished it heard, and a server a whole flight for each
@@ -4861,3 +4863,210 @@ which the paragraphs above already describe as it stands:
 | TC28 | `cocuyo_doh`'s context has no anchors by default, as before the ruling | rule 6 | the no-default test of `io_doh_channel_start.zig`, `test-cocuyo_doh` | CAUGHT |
 | TC29 | `cocuyo_doh`'s context has a wall clock of zero by default, as before the ruling | rule 6 | the no-default test of `io_doh_channel_start.zig`, `test-cocuyo_doh` | CAUGHT |
 | TC30 | `cocuyo_doh`'s context pins its wall clock to instant zero by default, as before the ruling | rule 6 | the no-default test of `io_doh_channel_start.zig`, `test-cocuyo_doh` | CAUGHT |
+
+## A type on every integer constant
+
+2026-10-13. The owner ruled on the cause of the faults of 2026-10-10 (Sums at the most their
+operands reach): "Type header_bytes, tcp_prefix_bytes and the two fixed-size constants as usize,
+so a sum with a narrow value widens instead of overflowing." This change extends the ruling to
+every integer constant of the constants files of `src/` and `io/`. The extension is this
+change's own reading of the ruling, and the owner can overrule it (design §16 decision 40, §17
+question 36).
+
+The design changed first: §5, §12, §16 decision 40, and §17 questions 36 and 37. No model
+changed. No transition of §5 and no rule of §19 steps 13 and 14 reads the type of a constant.
+`zig build spec-lean` and the replays of `zig build test` agree.
+
+What the change does:
+
+- Each integer constant of the ten constants files has the type of what it names. Of the 349,
+  225 are a `usize`, 45 a `u16`, 36 a `u64`, 20 a `u8`, 13 a `u6`, 5 a `u4` and 5 a `u32`. A
+  probe compiled before and after printed the same value for each, so no named limit changed.
+- Four sites stopped compiling, and each was changed. Two shifts of a `u8` constant by
+  `octet_bits`, in the comptime checks of `src/wire/constants.zig` and in the twin's
+  `write_answer`, now shift a `u16`. `fill_quad` in `src/core/address_text.zig` narrows its
+  sum with `@intCast`, under its check and a new assertion that the sum is at most
+  `address_v6_groups`. The twin's `prefix_bytes` narrows its sum after the assertion that held
+  it already.
+- Thirteen sites now compute in a `usize`, and none changes a value at the named limits. Each
+  combines a narrow value with one of the constants `tls_record_header_bytes`,
+  `bits_per_octet`, `groups_per_quad`, `record_fixed_bytes`, `pointer_bytes`,
+  `opt_option_fixed_bytes`, `cookie_client_bytes` and `fuzz_question_name_bytes_min`. The
+  survey of the change compared the LLVM IR of 23 test units before and after to find them.
+- The engine's comptime checks of its index shifts add in `comptime_int`, and subtract nothing.
+  With `u6` shifts, the check of the receive's room subtracted in a `u6`. A shift past
+  `kind_shift` then stopped the build with an overflow, and not with the check's message.
+- `Resolver.loop_operations` has its type written, `u32`, as it was. The `usize` of
+  `servers_max` in its sum would have made it a `usize`.
+- The lint rule `typed-constants`, in `tools/lint/typed_constants.zig`, reads the syntax of
+  each constants file of `src/` and `io/`. It reports a constant whose type is `comptime_int`,
+  and a constant with no type whose value is integer-shaped. Design §16 decision 40 lists the
+  shapes it reads and the shapes it does not read. It is cocuyo's own rule, and
+  `tools/lint/main.zig` registers it after the eleven of pepegrillo. The canary tree holds a
+  constants file with one such constant. Over the tree as it was before the change, the rule
+  reports 332 constants: the 343 with no type, less the 11 aliases.
+- A test in each of the ten constants files reads the types. It fails on a public constant
+  that is a `comptime_int`, and it names the constant. So it catches an alias or a call that
+  gives a `comptime_int`, which the lint rule cannot read. The tests of each module run it, and
+  the count of each rose by one.
+
+The locals of type `usize` that 1765131 wrote stay, with their comments. Six are now redundant,
+since the constant of their sum is a `usize`: `start` in `src/wire/question.zig`, `length` in
+`deliver` of `io/io_tcp.zig`, `name_bytes` in `src/resolver/fixtures.zig`, `message_len` in
+`src/sim/sim_loop_perform.zig`, and `length` in `src/sim/sim_tls.zig` and in
+`src/sim/sim_quic.zig`. Three are not. `alpn_len` and `body_len` in `io/io_quic_plain.zig` are
+summed with a literal and with `frame_bytes`, a constant of that file with no type. `type_low`
+in `src/resolver/lookup_case_test.zig` is summed with a literal.
+
+So nine older rows stopped catching their fault: eight of the section of 2026-10-10, and CP14 of
+Check 5 read in place. Each put back a sum with the constant, and the constant now widens the
+sum. `zig build mutations` ran QO1 to QO3, QO8, QO9 and QO14 to QO16 against the typed tree,
+before the rows changed. Each was `NOT CAUGHT`. QO12 and QO13 were `CAUGHT` in the same run:
+the constant of their sums is in no constants file. The run of the whole lookup set found CP14
+`NOT CAUGHT` the same way. CP15 and CP16 write the octet's type themselves, and stayed `CAUGHT`.
+Each of the nine rows now also takes the type off its constant. That is `header_bytes` for QO1
+to QO3, QO8 and CP14, `tcp_prefix_bytes` for QO9 and QO16, and the twin's
+`tls_record_header_bytes` and `quic_item_header_bytes` for QO14 and QO15. The tests still catch
+the fault when the type and the local are both gone. The lint catches the first half alone
+(TY18), and so does the test of the constants file (TY27 to TY36). QO14 and QO15 take the type
+off a constant of the twin's constants file, and their step, `test-sim`, runs the test of that
+file. So each of the two rows also turns that test off, and the twin's overflow tests are then
+what catches it. DT29's text changed, since the constant it edits has its type written now.
+
+A type on a constant makes no sum narrower than it was. A sum of two types has the wider of the
+two, and a `comptime_int` took the type of the runtime value.
+
+The sums of two narrow runtime values that the survey of the change found, and how each is
+held inside its type. The rule cannot see these: no constant is in them.
+
+- `users` of a DoH channel's slot (`io/io_channel.zig`) and of a DoQ connection
+  (`io/io_request_connection.zig`) sums two counts in a `u16`. They are the requests that wait
+  and those on the channel or on a stream. A request is in one of the two at most, and the
+  engine holds `lookups` of them. A new assertion in each says the sum is at most `lookups`,
+  so it fits its type.
+- The ring of results (`io/io_results.zig`) and the ring of a TCP connection
+  (`io/io_tcp_queue_ring.zig`) each sum two positions in a `u16`: a head and a count, or a head
+  and a position. Each is below the ring's capacity. An engine makes that capacity `lookups`,
+  and two more for the TCP ring. New assertions say each operand is below the capacity, and
+  the capacity is at most `lookup_slots_max`, or that and `tls_records_entries_max`. So the
+  sum is at most 2046, or 2050. `init` holds `lookups` to `lookup_slots_max` already.
+- The records a TLS connection seals, `io/io_tls.zig`. `take_out` subtracts the head of its
+  buffer from the tail, and a new assertion says the head is not past the tail. It adds what
+  the session made to the tail. A new assertion says the session made no more than the room it
+  was given. So the sum is inside the buffer of `tls_records_out_bytes`. `pending` adds what
+  was sent of the head entry to the head of the buffer. The assertion after it holds the sum
+  below the entry's end, inside the same buffer.
+- What a send moved, `io/io_tcp_queue.zig` and `io/io_channel_link.zig`, in a `u16`. Each is
+  held by the assertion before it. A send moves no more than what is left. So the sum is at
+  most the length of the head entry, or of what the channel made.
+- The twin's delivery, `src/sim/sim_buffers.zig`: a prefix and a payload in a `u32`, in an
+  assertion. A new assertion says the payload is at most `transfer_bytes_max`, 2^30, as the
+  prefix is below it, so the sum fits.
+- The twin's `prefix_bytes`, `src/sim/sim_types.zig`: two reserves of a caller's options, in a
+  `u32`, with no bound before the sum. The typed constant at the head of the sum now makes it a
+  `usize`, and the assertion under it holds the sum below `transfer_bytes_max`.
+- The decimal octet of `parse_octet`, `src/core/address_text.zig`, in a `u16`: three digits at
+  most, so 999 at most. A new case of the malformed-quad test parses `1.2.3.999`, the largest
+  value the sum reaches, and the octet is refused. TY19 holds the sum in nine bits, which hold
+  511 at most, and that case catches it.
+- Two reach their limit in a test already, and nothing changed. The 255-octet tests hold a
+  name at its limit. The test of `fe80::1` and `fe80::2` finds a common prefix of 64 bits.
+- These are held by their own code, and nothing changed. The groups on the two sides of a
+  `::` sum to 16 at most in a `u8`, since a side holds eight groups at most
+  (`src/core/address_text.zig`). The test of `1:2:3:4:5:6:7::8` sums them to 8, where the
+  address is refused. The kinds of a server, three flags of one bit each, sum to 3 at most
+  (`src/core/config.zig`). The records an answer keeps are asserted at most `rdata_bytes_max`
+  before each is kept (`src/wire/response_take.zig`). So an offset and a length sum to that at
+  most (`src/wire/response_answers.zig`). The sealed ends and the sealed count are asserted
+  before each subtraction (`io/io_tcp_queue_ring.zig`, `io/io_tcp_queue.zig`). So is the
+  payload of a twin's buffer (`src/sim/sim_types.zig`). Two differences and a shift are in
+  tests alone, in `src/cache/cache_ttl_test.zig` and `src/cache/cache_keys.zig`.
+- Three sums meet a constant of a narrow type, the value of a protocol field, and each stays
+  inside that type. The twin's server octet is 53 and an index asserted below `servers_max`
+  (`src/sim/sim_network.zig`). A hexadecimal digit's value is 15 at most
+  (`src/core/address_text.zig`). The test of the source-port hint subtracts
+  `port_ephemeral_min` from a port asserted at or above it (`src/resolver/entropy.zig`).
+- Four shifts by a constant drop high bits with no check, and the width of each operand holds
+  it. The plain QUIC session shifts a packet number of four octets at most into a `u32`.
+  `src/core/address_text.zig` shifts a quad's octet and a group's digit into a `u16`.
+  `src/resolver/lookup_response.zig` shifts the extended RCODE, twelve bits, into a `u16`.
+
+Taking an assertion away changes nothing a test can see, as with Z10 and T11, so the new
+assertions have no rows. Each ran under the gate's tests, which pass.
+
+Two checks have no row in a set. The engine's comptime checks of its index shifts stop the
+build. The tool reads a compile error of this tree's own as a mutation whose text no longer
+applies. Each was shown by hand, by a probe that compiled `io/constants.zig` with one shift
+changed:
+
+- `receive_generation_shift` of 9 stops the build with "a receive's user_data has no room for a
+  thirty-two-bit generation", and so does 41. With the subtraction in a `u6`, 41 stopped it with
+  "overflow of integer type 'u6' with value '-1'".
+- `quic_incarnation_shift` of 9 stops the build with "a QUIC connection's user_data has no room
+  for a thirty-two-bit incarnation", and so does 40. With the sum in a `u6`, 40 stopped it with
+  "overflow of integer type 'u6' with value '72'".
+
+The runs, after the last edit to the code, each after running its checks once with nothing
+mutated:
+
+- The first run of the whole lookup set, before the review, ran 268 rows. 266 were `CAUGHT`.
+  CP14 was `NOT CAUGHT`, as above, before its row took the type off `header_bytes`. CZ28 "did
+  not compile": its step failed, but the output quoted a line of the test's source, which
+  holds a message in the compiler's form, and the tool read that line as the compiler's. The
+  same row on the tree before this change, at 07faffc, did not compile either.
+- `zig build mutations -- lookup` then ran the whole set again, after the review's changes:
+  281 rows, each `CAUGHT`. CP14, CZ28 and the thirty-one TY rows of the set are among them.
+  So the tool's reading of CZ28 is not stable, though its step fails each time. The table of
+  2026-10-11 records it `CAUGHT`.
+- `zig build mutations -- engine` ran the whole set, 170 rows, before the review, over the full
+  run TLC wrote on 2026-10-11, since the model has not changed. Each was `CAUGHT`: 94 by a
+  build step, QO8, QO9 and QO14 to QO16 among them, 54 by the short walks and 22 by the
+  picked walks. The full run first catches those 22 at the thirteen walks the committed picks
+  hold, so no walk is picked anew.
+- `zig build mutations -- engine` then ran the rows that the review's changes touched, over the
+  same full run: QO8, QO9 and QO16, whose constant is in `src/core/constants.zig`, QO14 and
+  QO15, which turn off the twin's test now, and TY32 to TY36. Each
+  of the ten was `CAUGHT` by its build step.
+
+Thirty-six new mutations, thirty-six `CAUGHT`. Ten older rows changed, the nine above and DT29,
+and each is `CAUGHT`. The review's changes to the rule moved the text that TY7, TY10 and TY15
+edit, so each of the three edits the new text.
+
+| # | Mutation | Check it breaks | Caught by | Status |
+| --- | --- | --- | --- | --- |
+| TY1 | the rule takes an integer literal for no integer | design §16 decision 40, a literal has no type | the literal and container fixtures, `test-tools` | CAUGHT |
+| TY2 | the rule takes a character literal for no integer | a character is an integer | the literal fixture, `test-tools` | CAUGHT |
+| TY3 | the rule reads no negation | a negated literal has no type | the literal fixture, `test-tools` | CAUGHT |
+| TY4 | the rule reads nothing inside parentheses | a grouped literal has no type | the literal fixture, `test-tools` | CAUGHT |
+| TY5 | the rule reads no arithmetic, bitwise or shift operator | a sum of constants has no type | the literal fixture, `test-tools` | CAUGHT |
+| TY6 | the rule reads no wrapping or saturating operator | a sum of constants has no type | the literal fixture, `test-tools` | CAUGHT |
+| TY7 | the rule reads no builtin | `@bitSizeOf` gives a `comptime_int` | the literal fixture, `test-tools` | CAUGHT |
+| TY8 | the rule reads no `maxInt` | `maxInt` gives a `comptime_int` | the literal fixture, `test-tools` | CAUGHT |
+| TY9 | the rule reads no `if` | an `if` of literals has no type | the literal fixture, `test-tools` | CAUGHT |
+| TY10 | the rule reports a constant whose type is written | a typed constant passes | the passing fixture, `test-tools` | CAUGHT |
+| TY11 | the rule takes an alias for an integer | an alias has the type of what it names | the passing fixture, `test-tools` | CAUGHT |
+| TY12 | the rule reads the constants of a function and of a block | the rule reads a container's members | the container fixture, `test-tools` | CAUGHT |
+| TY13 | the rule reads no member of a container inside the file | the rule reads a container's members | the container fixture, `test-tools` | CAUGHT |
+| TY14 | the rule's scope leaves `io/` out | the engine's constants carry a type | the scope test and the container fixture, `test-tools` | CAUGHT |
+| TY15 | the rule reads every Zig file, and not the constants files alone | the rule reads the constants files | the scope test, `test-tools` | CAUGHT |
+| TY16 | the rule is not registered | every rule checks the build | the registered-rules test, `test-tools` | CAUGHT |
+| TY17 | the canary holds no integer constant with no type | the canary shows the rule is live | the canary run, `lint` | CAUGHT |
+| TY18 | the header's length loses its type | the ruling of 2026-10-13 | the tree run, `lint` | CAUGHT |
+| TY19 | the decimal octet is summed in nine bits, which hold 511 at most | the octet's sum fits its type | the malformed-quad test's case of `1.2.3.999`, `test-core` | CAUGHT |
+| TY20 | the rule takes a written `comptime_int` for a type | a `comptime_int` is no type | the fixture of a switch, a block and `@abs`, `test-tools` | CAUGHT |
+| TY21 | the rule reads the value of `@as`, and not its type | `@as(comptime_int, ...)` has no type | the fixture of a switch, a block and `@abs`, `test-tools` | CAUGHT |
+| TY22 | the rule reads no `@abs` | `@abs` gives a `comptime_int` | the fixture of a switch, a block and `@abs`, `test-tools` | CAUGHT |
+| TY23 | the rule reads no `switch` | a `switch` of literals has no type | the fixture of a switch, a block and `@abs`, `test-tools` | CAUGHT |
+| TY24 | the rule reads no labeled block | a block that breaks with a sum has no type | the fixture of a switch, a block and `@abs`, `test-tools` | CAUGHT |
+| TY25 | the rule reads no piece split from a constants file | the rule reads `constants_<piece>.zig` | the test of the split pieces, `test-tools` | CAUGHT |
+| TY26 | the rule reads no file under a directory named `constants` | the rule reads `constants/<piece>.zig` | the test of the split pieces, `test-tools` | CAUGHT |
+| TY27 | the header's length is a call that gives a `comptime_int`, which the lint rule does not read | the test reads the type | the test of `src/core/constants.zig`, `test-core` | CAUGHT |
+| TY28 | the codec's pointer length loses its type | the test of the codec's constants | the test of `src/wire/constants.zig`, `test-wire` | CAUGHT |
+| TY29 | the state machine's transactions for a server lose their type | the test of the state machine's constants | the test of `src/resolver/constants.zig`, `test-resolver` | CAUGHT |
+| TY30 | the parser's line bound loses its type | the test of the parser's constants | the test of `src/config/constants.zig`, `test-config` | CAUGHT |
+| TY31 | the cache's slot bound loses its type | the test of the cache's constants | the test of `src/cache/constants.zig`, `test-cache` | CAUGHT |
+| TY32 | the twin's operation bound loses its type | the test of the twin's constants | the test of `src/sim/constants.zig`, `test-sim` | CAUGHT |
+| TY33 | the engine's default lookups lose their type | the test of the engine's constants | the test of `io/constants.zig`, `test-io` | CAUGHT |
+| TY34 | the length of a QUIC connection ID loses its type | the test of `cocuyo_quic`'s constants | the test of `io/io_quic_constants.zig`, `test-cocuyo_quic` | CAUGHT |
+| TY35 | the bound of a DoH request loses its type | the test of `doh`'s constants | the test of `io/io_doh_constants.zig`, `test-doh` | CAUGHT |
+| TY36 | the length of a TLS record's header loses its type, in the DoH channel | the test of `cocuyo_doh`'s constants | the test of `io/io_doh_channel_constants.zig`, `test-cocuyo_doh` | CAUGHT |

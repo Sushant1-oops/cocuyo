@@ -519,6 +519,8 @@ governs the read, and the framing rule is three lines in the example (§15 step 
 a `u16`, and a caller who adds the prefix's two octets to it widens it first. A sum made in
 sixteen bits overflows from a prefix of 65534, which a server chooses: the engine and the twin
 each had that panic until 2026-10-10 (docs/mutations.md, Sums at the most their operands reach).
+Since 2026-10-13 `constants.tcp_prefix_bytes` is a `usize`, so a sum with it is a `usize` (§16
+decision 40). A sum with a literal `2` is still a `u16`.
 
 ### Retry and timeout policy
 
@@ -1473,7 +1475,10 @@ lookup.
 ## 12. Named limits
 
 Each limit lives in a `constants.zig` with a doc comment saying why that number, and is never
-written at the use site. Shared limits live in `src/core/constants.zig`.
+written at the use site. Shared limits live in `src/core/constants.zig`. Each integer constant
+carries the type of what it names. The typed-constants rule of `zig build lint` and a test in
+each constants file hold it. A length, an offset or a count is a `usize`, so its sum with a
+narrow value is a `usize` too (§16 decision 40).
 
 | Constant | Value | Why |
 | --- | --- | --- |
@@ -2031,6 +2036,154 @@ step until `zig build test` passes.
       one.
 
     §21, §24.
+40. **Every integer constant of a constants file has a type, and a lint rule and a test hold it.**
+    Ruled by the owner on 2026-10-13 for four constants: "Type header_bytes, tcp_prefix_bytes and
+    the two fixed-size constants as usize, so a sum with a narrow value widens instead of
+    overflowing." This change reads the two fixed sizes as `question_fixed_bytes` and
+    `record_fixed_bytes`. It also extends the ruling to every integer constant of every constants
+    file of `src/` and `io/`. The extension is this change's own reading of the ruling, and the
+    owner can overrule it (§17 question 36).
+
+    The cause. An integer constant with no type is a `comptime_int`. A `comptime_int` added to a
+    runtime integer takes that integer's type. So `header_bytes + name.len` was a sum in the `u8`
+    that holds a name's length, and it overflowed from a name of 244 octets. A stream's prefix of
+    65534 overflowed a `u16` the same way. 1765131, of 2026-10-10, fixed each sum it found with a
+    local of type `usize` (docs/mutations.md, Sums at the most their operands reach). The cause
+    stayed: 343 of the 349 integer constants of the constants files were a `comptime_int`. The
+    owner's session read the aim of the ruling as the removal of that cause for the whole class.
+
+    The type of a constant is the type of what it names:
+
+    - A length, an offset, a size in octets, an alignment or a count of items is a `usize`. Its
+      sum with a narrow runtime value is then a `usize`. A default of an option is a `usize` too
+      when it is a length or a count. A field of a narrower type takes it at compile time.
+    - A time is a `u64`, in nanoseconds or in milliseconds. A TTL in seconds is a `u32`, the
+      width of a record's TTL (RFC 1035 §4.1.3).
+    - A value of a protocol field, a mask or a bit pattern has the type the code reads that field
+      into. A port is a `u16`, and `opcode_query` is a `u16` because `Header.opcode` gives one.
+    - A shift amount has the shift type of the integer the library shifts with it: `octet_bits`
+      shifts a `u16`, so it is a `u4`. Its value is known at compile time, so it can also shift
+      a wider integer.
+    - Any other value has the type of the value it meets at run time.
+    - An alias, a constant whose value is another constant, has no type written. It has the
+      type of what it names.
+
+    Of the 349 integer constants, 225 are now a `usize`, 45 a `u16`, 36 a `u64`, 20 a `u8`, 13
+    a `u6`, 5 a `u4` and 5 a `u32`. 336 have their type written, 2 get it from their value, and
+    11 are aliases. The value of each stays as it was, and no named limit changed.
+
+    Where the rule did not settle a type, this change chose it:
+
+    - `udp_payload_bytes_default` and `udp_payload_bytes_min` are sizes of a payload and the
+      value of a 16-bit OPT field. They are a `usize`, since the tree uses the default as a
+      buffer length and two aliases name it.
+    - `attempts_default`, `ndots_default`, `failover_retry_chance_default`, the engine's
+      `lookups_default`, `group_buffers_default`, `tcp_connections_default`,
+      `tcp_group_buffers_default` and `answers_default`, and the twin's `name_reserve_default` and
+      `control_reserve_default`, are counts or lengths. Each is a `usize`, and not the type of
+      the narrower field it is the default of.
+    - `scope_link_local`, `scope_site_local` and `scope_global` are a `u8`, as `scope_of` gives
+      one. RFC 4291 §2.7 makes the field four bits wide.
+    - `common_prefix_bits_v6_max`, `common_prefix_bits_v4_max` and both `bits_per_octet` count
+      bits, so each is a `usize`. Both `octet_bits` are a shift amount, so each is a `u4`.
+    - `decimal_base` multiplies a `u16` and `hex_alpha_value` is added to an octet. Each is a
+      `u8`, so neither widens the value it meets.
+    - `latency_wait_multiplier` multiplies a `u64` average, so it is a `u64`. So is the twin's
+      `quic_stream_step`, the step between two stream ids.
+    - The engine's three index shifts, `receive_generation_shift`, `tcp_incarnation_shift` and
+      `quic_incarnation_shift`, are a `u6`, and its three index masks are a `usize`.
+    - `group_id` and `tcp_group_id` are a `u16`, rotor's group id. The twin's
+      `generation_first` is a `u32`, as its loop's generation is.
+    - `hosts_comment_start`, a character, and `server_id_octet` are a `u8`.
+    - `idle_timeout_ms` and `fallback_delay_ms` are a `u64`, the type colibri reads them into.
+
+    What changed with the types:
+
+    - Four sites stopped compiling. Two shifts of a `u8` constant by `octet_bits`, each known at
+      compile time, now shift a `u16`. `fill_quad` in `src/core/address_text.zig` and
+      `prefix_bytes` in the twin now narrow their sum with `@intCast`, after the check or the
+      assertion that bounds it.
+    - Thirteen sites now compute in a `usize` where they computed in a narrower type. At the
+      named limits no value changed. No sum became narrower: a sum of two types has the wider
+      of the two, and a `comptime_int` took the type of the runtime value.
+    - The engine's comptime checks of its index shifts now add in `comptime_int`. A `u6` shift
+      too large for its room then stops the build with the check's message, and not with an
+      overflow of the `u6`.
+    - `Resolver.loop_operations` has its type written, `u32`, as it was. A `usize` limit in its
+      sum would have made it a `usize`.
+    - The constants are public, so a consumer's code that stores a narrow value and a constant
+      in a narrow place no longer compiles. The ruling makes this change to the API. Two
+      aliases outside the constants namespaces changed with their constants, from a
+      `comptime_int` to a `usize`: `request_bytes_max` of `cocuyo_quic`'s `Connection`, and
+      `output_bytes_max` of `cocuyo_doh`'s channel.
+    - Six locals of type `usize` that 1765131 wrote are now redundant: their constant widens the
+      sum. They stay, with their comments. Three are not redundant: their sum has a literal or a
+      constant outside a constants file.
+
+    Two checks hold the rule. The lint rule reads the syntax, and the test reads the types.
+
+    - The lint rule `typed-constants` (`tools/lint/typed_constants.zig`) reads each Zig file of
+      `src/` and `io/` whose name holds `constants`, and each Zig file under a directory named
+      `constants`. So it also reads the pieces that CLAUDE.md's split rule makes of a constants
+      file, with no list to update. It reads each constant that is a member of a container. It
+      reports such a constant when its written type is `comptime_int`.
+    - The lint rule also reports a constant with no type when its value is integer-shaped. An
+      integer or character literal is integer-shaped. So is an operator, a builtin that gives a
+      `comptime_int`, `@as(comptime_int, ...)` and a call of `maxInt` or `minInt`. So is an
+      `if` or a `switch` with an integer-shaped value in a branch, and a block with one in a
+      `break`. A branch of another type can make a false report. A written type then ends it.
+    - The lint rule does not report an alias. The canary tree of `zig build lint` holds one
+      constant that the rule reports.
+    - A test in each of the ten constants files reads the types. It reads the public
+      declarations of its file, and it fails on a `comptime_int` with the name of the constant.
+      It sees through an alias and a call, which the lint rule cannot do.
+
+    The lint rule is cocuyo's own, and the only rule of `tools/lint/` that is not pepegrillo's. A
+    rule in pepegrillo needs a commit there and a new pin, and this change made neither.
+
+    What the two checks do not catch:
+
+    - A sum of two narrow runtime values with no constant in it. Its type is the type of its
+      operands, and no constant widens it. docs/mutations.md lists each such sum found on
+      2026-10-13, with the bound that keeps it inside its type.
+    - A literal in a sum, as in `1 + label.len`. A literal is a `comptime_int` too.
+    - Some values that are a `comptime_int` have a shape that the lint rule does not read. These
+      are a call of another function, such as `std.math.log2(4096)`, an `orelse`, a `catch`, an
+      index into a tuple, and an alias of a constant with no type in a file the rule does not
+      read. The test catches each of these in a public constant. A private constant of such a
+      shape passes both checks. On 2026-10-13 the constants files hold no private integer
+      constant outside a `comptime` block, and a constant cannot leave that block.
+    - The test reads the public declarations at the top of its file. Only the lint rule reads a
+      constant in a container inside the file. Only the lint rule reads a new constants file,
+      until that file gets a test of its own.
+    - An integer constant outside a constants file. The lint rule, with its scope widened to
+      every Zig file of `src/` and `io/`, reports 210 such constants, test files apart. 85 of
+      them are in fixtures. The rule reads the shape, and not the type, so some of them have a
+      type already, from a typed constant in their value: `port_span` of
+      `src/resolver/entropy.zig` is a `u16`. `frame_bytes` of `io/io_quic_plain.zig` has no
+      type (§17 question 37). `bench/end_to_end/constants.zig` is outside both checks too: nothing
+      of it is linked into the library, and the gate does not compile it.
+
+    Rejected:
+
+    - Constants with no type, and a local of type `usize` at each sum, which is what 1765131
+      did. Each new sum needs its own local, and the next sum forgets it. After the first fix,
+      the audits of 2026-10-10 found the same fault in the engine, the plain QUIC session and
+      the twin.
+    - A lint rule over sums. A rule reads the syntax and not the types. In `start + name.len` it
+      cannot see that a variable holds a `u8`.
+    - A `comptime` block in each constants file, in place of the test. It stops the build at a
+      constant with no type. But `zig build mutations` reads a compile error as a mutation whose
+      text no longer applies. A row that takes the type off a constant then reports "did not
+      compile", and no row can show that the check works.
+    - The test alone, with no lint rule. The test reads public declarations alone, and it fails
+      only when the module's tests run. The lint rule reads each constant of the file, and it
+      names the line.
+    - The four constants the ruling names, and no others. The twin's `tls_record_header_bytes`
+      and `quic_item_header_bytes` had the same fault (docs/mutations.md, QO14 and QO15), and
+      they are in no list of four.
+
+    §5, §12, §13.
 
 ## 17. Questions for the owner
 
@@ -2233,6 +2386,28 @@ about.
     answer is no, the method, the README's sentence and the doc comments' mentions of it go,
     `start` asserts `held` of `io/io_context.zig`, and the tests ask `held`: the mutation rows
     stand, since each edits `held` or what it reads.
+
+### Asked on 2026-10-13, for the constants with a type
+
+§16 decision 40 records the ruling and this change's reading of it. Two questions stay open.
+
+36. **The extension.** The ruling named four constants. This change gave a type to every integer
+    constant of the constants files of `src/` and `io/`, and a lint rule holds it. Should the
+    extension stand? Recommended: yes. The twin's two header constants had the fault the four
+    had, and a list of four leaves the next such constant with no type. If the answer is no,
+    the rule and its rows go, and each constant but the four loses its type again.
+37. **The constants outside the constants files.** The lint rule, with its scope widened to every
+    Zig file of `src/` and `io/`, reports 210 integer constants of the other files, test files
+    apart. It reads their shape, so some of them have a type already, from a typed constant in
+    their value. One of them, `frame_bytes` of `io/io_quic_plain.zig`, has no type and is in a
+    sum that overflowed until 2026-10-10. Some are limits, which CLAUDE.md's non-negotiable 5
+    puts in a constants file: `ndots_limit` of `src/config/resolv_conf_options.zig`, the bounds
+    of `src/core/name_text.zig` and the code-point bounds of `io/io_doh_template.zig`. Should the rule read
+    every Zig file of `src/` and `io/`, or should those constants move into the constants
+    files? Recommended: move each limit into its module's constants file, as CLAUDE.md's
+    non-negotiable 5 asks. Give the rest a type where they are. The 32 of
+    `bench/end_to_end/constants.zig` are a third choice, since nothing of `bench/` is linked
+    into the library.
 
 ## 18. The cache
 

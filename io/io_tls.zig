@@ -285,6 +285,7 @@ fn take_out(self: anytype, at: u8) ?u16 {
     const connection = &self.connections[at];
     const state = &connection.tls;
     if (!connection.sending and state.out_head > 0) {
+        assert(state.out_head <= state.out_tail);
         const kept = state.out_tail - state.out_head;
         std.mem.copyForwards(u8, state.out[0..kept], state.out[state.out_head..state.out_tail]);
         connection.queue.shift_ends(state.out_head);
@@ -294,6 +295,8 @@ fn take_out(self: anytype, at: u8) ?u16 {
     const room = state.out[state.out_tail..];
     if (room.len < Session.out_bytes_max) return null;
     const made = state.session.take_out(room);
+    // The session writes inside the room it is given, so the end is inside the buffer.
+    assert(made <= room.len);
     return state.out_tail + @as(u16, @intCast(made));
 }
 

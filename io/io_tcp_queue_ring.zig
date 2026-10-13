@@ -8,6 +8,8 @@
 //! out in the order they were sealed (RFC 9846 §5.3).
 const std = @import("std");
 const assert = std.debug.assert;
+const cocuyo = @import("cocuyo");
+const constants = @import("constants.zig");
 
 /// The slot an entry of the session's own records names: no table slot is this large.
 pub const records: u16 = std.math.maxInt(u16);
@@ -68,11 +70,22 @@ pub fn Queue(comptime capacity: u16) type {
 
         pub fn at(queue: *const Self, position: u16) Entry {
             assert(position < queue.count);
-            return queue.items[(queue.head + position) % capacity];
+            return queue.items[ring_index(queue.head, position)];
         }
 
         pub fn slot_at(queue: *Self, position: u16) *Entry {
-            return &queue.items[(queue.head + position) % capacity];
+            return &queue.items[ring_index(queue.head, position)];
+        }
+
+        /// Where the entry at `position` from the head is. The head and the position are each
+        /// below the capacity. An engine makes the capacity `lookups` and the session's own
+        /// entries, and `init` holds `lookups` to `lookup_slots_max`. So the sum is at most 2050,
+        /// in sixteen bits.
+        fn ring_index(head: u16, position: u16) u16 {
+            assert(head < capacity);
+            assert(position < capacity);
+            assert(capacity <= cocuyo.constants.lookup_slots_max + constants.tls_records_entries_max);
+            return (head + position) % capacity;
         }
 
         /// Whether `slot`'s query waits here.

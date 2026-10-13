@@ -11,9 +11,11 @@
 //!
 //!     path:line:column: error: [rule-name] message
 //!
-//! Every rule here is pepegrillo's, configured in the file named after it. The one rule cocuyo
-//! needs that no line scanner can check — that a module imports only what build/modules.zig gives
-//! it — is tools/graph_check.zig, which asks the compiler instead.
+//! Every rule here but one is pepegrillo's, configured in the file named after it. The exception
+//! is typed-constants, which is cocuyo's own and is written in full in its file
+//! (docs/design.md §16 decision 40). The one rule cocuyo needs that no line scanner can check —
+//! that a module imports only what build/modules.zig gives it — is tools/graph_check.zig, which
+//! asks the compiler instead.
 //!
 //! This tool is developer tooling. It is never linked into the library, so it allocates, reads the
 //! filesystem, and is exempt from the rules it enforces over `src/`.
@@ -34,6 +36,7 @@ const rules = .{
     @import("defer_order.zig"),
     @import("unreleased_acquire.zig"),
     @import("global_state.zig"),
+    @import("typed_constants.zig"),
 };
 
 const Linter = pepegrillo.lint.Linter(rules);
@@ -59,6 +62,7 @@ test "the registered rules are exactly the rules CLAUDE.md names" {
         "defer-order",
         "unreleased-acquire",
         "global-state",
+        "typed-constants",
     };
     try testing.expectEqual(expected.len, Linter.count);
     inline for (rules, 0..) |rule, index| {

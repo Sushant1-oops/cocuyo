@@ -27,13 +27,14 @@ const canary_rules = [_][]const u8{
     "defer-order",
     "unreleased-acquire",
     "global-state",
+    "typed-constants",
 };
 
 /// The most lines a hand-written file may hold (tools/lint/file_length.zig).
 const file_length_max_lines = 500;
 
-/// One violation of each Zig rule under `src/`, then enough comment lines to pass the file-length
-/// limit.
+/// One violation of each Zig rule under `src/` but typed-constants, which reads constants files
+/// alone, then enough comment lines to pass the file-length limit.
 const canary_source =
     \\const std = @import("std");
     \\const other = @import("/canary/other.zig");
@@ -61,6 +62,13 @@ const canary_source =
     \\}
     \\
 ++ "//\n" ** file_length_max_lines;
+
+/// A constants file whose one integer constant has no type, which the typed-constants rule
+/// refuses. The magic-numbers rule reads no file of this name.
+const canary_constants =
+    \\pub const canary_bytes = 4;
+    \\
+;
 
 /// A fence with no language, which the markdown rule refuses.
 const canary_markdown =
@@ -132,6 +140,7 @@ pub fn add(b: *std.Build, options: Options) *std.Build.Step {
 fn add_canary_tree(b: *std.Build) std.Build.LazyPath {
     const tree = b.addWriteFiles();
     _ = tree.add("src/resolver/canary.zig", canary_source);
+    _ = tree.add("src/resolver/constants.zig", canary_constants);
     _ = tree.add("docs/canary.md", canary_markdown);
     return tree.getDirectory();
 }

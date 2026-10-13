@@ -51,7 +51,11 @@ pub fn Connection(comptime Quic: type, comptime lookups: u16) type {
 
         /// How many requests are on it: waiting, and with a stream.
         pub fn users(self: *const Self) u16 {
-            return self.queue_len + self.streams;
+            const count = self.queue_len + self.streams;
+            // A request waits in the queue or has a stream, never both, and the engine holds
+            // `lookups` requests. So the sum fits its sixteen bits.
+            assert(count <= lookups);
+            return count;
         }
 
         /// A new opening: everything reset but the incarnation, the transport's secrets wiped.

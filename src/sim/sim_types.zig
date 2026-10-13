@@ -355,7 +355,7 @@ pub fn prefix_bytes(options: GroupOptions) u32 {
     assert(options.name_reserve >= @sizeOf(Address));
     const prefix = constants.prefix_head_bytes + options.name_reserve + options.control_reserve;
     assert(prefix < constants.transfer_bytes_max);
-    return prefix;
+    return @intCast(prefix);
 }
 
 pub fn payload_capacity(buffer_bytes: u32, options: GroupOptions) u32 {

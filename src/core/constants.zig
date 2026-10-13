@@ -5,208 +5,209 @@
 //! Durations are spelled out in nanoseconds rather than built from `std.time.ns_per_s`, because
 //! nothing under `src/` may name a clock (non-negotiable 4) and `std.time` is flagged whole. The
 //! arithmetic is in each doc comment.
+const std = @import("std");
 
 /// The DNS header: id, flags, and four section counts, two octets each (RFC 1035 §4.1.1).
-pub const header_bytes = 12;
+pub const header_bytes: usize = 12;
 
 /// The question section's fixed part after the qname: qtype and qclass, two octets each
 /// (RFC 1035 §4.1.2).
-pub const question_fixed_bytes = 4;
+pub const question_fixed_bytes: usize = 4;
 
 /// A record's fixed part after the owner name: type, class, TTL and rdlength (RFC 1035 §4.1.3).
-pub const record_fixed_bytes = 10;
+pub const record_fixed_bytes: usize = 10;
 
 /// The largest message that can be framed: the TCP length prefix is two octets (RFC 7766 §8).
-pub const message_bytes_max = 65535;
+pub const message_bytes_max: usize = 65535;
 
 /// The TCP length prefix itself, which precedes every message on a stream (RFC 7766 §8).
-pub const tcp_prefix_bytes = 2;
+pub const tcp_prefix_bytes: usize = 2;
 
 /// The UDP payload size cocuyo advertises in OPT by default. 1232 is the widely recommended value
 /// that keeps a response inside the smallest IPv6 MTU without fragmenting; recalled, not measured.
-pub const udp_payload_bytes_default = 1232;
+pub const udp_payload_bytes_default: usize = 1232;
 
 /// The smallest payload size a requestor may advertise: 512 is the pre-EDNS0 limit every server
 /// already honours (RFC 6891 §6.2.3).
-pub const udp_payload_bytes_min = 512;
+pub const udp_payload_bytes_min: usize = 512;
 
 /// The largest query cocuyo builds: the header, a maximal qname, qtype and qclass, an OPT record
 /// carrying the largest COOKIE option and a Padding option, padded to a whole block, and the TCP
 /// length prefix. 12 + 255 + 4 + 55 + 4 is 330, padded to 384, and 2 more (docs/design.md §21).
-pub const query_bytes_max = 386;
+pub const query_bytes_max: usize = 386;
 
 /// A query to a TLS server is padded to a multiple of this many octets: "Clients SHOULD pad
 /// queries to the closest multiple of 128 octets" (RFC 8467 §4.1).
-pub const padding_block_bytes = 128;
+pub const padding_block_bytes: usize = 128;
 
 /// An EDNS(0) option's header: its code and its length, two octets each (RFC 6891 §6.1.2).
-pub const opt_option_header_bytes = 4;
+pub const opt_option_header_bytes: usize = 4;
 
 /// The OPT pseudo-record's fixed part: the root owner name, type, class, TTL and the rdlength.
 /// 1 + 2 + 2 + 4 + 2 (RFC 6891 §6.1.2).
-pub const opt_record_bytes = 11;
+pub const opt_record_bytes: usize = 11;
 
 /// The OPT record with a COOKIE at its longest (RFC 7873 §4), before any padding: the fixed
 /// part, the option's code and length, a client cookie and a 32-octet server cookie.
-pub const opt_record_bytes_max = opt_record_bytes + cookie_option_bytes_max;
+pub const opt_record_bytes_max: usize = opt_record_bytes + cookie_option_bytes_max;
 
 /// A COOKIE option at its longest: a 4-octet option header, then 8 + 32 octets of cookie.
-pub const cookie_option_bytes_max = opt_option_header_bytes + cookie_client_bytes + cookie_server_bytes_max;
+pub const cookie_option_bytes_max: usize = opt_option_header_bytes + cookie_client_bytes + cookie_server_bytes_max;
 
 /// The client cookie is fixed at eight octets; the server's is eight to thirty-two
 /// (RFC 7873 §4).
-pub const cookie_client_bytes = 8;
-pub const cookie_server_bytes_min = 8;
-pub const cookie_server_bytes_max = 32;
+pub const cookie_client_bytes: usize = 8;
+pub const cookie_server_bytes_min: usize = 8;
+pub const cookie_server_bytes_max: usize = 32;
 
 /// A name in wire form, counting every length octet and the root (RFC 1035 §2.3.4).
-pub const name_bytes_max = 255;
+pub const name_bytes_max: usize = 255;
 
 /// One label (RFC 1035 §2.3.4).
-pub const label_bytes_max = 63;
+pub const label_bytes_max: usize = 63;
 
 /// The most labels a name can hold: a name is 255 octets and a label costs at least two of them,
 /// one length octet and one byte.
-pub const labels_max = 128;
+pub const labels_max: usize = 128;
 
 /// A name in presentation form, which escapes: four bytes per wire byte at worst, `\255`.
-pub const name_text_bytes_max = 1020;
+pub const name_text_bytes_max: usize = 1020;
 
 /// The most compression pointers one name may chase. A legal encoder needs none, every hop must
 /// point strictly backwards, and 16 is slack over any real one (RFC 1035 §4.1.4).
-pub const compression_hops_max = 16;
+pub const compression_hops_max: usize = 16;
 
 /// The most CNAMEs one lookup may follow, across messages as well as inside one. Matches the chain
 /// length BIND allows; recalled, not measured.
-pub const cname_hops_max = 8;
+pub const cname_hops_max: usize = 8;
 
 /// The most records one message walk reads, whatever the count fields claim. A count is never a
 /// reason to read (non-negotiable 6).
-pub const records_max = 64;
+pub const records_max: usize = 64;
 
 /// The most addresses one lookup keeps. A larger round-robin name sets `Answer.truncated`;
 /// docs/design.md §17.4 records that this number is not measured.
-pub const addresses_max = 16;
+pub const addresses_max: usize = 16;
 
 /// The most addresses one `AddressLookup` keeps: both families' `addresses_max`, bounded the way
 /// one answer is, with `truncated` past it (docs/design.md §19 step 14). It is also the most the
 /// ordering of step 15 sorts.
-pub const address_lookup_addresses_max = 2 * addresses_max;
+pub const address_lookup_addresses_max: usize = 2 * addresses_max;
 
 /// The most names a reverse lookup keeps. One, because that is what a PTR lookup returns in
 /// practice, and `Answer.truncated` says when more existed (docs/design.md §17.2).
-pub const ptr_names_max = 1;
+pub const ptr_names_max: usize = 1;
 
 /// The most records of one type a lookup keeps in its rdata buffer, for every type that is not an
 /// address or a PTR name: half `records_max`, which is what one answer section holds of one type
 /// in practice, with `truncated` set past it (docs/design.md §19 step 9).
-pub const records_kept_max = 32;
+pub const records_kept_max: usize = 32;
 
 /// The rdata buffer of one lookup: one UDP payload of `udp_payload_bytes_default` with room for
 /// the names written out in full on the way in, each of which can grow from a two-octet pointer
 /// to `name_bytes_max`. A TCP answer that does not fit sets `truncated` (docs/design.md §19).
-pub const rdata_bytes_max = 2048;
+pub const rdata_bytes_max: usize = 2048;
 
 /// The most servers a configuration may name. glibc's MAXNS is 3; 8 leaves room and still bounds
 /// every loop over the list.
-pub const servers_max = 8;
+pub const servers_max: usize = 8;
 
 /// The sources a name is looked up in, the hosts file and DNS, so an order names each at most
 /// once (docs/design.md §19 step 11).
-pub const lookup_sources_max = 2;
+pub const lookup_sources_max: usize = 2;
 
 /// The hosts table (`hosts.zig`): the most entries kept, the most names on one line (the
 /// official name and its aliases), and the octets of wire names one storage holds, a `u16`
 /// offset each. More lines than a machine that is not a blocklist has; past them, dropped and
 /// said so (docs/design.md §19 step 11).
-pub const hosts_entries_max = 1024;
-pub const hosts_names_per_entry_max = 8;
-pub const hosts_names_bytes_max = 65536;
+pub const hosts_entries_max: usize = 1024;
+pub const hosts_names_per_entry_max: usize = 8;
+pub const hosts_names_bytes_max: usize = 65536;
 
 /// Server failover (docs/design.md §19 step 12): a server that failed to answer is asked last,
 /// and asked first again one query in `failover_retry_chance_default` once
 /// `failover_retry_delay_ns_default` has passed since it failed. Both are c-ares's defaults.
 /// A chance of zero never retries.
-pub const failover_retry_chance_default = 10;
-pub const failover_retry_delay_ns_default = 5_000_000_000;
+pub const failover_retry_chance_default: usize = 10;
+pub const failover_retry_delay_ns_default: u64 = 5_000_000_000;
 
 /// The most search-list entries a configuration may name. glibc's MAXDNSRCH; recalled, not
 /// measured.
-pub const search_max = 6;
+pub const search_max: usize = 6;
 
 /// The most candidates one lookup tries: every search entry, plus the name as it was asked.
-pub const candidates_max = search_max + 1;
+pub const candidates_max: usize = search_max + 1;
 
 /// The default number of passes over the server list (`resolv.conf` attempts).
-pub const attempts_default = 2;
+pub const attempts_default: usize = 2;
 
 /// The most passes a configuration may ask for, which bounds the retry loop.
-pub const attempts_max = 5;
+pub const attempts_max: usize = 5;
 
 /// The default dot count that decides whether the name or the search list is tried first
 /// (`resolv.conf` ndots).
-pub const ndots_default = 1;
+pub const ndots_default: usize = 1;
 
 /// The default wait for a server that has not been measured yet: 2 seconds, the default of
 /// `ARES_OPT_TIMEOUTMS`, c-ares's, read from its features page, not measured. A server waits it
 /// until it has 3 samples (docs/design.md §5). It was 5 seconds, the `resolv.conf` default,
 /// until 2026-10-09. 2 * 1_000_000_000.
-pub const timeout_ns_default = 2_000_000_000;
+pub const timeout_ns_default: u64 = 2_000_000_000;
 
 /// The default cap on every wait, measured or doubled per pass: 5 seconds, the ceiling
 /// `ARES_OPT_MAXTIMEOUTMS` changes, c-ares's, read from its features page, not measured
 /// (docs/design.md §5). 5 * 1_000_000_000.
-pub const timeout_ns_max_default = 5_000_000_000;
+pub const timeout_ns_max_default: u64 = 5_000_000_000;
 
 /// The most a configuration's cap on the wait may be: 30 seconds, which is `resolv.conf(5)`'s
 /// cap on `timeout:` too, so any wait a file asks for fits under it. It was the default cap
 /// until 2026-10-09. 30 * 1_000_000_000.
-pub const timeout_ns_max = 30_000_000_000;
+pub const timeout_ns_max: u64 = 30_000_000_000;
 
 /// The floor under every wait, measured or configured: 250 milliseconds, c-ares's, read from its
 /// features page, not measured. The page gives it as roughly a round trip to the far side of the
 /// world, which leaves an upstream server time to recurse. A configuration's cap below it wins,
 /// since the cap is the caller's (docs/design.md §5). 250 * 1_000_000.
-pub const timeout_ns_min = 250_000_000;
+pub const timeout_ns_min: u64 = 250_000_000;
 
 /// The default cap on every TTL a cache keeps, `Config.cache_ttl_seconds_max`: an hour, which is
 /// c-ares's default (docs/design.md §18), so a consumer replacing it sees the same ceiling.
 /// "Values SHOULD be capped on the order of days to weeks, with a recommended cap of 604,800
 /// seconds (7 days)" (RFC 8767 §4), so an hour is inside it. Here because `Config` and the cache
 /// both read it (§16 decision 37). 60 * 60.
-pub const cache_ttl_seconds_max_default = 3600;
+pub const cache_ttl_seconds_max_default: u32 = 3600;
 
 /// The most `Config.cache_ttl_seconds_max` may be, and the longest cap a cache takes: seven days.
 /// "Values SHOULD be capped on the order of days to weeks, with a recommended cap of 604,800
 /// seconds (7 days)" (RFC 8767 §4), so no configuration keeps an answer longer than the cap the
 /// RFC recommends. The owner's ruling of 2026-10-11 (docs/design.md §16 decision 37).
 /// 7 * 24 * 60 * 60.
-pub const cache_ttl_seconds_max = 604_800;
+pub const cache_ttl_seconds_max: u32 = 604_800;
 
 /// The IANA Dynamic port range, which the source-port hint is drawn from (RFC 6335 §6).
-pub const port_ephemeral_min = 49152;
-pub const port_ephemeral_max = 65535;
+pub const port_ephemeral_min: u16 = 49152;
+pub const port_ephemeral_max: u16 = 65535;
 
 /// The port a DNS server listens on (RFC 1035 §4.2.1).
-pub const port_dns_default = 53;
+pub const port_dns_default: u16 = 53;
 
 /// The port a DNS-over-TLS server listens on, unless client and server agree on another
 /// (RFC 7858 §3.1).
-pub const port_dns_tls_default = 853;
+pub const port_dns_tls_default: u16 = 853;
 
 /// An SPKI pin is the SHA-256 of a DER SubjectPublicKeyInfo (RFC 7858 §4.2).
-pub const spki_pin_bytes = 32;
+pub const spki_pin_bytes: usize = 32;
 
 /// The pins one TLS server may carry: a primary pin and the backup RFC 7858 §4.2 asks to deploy
 /// with it, each with room to rotate. It is also chapulin's own bound (docs/design.md §21).
-pub const spki_pins_max = 4;
+pub const spki_pins_max: usize = 4;
 
 /// An IPv4 address, in octets: the "32 bit Internet address" an A record carries
 /// (RFC 1035 §3.4.1).
-pub const address_v4_bytes = 4;
+pub const address_v4_bytes: usize = 4;
 
 /// An IPv6 address, in octets (RFC 3596 §2.2 gives the AAAA rdata this length).
-pub const address_v6_bytes = 16;
+pub const address_v6_bytes: usize = 16;
 
 /// The prefix of an IPv4-mapped IPv6 address, `::ffff:0:0/96` (RFC 4291 §2.5.5.2): how an IPv4
 /// address is handed back under `v4_mapped`, and how the policy table of RFC 6724 §2.1 reads one
@@ -216,27 +217,27 @@ pub const v4_mapped_prefix = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff };
 /// An address in text (`address_text.zig`): the dotted quad's octet count (RFC 1035 §3.4.1) and
 /// the decimal digits one octet may hold.
 pub const address_v4_octets = address_v4_bytes;
-pub const address_v4_octet_digits_max = 3;
+pub const address_v4_octet_digits_max: usize = 3;
 
 /// The groups an IPv6 address holds in text (RFC 4291 §2.2 form 1), the hexadecimal digits one
 /// group may hold, and the octets one group covers.
-pub const address_v6_groups = 8;
-pub const address_v6_group_digits_max = 4;
-pub const address_v6_group_bytes = 2;
+pub const address_v6_groups: usize = 8;
+pub const address_v6_group_digits_max: usize = 4;
+pub const address_v6_group_bytes: usize = 2;
 
 /// The groups a trailing dotted quad fills (RFC 4291 §2.2 form 3), and the `::` of a compressed
 /// address in octets (form 2).
-pub const groups_per_quad = 2;
-pub const double_colon_bytes = 2;
+pub const groups_per_quad: usize = 2;
+pub const double_colon_bytes: usize = 2;
 
 /// The bases the text is written in: decimal for an octet, and hexadecimal for a group as a
 /// shift of one digit's bits, with the value the letter `a` stands for.
-pub const decimal_base = 10;
-pub const hex_digit_bits = 4;
-pub const hex_alpha_value = 10;
+pub const decimal_base: u8 = 10;
+pub const hex_digit_bits: u4 = 4;
+pub const hex_alpha_value: u8 = 10;
 
 /// The bits in an octet, so a shift by a whole octet names what it shifts by.
-pub const octet_bits = @bitSizeOf(u8);
+pub const octet_bits: u4 = @bitSizeOf(u8);
 
 comptime {
     if (address_v6_groups * address_v6_group_bytes != address_v6_bytes) {
@@ -245,11 +246,11 @@ comptime {
 }
 
 /// The most lookup slots one resolver table may hold, which bounds a handle's index.
-pub const lookup_slots_max = 1024;
+pub const lookup_slots_max: usize = 1024;
 
 /// The bit that tells an ASCII letter's cases apart. A case-insensitive comparison clears it
 /// (RFC 4343) and DNS-0x20 sets it at random (docs/design.md §7), which is the same bit twice.
-pub const ascii_case_bit = 0x20;
+pub const ascii_case_bit: u8 = 0x20;
 
 /// `Name.fold_word` folds eight octets at once. Each octet's low seven bits, plus a bias, put the
 /// octet's high bit on when the octet is at or past `'A'` (`0x80 - 'A'`) and when it is past
@@ -258,23 +259,23 @@ pub const word_low_bits: u64 = 0x7f7f7f7f7f7f7f7f;
 pub const word_high_bits: u64 = 0x8080808080808080;
 pub const word_bias_at_a: u64 = 0x3f3f3f3f3f3f3f3f;
 pub const word_bias_past_z: u64 = 0x2525252525252525;
-pub const word_high_to_case_shift = 2;
+pub const word_high_to_case_shift: u6 = 2;
 
 /// The class every query cocuyo sends carries: IN, the internet class (RFC 1035 §3.2.4).
-pub const class_internet = 1;
+pub const class_internet: u16 = 1;
 
 /// Type code zero, which "must never be allocated for ordinary use" (RFC 6895 §3.1).
-pub const type_code_none = 0;
+pub const type_code_none: u16 = 0;
 /// The codes RFC 6895 §3.1 keeps for query types and meta types, 128 to 255. A record of one of
 /// them is not a type whose rdata can be kept whole (RFC 3597 §2).
-pub const type_code_query_meta_first = 0x80;
-pub const type_code_query_meta_last = 0xFF;
+pub const type_code_query_meta_first: u16 = 0x80;
+pub const type_code_query_meta_last: u16 = 0xFF;
 
 /// The scopes RFC 6724 §3.1 compares, numbered as RFC 4291 §2.7 numbers a multicast address's
 /// scope field, with unicast link-local, site-local and global on the same values.
-pub const scope_link_local = 0x2;
-pub const scope_site_local = 0x5;
-pub const scope_global = 0xe;
+pub const scope_link_local: u8 = 0x2;
+pub const scope_site_local: u8 = 0x5;
+pub const scope_global: u8 = 0xe;
 
 /// The prefixes a scope is read from: link-local unicast `fe80::/10` (RFC 4291 §2.5.6),
 /// site-local unicast `fec0::/10` (§2.5.7), both under a ten-bit mask; multicast `ff00::/8`,
@@ -283,16 +284,16 @@ pub const scope_global = 0xe;
 pub const v6_link_local_prefix = [_]u8{ 0xfe, 0x80 };
 pub const v6_site_local_prefix = [_]u8{ 0xfe, 0xc0 };
 pub const v6_ten_bit_mask = [_]u8{ 0xff, 0xc0 };
-pub const v6_multicast_first_octet = 0xff;
-pub const v6_multicast_scope_mask = 0x0f;
+pub const v6_multicast_first_octet: u8 = 0xff;
+pub const v6_multicast_scope_mask: u8 = 0x0f;
 pub const v4_link_local_prefix = [_]u8{ 169, 254 };
-pub const v4_loopback_first_octet = 127;
+pub const v4_loopback_first_octet: u8 = 127;
 
 /// The most bits `CommonPrefixLen` counts (RFC 6724 §2.2): up to the source's prefix, which for
 /// IPv6 stops before the interface identifier of RFC 4291 §2.5.1, 64 bits, and for IPv4 is the
 /// whole address.
-pub const common_prefix_bits_v6_max = 64;
-pub const common_prefix_bits_v4_max = 32;
+pub const common_prefix_bits_v6_max: usize = 64;
+pub const common_prefix_bits_v4_max: usize = 32;
 
 /// One row of RFC 6724 §2.1's default policy table: a prefix written in full, its length in
 /// bits, and the precedence and label a longest-prefix match hands back.
@@ -300,7 +301,7 @@ pub const PolicyRow = struct { prefix: [address_v6_bytes]u8, bits: u8, precedenc
 
 /// RFC 6724 §2.1's default policy table, its nine rows in the RFC's order: `::1/128`, `::/0`,
 /// `::ffff:0:0/96`, `2002::/16`, `2001::/32`, `fc00::/7`, `::/96`, `fec0::/10`, `3ffe::/16`.
-pub const address_policy_rows = 9;
+pub const address_policy_rows: usize = 9;
 pub const address_policy_table = [address_policy_rows]PolicyRow{
     .{ .prefix = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, .bits = 128, .precedence = 50, .label = 0 },
     .{ .prefix = @splat(0), .bits = 0, .precedence = 40, .label = 1 },
@@ -314,7 +315,7 @@ pub const address_policy_table = [address_policy_rows]PolicyRow{
 };
 
 /// The bits of one octet, for walking a prefix bit by bit.
-pub const bits_per_octet = 8;
+pub const bits_per_octet: usize = 8;
 
 comptime {
     // The query bound must hold every part it is the sum of, or a maximal query would not fit the
@@ -332,4 +333,14 @@ comptime {
     if (cache_ttl_seconds_max_default < 1) @compileError("the default TTL cap caches nothing");
     if (cache_ttl_seconds_max_default > cache_ttl_seconds_max) @compileError("the default TTL cap exceeds the most");
     if (port_ephemeral_min >= port_ephemeral_max) @compileError("the port range is empty");
+}
+
+// A constant with no type is a `comptime_int`, which takes the type of a narrow runtime value it
+// meets in a sum. The lint rule reads the shape of each value, and this reads the type, so an
+// alias or a call that gives a `comptime_int` is caught here (docs/design.md §16 decision 40).
+test "each integer constant here has a type" {
+    inline for (@typeInfo(@This()).@"struct".decls) |declaration| {
+        const untyped = @TypeOf(@field(@This(), declaration.name)) == comptime_int;
+        try std.testing.expectEqualStrings("", if (untyped) declaration.name else "");
+    }
 }

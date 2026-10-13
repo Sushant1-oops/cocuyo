@@ -1421,7 +1421,7 @@
         .id = "DT29",
         .what = "the default wait is 5 seconds, as before 2026-10-09",
         .edits = .{
-            .{ .file = "src/core/constants.zig", .old = "pub const timeout_ns_default = 2_000_000_000;", .new = "pub const timeout_ns_default = 5_000_000_000;" },
+            .{ .file = "src/core/constants.zig", .old = "pub const timeout_ns_default: u64 = 2_000_000_000;", .new = "pub const timeout_ns_default: u64 = 5_000_000_000;" },
         },
         .caught_by = .{ .step = "test-core" },
     },
@@ -1727,6 +1727,7 @@
         .id = "QO1",
         .what = "the offset of a question's type is summed in the octet a name's length is held in",
         .edits = .{
+            .{ .file = "src/core/constants.zig", .old = "pub const header_bytes: usize = 12;", .new = "pub const header_bytes = 12;" },
             .{ .file = "src/wire/question.zig", .old = "    if (integer.read_u16(message, start + name.len) != kind.code()) return false;", .new = "    if (integer.read_u16(message, core.constants.header_bytes + name.len) != kind.code()) return false;" },
         },
         .caught_by = .{ .step = "test-wire" },
@@ -1736,6 +1737,7 @@
         .id = "QO2",
         .what = "the offset of a question's class is summed in the octet a name's length is held in",
         .edits = .{
+            .{ .file = "src/core/constants.zig", .old = "pub const header_bytes: usize = 12;", .new = "pub const header_bytes = 12;" },
             .{ .file = "src/wire/question.zig", .old = "    const class = integer.read_u16(message, start + name.len + constants.u16_bytes);", .new = "    const class = integer.read_u16(message, core.constants.header_bytes + name.len + constants.u16_bytes);" },
         },
         .caught_by = .{ .step = "test-wire" },
@@ -1745,6 +1747,7 @@
         .id = "QO3",
         .what = "both offsets of a question are summed in that octet, under a lookup",
         .edits = .{
+            .{ .file = "src/core/constants.zig", .old = "pub const header_bytes: usize = 12;", .new = "pub const header_bytes = 12;" },
             .{ .file = "src/wire/question.zig", .old = "    const start: usize = core.constants.header_bytes;\n    const end = start + section_bytes(name);", .new = "    const start = core.constants.header_bytes;\n    const end = start + section_bytes(name);" },
         },
         .caught_by = .{ .step = "test-resolver" },
@@ -2060,6 +2063,7 @@
         .id = "CP14",
         .what = "the offsets of a question's type and class, read before its name, are summed in the octet a name's length is held in",
         .edits = .{
+            .{ .file = "src/core/constants.zig", .old = "pub const header_bytes: usize = 12;", .new = "pub const header_bytes = 12;" },
             .{ .file = "src/wire/question.zig", .old = "    const start: usize = core.constants.header_bytes;\n    const end = start + section_bytes(name);", .new = "    const start = core.constants.header_bytes;\n    const end = start + section_bytes(name);" },
         },
         .caught_by = .{ .step = "test-wire" },
@@ -2260,6 +2264,285 @@
         .what = "a cache takes a cap past seven days",
         .edits = .{
             .{ .file = "src/cache/cache.zig", .old = "    return ttl_seconds_max >= 1 and ttl_seconds_max <= core.constants.cache_ttl_seconds_max;", .new = "    return ttl_seconds_max >= 1;" },
+        },
+        .caught_by = .{ .step = "test-cache" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY1",
+        .what = "the rule takes an integer literal for no integer",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "        .number_literal => is_integer_literal(tree, node),", .new = "        .number_literal => false," },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY2",
+        .what = "the rule takes a character literal for no integer",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "        .char_literal => true,", .new = "        .char_literal => false," },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY3",
+        .what = "the rule reads no negation",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "        .negation, .negation_wrap, .bit_not => integer_shaped(tree, tree.nodeData(node).node, depth + 1),", .new = "        .negation, .negation_wrap, .bit_not => false," },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY4",
+        .what = "the rule reads nothing inside parentheses",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "        .grouped_expression => integer_shaped(tree, tree.nodeData(node).node_and_token[0], depth + 1),", .new = "        .grouped_expression => false," },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY5",
+        .what = "the rule reads no arithmetic, bitwise or shift operator",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "        .add, .sub, .mul, .div, .mod, .shl, .shr, .bit_and, .bit_or, .bit_xor => true,", .new = "        .add, .sub, .mul, .div, .mod, .shl, .shr, .bit_and, .bit_or, .bit_xor => false," },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY6",
+        .what = "the rule reads no wrapping or saturating operator",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "        .add_wrap, .sub_wrap, .mul_wrap, .add_sat, .sub_sat, .mul_sat, .shl_sat => true,", .new = "        .add_wrap, .sub_wrap, .mul_wrap, .add_sat, .sub_sat, .mul_sat, .shl_sat => false," },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY7",
+        .what = "the rule reads no builtin",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "        .builtin_call_two, .builtin_call_two_comma, .builtin_call, .builtin_call_comma => builtin_shaped(tree, node),", .new = "        .builtin_call_two, .builtin_call_two_comma, .builtin_call, .builtin_call_comma => false," },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY8",
+        .what = "the rule reads no `maxInt`",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "const comptime_int_functions = [_][]const u8{ \"maxInt\", \"minInt\" };", .new = "const comptime_int_functions = [_][]const u8{\"minInt\"};" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY9",
+        .what = "the rule reads no `if`",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "        .@\"if\", .if_simple => if_shaped(tree, node, depth),\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY10",
+        .what = "the rule reports a constant whose type is written",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "    if (declaration.ast.type_node.unwrap()) |written| return names_comptime_int(tree, written);\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY11",
+        .what = "the rule takes an alias for an integer",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "        else => false,\n    };\n}", .new = "        .identifier, .field_access => true,\n        else => false,\n    };\n}" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY12",
+        .what = "the rule reads the constants of a function and of a block",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "            return self.check_members(container.ast.members);\n        }\n        ast.for_each_child(self.tree, node, self);", .new = "            return self.check_members(container.ast.members);\n        }\n        if (self.tree.fullVarDecl(node)) |declaration| self.check_declaration(declaration);\n        ast.for_each_child(self.tree, node, self);" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY13",
+        .what = "the rule reads no member of a container inside the file",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "            return self.check_members(container.ast.members);\n", .new = "            _ = container;\n            return;\n" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY14",
+        .what = "the rule's scope leaves `io/` out",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = ".include_directories = &.{ \"src\", \"io\" } },", .new = ".include_directories = &.{\"src\"} }," },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY15",
+        .what = "the rule reads every Zig file, and not the constants files alone",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "    return lint.paths.is_under(path, constants_name);", .new = "    return true;" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY16",
+        .what = "the rule is not registered",
+        .edits = .{
+            .{ .file = "tools/lint/main.zig", .old = "    @import(\"typed_constants.zig\"),\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY17",
+        .what = "the canary holds no integer constant with no type",
+        .edits = .{
+            .{ .file = "build/lint.zig", .old = "    _ = tree.add(\"src/resolver/constants.zig\", canary_constants);\n", .new = "    _ = canary_constants;\n" },
+        },
+        .caught_by = .{ .step = "lint" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY18",
+        .what = "the header's length loses its type",
+        .edits = .{
+            .{ .file = "src/core/constants.zig", .old = "pub const header_bytes: usize = 12;", .new = "pub const header_bytes = 12;" },
+        },
+        .caught_by = .{ .step = "lint" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY19",
+        .what = "the decimal octet is summed in nine bits, which hold 511 at most",
+        .edits = .{
+            .{ .file = "src/core/address_text.zig", .old = "    var value: u16 = 0;\n    for (text) |byte| {\n        if (byte < '0' or byte > '9') return null;", .new = "    var value: u9 = 0;\n    for (text) |byte| {\n        if (byte < '0' or byte > '9') return null;" },
+        },
+        .caught_by = .{ .step = "test-core" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY20",
+        .what = "the rule takes a written `comptime_int` for a type",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "    if (declaration.ast.type_node.unwrap()) |written| return names_comptime_int(tree, written);\n", .new = "    if (declaration.ast.type_node.unwrap()) |_| return false;\n" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY21",
+        .what = "the rule reads the value of `@as`, and not its type",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "    return parameters.len != 0 and names_comptime_int(tree, parameters[0]);", .new = "    return parameters.len != 0 and names_comptime_int(tree, parameters[1]);" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY22",
+        .what = "the rule reads no `@abs`",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "    \"@mod\",    \"@rem\",       \"@shlExact\", \"@shrExact\", \"@abs\",", .new = "    \"@mod\",    \"@rem\",       \"@shlExact\", \"@shrExact\"," },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY23",
+        .what = "the rule reads no `switch`",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "        .@\"switch\", .switch_comma => switch_shaped(tree, node, depth),\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY24",
+        .what = "the rule reads no labeled block",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "        .block, .block_semicolon, .block_two, .block_two_semicolon => block_shaped(tree, node, depth),\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY25",
+        .what = "the rule reads no piece split from a constants file",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "    if (std.mem.indexOf(u8, lint.paths.basename(path), constants_name) != null) return true;", .new = "    if (std.mem.endsWith(u8, path, \"constants.zig\")) return true;" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY26",
+        .what = "the rule reads no file under a directory named `constants`",
+        .edits = .{
+            .{ .file = "tools/lint/typed_constants.zig", .old = "    return lint.paths.is_under(path, constants_name);", .new = "    return false;" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY27",
+        .what = "the header's length is a call that gives a `comptime_int`, which the lint rule does not read",
+        .edits = .{
+            .{ .file = "src/core/constants.zig", .old = "pub const header_bytes: usize = 12;", .new = "pub const header_bytes = std.math.log2(4096);" },
+        },
+        .caught_by = .{ .step = "test-core" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY28",
+        .what = "the codec's pointer length loses its type",
+        .edits = .{
+            .{ .file = "src/wire/constants.zig", .old = "pub const pointer_bytes: usize = 2;", .new = "pub const pointer_bytes = 2;" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY29",
+        .what = "the state machine's transactions for a server lose their type",
+        .edits = .{
+            .{ .file = "src/resolver/constants.zig", .old = "pub const transactions_per_server_max: usize = 3;", .new = "pub const transactions_per_server_max = 3;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY30",
+        .what = "the parser's line bound loses its type",
+        .edits = .{
+            .{ .file = "src/config/constants.zig", .old = "pub const lines_max: usize = 256;", .new = "pub const lines_max = 256;" },
+        },
+        .caught_by = .{ .step = "test-config" },
+    },
+    .{
+        .section = "A type on every integer constant",
+        .id = "TY31",
+        .what = "the cache's slot bound loses its type",
+        .edits = .{
+            .{ .file = "src/cache/constants.zig", .old = "pub const slots_max: usize = 16384;", .new = "pub const slots_max = 16384;" },
         },
         .caught_by = .{ .step = "test-cache" },
     },

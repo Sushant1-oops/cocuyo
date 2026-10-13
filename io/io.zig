@@ -201,8 +201,9 @@ pub fn Resolver(comptime options: Options) type {
 
         /// What `Loop.Options.operations` needs for this engine: a send per lookup, a receive
         /// per server, a connect and a receive per connection, a receive and a send per QUIC
-        /// connection, one timer, and slack.
-        pub const loop_operations = @as(u32, options.lookups) + cocuyo.constants.servers_max +
+        /// connection, one timer, and slack. Its type is written, so the `usize` limits in the
+        /// sum do not change it from `u32` (docs/design.md §16 decision 40).
+        pub const loop_operations: u32 = @as(u32, options.lookups) + cocuyo.constants.servers_max +
             constants.loop_operations_per_connection * @as(u32, options.tcp_connections) +
             constants.loop_operations_per_quic_connection * @as(u32, quic_servers) +
             constants.loop_operations_per_channel * @as(u32, doh_servers) +

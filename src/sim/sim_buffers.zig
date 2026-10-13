@@ -115,6 +115,9 @@ pub fn write_delivery(
 /// payload after the prefix.
 pub fn read_delivery(buffer: []u8, payload_bytes: u32, options: types.GroupOptions) types.Delivery {
     const prefix = types.prefix_bytes(options);
+    // The prefix is below `transfer_bytes_max`, 2^30, and the payload is at most that. So the sum
+    // fits the thirty-two bits.
+    assert(payload_bytes <= constants.transfer_bytes_max);
     assert(buffer.len >= prefix + payload_bytes);
     const received: *const types.Received = @ptrCast(@alignCast(buffer[constants.prefix_head_bytes..][0..types.metadata_bytes]));
     return .{ .from = received.*, .bytes = buffer[prefix..][0..payload_bytes] };

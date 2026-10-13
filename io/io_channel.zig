@@ -135,7 +135,11 @@ pub fn Slot(comptime Doh: type, comptime lookups: u16) type {
         alternative: ?Doh.Alternative = null,
 
         pub fn users(self: *const @This()) u16 {
-            return self.queue_len + self.exchanges;
+            const count = self.queue_len + self.exchanges;
+            // A request waits in the queue or is an exchange, never both, and the engine holds
+            // `lookups` requests. So the sum fits its sixteen bits.
+            assert(count <= lookups);
+            return count;
         }
     };
 }

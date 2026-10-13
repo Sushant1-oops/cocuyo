@@ -193,10 +193,11 @@ The architecture depends on every rule in this section.
 - Lint: `zig build lint` — the cognitive-complexity score over `build.zig`, `build/`, `src/`,
   `tools/`, `examples/`, `bench/` and `io/`, then the `tools/lint` rules (heap, io, determinism,
   unbounded-loop, relative-import, markdown, file-length, magic-numbers, defer-order,
-  unreleased-acquire, global-state) over the tree and over a canary tree that holds one violation
-  of each, so a rule that stopped checking fails the build. Last, `tools/lint_coverage.zig`
-  requires every tracked file a rule or the score reads to be under a directory it walks or
-  handed to it by name, `test/`'s fixtures apart, so a directory left off the list fails too.
+  unreleased-acquire, global-state, typed-constants) over the tree and over a canary tree that
+  holds one violation of each, so a rule that stopped checking fails the build. Last,
+  `tools/lint_coverage.zig` requires every tracked file a rule or the score reads to be under a
+  directory it walks or handed to it by name, `test/`'s fixtures apart, so a directory left off
+  the list fails too.
 - Test: `zig build test` — the lint, the format check, the graph check, the consumer check, the
   README check, the hook check, the fill check, then every module's unit tests, the DoT and DoQ
   sessions' tests and a build of their examples, and the tools' own tests. Every change passes it
