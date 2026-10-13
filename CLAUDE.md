@@ -87,7 +87,10 @@ The architecture depends on every rule in this section.
 - Tests live in the file they test.
 - Prose is active voice and plain words: short sentences, one idea each, terms defined before use,
   lists for list-like content, no metaphors. A number recalled rather than measured says so where
-  it appears.
+  it appears. Write it in ASD-STE100 Simplified Technical English too: descriptive sentences of 25
+  words or fewer and procedural ones of 20 or fewer, one topic in each sentence, simple tenses, one
+  word for one meaning, no -ing form used as a noun or a modifier, and no noun cluster of more than
+  three words.
 - Every Markdown file must render on GitHub as written: real list markers only, pipes inside a
   table cell escaped as `\|`, fenced code blocks with a language, no definition lists, no LaTeX.
   `tools/lint/markdown.zig` checks it over `docs/`, `README.md`, `spec/README.md`,
