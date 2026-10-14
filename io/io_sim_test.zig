@@ -150,6 +150,29 @@ pub fn question(text: []const u8) cocuyo.Question {
     return cocuyo.Question.from_text(text, .a) catch unreachable;
 }
 
+/// Steps until the connection in the first slot is up and its queue has gone out. Then every
+/// query on it is sent, and its lookup waits for the answer.
+pub fn until_sent(rig: anytype) !void {
+    var rounds: usize = 0;
+    while (rounds < fixtures.until_rounds_max) : (rounds += 1) {
+        const connection = &rig.engine.connections[0];
+        if (connection.state == .up and connection.queue.count == 0 and !connection.sending) return;
+        _ = try rig.step(fixtures.channel_read_ns);
+    }
+    return error.NotSent;
+}
+
+/// The answer a scripted server that drops nothing writes to the stream query of `handle`'s
+/// lookup, framed by its length (RFC 1035 §4.2.2), into `out`. Returns the octets it took.
+pub fn framed_answer(engine: anytype, handle: cocuyo.Handle, out: []u8) !usize {
+    const prefix = cocuyo.constants.tcp_prefix_bytes;
+    const query = engine.send_buffers[handle.index][prefix..engine.send_lengths[handle.index]];
+    const server = rotor.Network.server_address(0);
+    const answer = rotor.server.respond(&.{}, &server, query, true, 0, out[prefix..]) orelse return error.NoAnswer;
+    cocuyo.wire.header.write_message_len(out[0..prefix], @intCast(answer.len));
+    return prefix + answer.len;
+}
+
 test "a lookup started on the engine is answered by the scripted server through the loop" {
     var rig: Rig = .{};
     try rig.init(1, .{ .{}, .{} }, .{ .servers = &.{} });

@@ -19,25 +19,12 @@ pub const Option = union(enum) {
     use_tcp,
 };
 
-/// The keywords, each with the limit its value is clamped to. The manual pages cap `ndots` at 15
-/// and `attempts` at 5, and cocuyo's own `attempts_max` is the same 5.
+/// The keywords, each with the limit its value is clamped to: `constants.ndots_limit`,
+/// `constants.timeout_seconds_limit` and cocuyo's own `attempts_max`, which is the manual pages' 5.
 const ndots_keyword = "ndots:";
 const timeout_keyword = "timeout:";
 const attempts_keyword = "attempts:";
 const rotate_keyword = "rotate";
-
-/// `resolv.conf(5)` caps ndots at 15.
-const ndots_limit = 15;
-
-/// `resolv.conf(5)` caps timeout at 30 seconds, which is also the most cocuyo's
-/// `Config.timeout_ns_max` may be, so the parser can raise the cap to any timeout it reads.
-const timeout_seconds_limit = 30;
-
-comptime {
-    if (timeout_seconds_limit * constants.ns_per_s > core.constants.timeout_ns_max) {
-        @compileError("a timeout the parser reads would not fit under any cap");
-    }
-}
 
 /// The base an option's value is written in.
 const decimal_base = 10;
@@ -46,11 +33,11 @@ pub fn parse(token: []const u8) ?Option {
     if (std.mem.eql(u8, token, rotate_keyword)) return .rotate;
     if (std.mem.eql(u8, token, constants.option_use_vc)) return .use_tcp;
     if (value_of(token, ndots_keyword)) |text| {
-        const ndots = number(text, ndots_limit) orelse return null;
+        const ndots = number(text, constants.ndots_limit) orelse return null;
         return .{ .ndots = @intCast(ndots) };
     }
     if (value_of(token, timeout_keyword)) |text| {
-        const seconds = number(text, timeout_seconds_limit) orelse return null;
+        const seconds = number(text, constants.timeout_seconds_limit) orelse return null;
         // A timeout of zero would make every query time out before it was sent, so it reads as
         // the smallest wait there is rather than as no wait.
         const clamped = @max(seconds, 1);
@@ -109,11 +96,11 @@ test "a value that is not a number is skipped" {
 }
 
 test "a value over the limit is clamped, not refused" {
-    try testing.expectEqual(Option{ .ndots = ndots_limit }, parse("ndots:99").?);
-    try testing.expectEqual(Option{ .ndots = ndots_limit }, parse("ndots:999999999999999999999").?);
+    try testing.expectEqual(Option{ .ndots = constants.ndots_limit }, parse("ndots:99").?);
+    try testing.expectEqual(Option{ .ndots = constants.ndots_limit }, parse("ndots:999999999999999999999").?);
     try testing.expectEqual(Option{ .attempts = core.constants.attempts_max }, parse("attempts:9").?);
     try testing.expectEqual(
-        Option{ .timeout_ns = timeout_seconds_limit * constants.ns_per_s },
+        Option{ .timeout_ns = constants.timeout_seconds_limit * constants.ns_per_s },
         parse("timeout:600").?,
     );
 }

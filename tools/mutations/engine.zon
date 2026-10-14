@@ -1057,16 +1057,16 @@
         .what = "a stream's length prefix and its own two octets are summed in the sixteen bits the prefix reads as",
         .edits = .{
             .{ .file = "src/core/constants.zig", .old = "pub const tcp_prefix_bytes: usize = 2;", .new = "pub const tcp_prefix_bytes = 2;" },
-            .{ .file = "io/io_tcp.zig", .old = "        const length: usize = cocuyo.message_len(connection.frame[0..prefix]);", .new = "        const length = cocuyo.message_len(connection.frame[0..prefix]);" },
+            .{ .file = "io/io_tcp_frame.zig", .old = "    const length: usize = cocuyo.message_len(connection.frame[start..][0..prefix]);", .new = "    const length = cocuyo.message_len(connection.frame[start..][0..prefix]);" },
         },
         .caught_by = .{ .step = "test-io" },
     },
     .{
         .section = "Sums at the most their operands reach",
         .id = "QO10",
-        .what = "a connection's frame holds tcp_message_bytes, with no room for the prefix beside the longest message",
+        .what = "a connection's frame has no room for the prefix beside the longest message",
         .edits = .{
-            .{ .file = "io/io_tcp.zig", .old = "        frame: [cocuyo.constants.tcp_prefix_bytes + message_bytes]u8 = undefined,", .new = "        frame: [message_bytes]u8 = undefined," },
+            .{ .file = "io/io_tcp.zig", .old = "        pub const frame_bytes = cocuyo.constants.tcp_prefix_bytes + message_bytes + room_bytes;", .new = "        pub const frame_bytes = message_bytes + room_bytes;" },
         },
         .caught_by = .{ .step = "test-io" },
     },
@@ -1589,5 +1589,215 @@
             .{ .file = "io/io_doh_channel_constants.zig", .old = "pub const record_header_bytes: usize = 5;", .new = "pub const record_header_bytes = 5;" },
         },
         .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB1",
+        .what = "a TLS connection's record buffer holds one record at its longest, and no chunk past it",
+        .edits = .{
+            .{ .file = "io/constants.zig", .old = "pub const tls_record_in_bytes: usize = tls_record_header_bytes + tls_record_body_bytes_max + tcp_chunk_bytes;", .new = "pub const tls_record_in_bytes: usize = tls_record_header_bytes + tls_record_body_bytes_max;" },
+            .{ .file = "io/constants.zig", .old = "    if (tls_record_in_bytes < tls_record_header_bytes + tls_record_body_bytes_max + tcp_chunk_bytes) {", .new = "    if (false and tls_record_in_bytes < tls_record_header_bytes + tls_record_body_bytes_max + tcp_chunk_bytes) {" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB2",
+        .what = "a frame in the clear holds the longest message and its prefix, and no chunk past them",
+        .edits = .{
+            .{ .file = "io/io_tcp.zig", .old = "        const room_bytes = if (Tls.enabled) constants.tls_frame_room_bytes else constants.tcp_frame_room_bytes;", .new = "        const room_bytes = if (Tls.enabled) constants.tls_frame_room_bytes else 0;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB3",
+        .what = "a frame over TLS holds a chunk past its partial message, and not a record's body",
+        .edits = .{
+            .{ .file = "io/io_tcp.zig", .old = "        const room_bytes = if (Tls.enabled) constants.tls_frame_room_bytes else constants.tcp_frame_room_bytes;", .new = "        const room_bytes = constants.tcp_frame_room_bytes;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB4",
+        .what = "a prefix that says more than the connection assembles is waited for, and does not fail it",
+        .edits = .{
+            .{ .file = "io/io_tcp_frame.zig", .old = "        if (too_long(connection, start)) {", .new = "        if (false and too_long(connection, start)) {" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB5",
+        .what = "a prefix that says exactly tcp_message_bytes fails the connection",
+        .edits = .{
+            .{ .file = "io/io_tcp_frame.zig", .old = "    return cocuyo.message_len(connection.frame[start..][0..prefix]) > @TypeOf(connection.*).message_bytes_max;", .new = "    return cocuyo.message_len(connection.frame[start..][0..prefix]) >= @TypeOf(connection.*).message_bytes_max;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB6",
+        .what = "the partial message after the whole ones stays where it is, and does not move to the frame's head",
+        .edits = .{
+            .{ .file = "io/io_tcp_frame.zig", .old = "    std.mem.copyForwards(u8, connection.frame[0..rest], connection.frame[start..connection.used]);\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB7",
+        .what = "the loop over the frame stops after 32 messages",
+        .edits = .{
+            .{ .file = "io/io_tcp_frame.zig", .old = "    while (delivered < constants.tcp_messages_per_frame_max) : (delivered += 1) {", .new = "    while (delivered < 32) : (delivered += 1) {" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB8",
+        .what = "the loop over the frame stops after 32 messages, and nothing asserts that no whole message is left",
+        .edits = .{
+            .{ .file = "io/io_tcp_frame.zig", .old = "    while (delivered < constants.tcp_messages_per_frame_max) : (delivered += 1) {", .new = "    while (delivered < 32) : (delivered += 1) {" },
+            .{ .file = "io/io_tcp_frame.zig", .old = "    assert(whole_len(connection, start) == null and !too_long(connection, start));\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB9",
+        .what = "the loop over the frame stops one message short of the most a frame holds",
+        .edits = .{
+            .{ .file = "io/io_tcp_frame.zig", .old = "    while (delivered < constants.tcp_messages_per_frame_max) : (delivered += 1) {", .new = "    while (delivered < constants.tcp_messages_per_frame_max - 1) : (delivered += 1) {" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB10",
+        .what = "the loop over the record buffer stops after 32 records",
+        .edits = .{
+            .{ .file = "io/io_tls.zig", .old = "    while (records < constants.tls_records_per_buffer_max) : (records += 1) {", .new = "    while (records < 32) : (records += 1) {" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB11",
+        .what = "the loop over the record buffer stops after 32 records, and nothing asserts that no whole record is left",
+        .edits = .{
+            .{ .file = "io/io_tls.zig", .old = "    while (records < constants.tls_records_per_buffer_max) : (records += 1) {", .new = "    while (records < 32) : (records += 1) {" },
+            .{ .file = "io/io_tls.zig", .old = "    assert((record_len(state.record_in[start..state.record_in_used]) catch unreachable) == 0);\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB12",
+        .what = "the loop over the record buffer stops one record short of the most the buffer holds",
+        .edits = .{
+            .{ .file = "io/io_tls.zig", .old = "    while (records < constants.tls_records_per_buffer_max) : (records += 1) {", .new = "    while (records < constants.tls_records_per_buffer_max - 1) : (records += 1) {" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB13",
+        .what = "the partial record after the whole ones stays where it is, and does not move to the buffer's head",
+        .edits = .{
+            .{ .file = "io/io_tls.zig", .old = "    std.mem.copyForwards(u8, state.record_in[0..rest], state.record_in[start..state.record_in_used]);\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB14",
+        .what = "a record the session refuses ends the loop, and the rest of its chunk stays in the buffer",
+        .edits = .{
+            .{ .file = "io/io_tls.zig", .old = "        if (!hear(self, at, state.record_in[start..][0..whole], now_ns) and connection.state != .closing) return;", .new = "        if (!hear(self, at, state.record_in[start..][0..whole], now_ns)) return;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB15",
+        .what = "a record whose message fails the connection is taken as heard, and the loop reads on",
+        .edits = .{
+            .{ .file = "io/io_tls.zig", .old = "            if (!frame_module.deliver(self, at, now_ns)) return false;", .new = "            _ = frame_module.deliver(self, at, now_ns);" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB16",
+        .what = "cocuyo_doh's copy of the engine's chunk is not the engine's chunk",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_constants.zig", .old = "pub const engine_chunk_bytes: usize = 2048;", .new = "pub const engine_chunk_bytes: usize = 4096;" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB17",
+        .what = "cocuyo_doh's copy of the engine's datagram buffer is not the engine's buffer",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_constants.zig", .old = "pub const datagram_bytes: usize = 2048;", .new = "pub const datagram_bytes: usize = 4096;" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB18",
+        .what = "cocuyo_doh's copy of cocuyo_quic's receive pool is not cocuyo_quic's",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_constants.zig", .old = "pub const receive_bytes: usize = 66_560;", .new = "pub const receive_bytes: usize = 67_584;" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB24",
+        .what = "cocuyo_doh's stream holds a record at its longest, and no chunk past it",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_constants.zig", .old = "pub const stream_bytes: usize = record_bytes_max + engine_chunk_bytes;", .new = "pub const stream_bytes: usize = record_bytes_max;" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB25",
+        .what = "the check of a prefix's length reads it before both its octets have come",
+        .edits = .{
+            .{ .file = "io/io_tcp_frame.zig", .old = "    if (connection.used - start < prefix) return false;\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB26",
+        .what = "the length of a whole message is read from a prefix before both its octets have come",
+        .edits = .{
+            .{ .file = "io/io_tcp_frame.zig", .old = "    if (connection.used - start < prefix) return null;\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB27",
+        .what = "a prefix too long over TLS closes the connection at once, its close_notify unsaid",
+        .edits = .{
+            .{ .file = "io/io_tcp_frame.zig", .old = "    if (tls_module.speaks(self)) tls_module.quit(self, at, now_ns) else tcp.fail(self, at, now_ns);", .new = "    tcp.fail(self, at, now_ns);" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB28",
+        .what = "a connection that quits stages no close_notify, and closes at once",
+        .edits = .{
+            .{ .file = "io/io_tls.zig", .old = "    connection.tls.session.close();\n    refuse(self, at, now_ns);", .new = "    refuse(self, at, now_ns);" },
+        },
+        .caught_by = .{ .step = "test-io" },
     },
 }

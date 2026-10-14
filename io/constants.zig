@@ -85,9 +85,22 @@ pub const drive_polls_per_lookup_max: usize = 2 * core.constants.servers_max * c
 /// over TLS a send of the session's own records (docs/design.md §21).
 pub const loop_operations_per_connection: usize = 3;
 
-/// The most whole messages taken out of one chunk, which bounds the framing loop. A chunk is one
-/// read, and a pipelined server can answer several queries in one.
-pub const tcp_messages_per_chunk_max: usize = 32;
+/// What a connection's frame holds past its partial message in the clear: one chunk. A connection
+/// takes a chunk whole before it hands over the messages the chunk ends. The chunk that ends one
+/// message can start the next (docs/design.md §19 step 13, the stream's rule 11).
+pub const tcp_frame_room_bytes: usize = tcp_chunk_bytes;
+
+/// What a connection's frame holds past its partial message over TLS: the body of one record at
+/// its longest. The session opens a whole record into the frame after the partial message.
+/// colibri asks for room as long as the record's body (RFC 9846 §5.2; §21, TLS rule 7).
+pub const tls_frame_room_bytes: usize = tls_record_body_bytes_max;
+
+/// The most whole messages a connection's frame holds at once, which bounds the loop over it.
+/// Each message is at least its two-octet prefix (RFC 1035 §4.2.2), and a frame over TLS is the
+/// longest. So the loop hands over every whole message, and none waits for a chunk that may not
+/// come (the stream's rule 11).
+pub const tcp_messages_per_frame_max: usize = (core.constants.tcp_prefix_bytes + tcp_message_bytes_max +
+    @max(tcp_frame_room_bytes, tls_frame_room_bytes)) / core.constants.tcp_prefix_bytes;
 
 /// A TLS record's header: its content type, two octets of legacy version and two of length
 /// (RFC 9846 §5.1), and where the length sits.
@@ -98,9 +111,10 @@ pub const tls_record_length_at: usize = 3;
 /// and 255 of expansion (RFC 9846 §5.2).
 pub const tls_record_body_bytes_max: usize = (1 << 14) + 256;
 
-/// What a TLS connection keeps of a record until the rest arrives: one at its longest, header and
-/// all (docs/design.md §21, TLS rule 7).
-pub const tls_record_in_bytes: usize = tls_record_header_bytes + tls_record_body_bytes_max;
+/// What a TLS connection keeps of the records it reads: one at its longest, header and all, and
+/// one chunk. The chunk that ends a record can start the next one. The connection takes the whole
+/// chunk before it hands the first record to the session (docs/design.md §21, TLS rule 7).
+pub const tls_record_in_bytes: usize = tls_record_header_bytes + tls_record_body_bytes_max + tcp_chunk_bytes;
 
 /// What sealing adds to a record: its header, the inner content type and the AEAD's 16-octet tag
 /// (RFC 9846 §5.2).
@@ -117,8 +131,10 @@ pub const tls_records_out_bytes: usize = 4096;
 /// in flight, and the one behind it, which every record made meanwhile joins (§21, TLS rule 2).
 pub const tls_records_entries_max: usize = 2;
 
-/// The most whole records handed to the session from one chunk, which bounds the framing loop.
-pub const tls_records_per_chunk_max: usize = 32;
+/// The most whole records a TLS connection's buffer holds at once, which bounds the loop over it.
+/// Each record is at least its five-octet header (RFC 9846 §5.1). So the loop hands every whole
+/// record to the session, and none waits for a chunk that may not come (TLS rule 7).
+pub const tls_records_per_buffer_max: usize = tls_record_in_bytes / tls_record_header_bytes;
 
 /// A client MUST NOT use a ticket more than seven days after it was issued (RFC 9846 §4.7.1).
 pub const tls_ticket_age_ns_max: u64 = 7 * 24 * 60 * 60 * 1_000_000_000;
@@ -182,6 +198,15 @@ comptime {
     }
     if (!@import("cocuyo").cache.slot_count_valid(cache_slots_default)) {
         @compileError("the cache size the README and the examples declare is one no cache takes");
+    }
+    // The chunk that ends one item can start the next, and the connection takes the whole chunk
+    // first. So each buffer holds a chunk past its partial item (§19 step 13, the stream's rule
+    // 11; §21, TLS rule 7).
+    if (tls_record_in_bytes < tls_record_header_bytes + tls_record_body_bytes_max + tcp_chunk_bytes) {
+        @compileError("a TLS connection's record buffer has no room for a chunk past a record");
+    }
+    if (tcp_frame_room_bytes < tcp_chunk_bytes or tls_frame_room_bytes < tls_record_body_bytes_max) {
+        @compileError("a frame has no room for what one take adds past its partial message");
     }
 }
 

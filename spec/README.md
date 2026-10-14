@@ -105,11 +105,13 @@ the old one draining beside the new. A TLS session is what it does to
 the queue: the records it makes, which are sealed as it makes them, and the steps its handshake
 takes, a flight to answer, the handshake's end or a failure, and later a KeyUpdate to answer or a
 ticket to keep. A kept ticket may lapse at any moment, which stands for its lifetime and the 7-day
-cap. It leaves out the timer, the bytes of a message, the TLS records' contents and the cache. Time
-moves in ticks, each the idle close's wait, and only when a deadline arrives or the caller lets a
-tick pass; a lookup waits two ticks. Two faults stand in for a kernel under pressure: the loop
-refuses every submission for the length of one event, as a full ring does, and every socket open
-fails for the length of one event, as a process with no descriptor left sees.
+cap. It leaves out the timer, the bytes of a message, the TLS records' contents and the cache.
+So the stream's rule 11 and TLS rule 7 are not in it, since they count octets. In the model a
+message reaches its lookup at the receive that brings it, and rule 11 asks the same of the code.
+Time moves in ticks, each the idle close's wait, and only when a deadline arrives or the caller
+lets a tick pass; a lookup waits two ticks. Two faults stand in for a kernel under pressure: the
+loop refuses every submission for the length of one event, as a full ring does, and every socket
+open fails for the length of one event, as a process with no descriptor left sees.
 
 TLC walks it breadth first (`zig build tla`) and checks these rules in every state and every
 event, and the channel's rules below:

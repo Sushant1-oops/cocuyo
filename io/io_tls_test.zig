@@ -1,6 +1,7 @@
 //! The engine over TLS on the twin (docs/design.md §21): a handshake between the connect and the
-//! first query, flights answered, a refused handshake failed over, a ticket kept and spent, a
-//! declined ticket answered by a full handshake, and an idle connection's `close_notify`. The
+//! first query, flights answered, a refused handshake failed over, a ticket kept and spent, and a
+//! declined ticket answered by a full handshake. Every whole record of a chunk is read with it. An
+//! idle connection says `close_notify`, and so does one that cannot read past a message. The
 //! session is the twin's (`rotor.tls`), whose records carry their plaintext unsealed; what only
 //! chapulin can show is chapulin's.
 const std = @import("std");
@@ -20,7 +21,16 @@ const Resolver = io.Resolver(.{
     .tcp_connections = fixtures.servers,
     .tls = rotor.tls.Session,
 });
-const Rig = sim_test.RigOf(Resolver);
+pub const Rig = sim_test.RigOf(Resolver);
+
+/// The same engine, whose connections assemble only a small message.
+const TinyRig = sim_test.RigOf(io.Resolver(.{
+    .lookups = fixtures.small_lookups,
+    .group_buffers = fixtures.group_buffers,
+    .tcp_connections = fixtures.servers,
+    .tcp_message_bytes = fixtures.tiny_message_bytes,
+    .tls = rotor.tls.Session,
+}));
 
 /// Both of the rig's servers known by a name, as a configuration names DoT servers.
 fn encrypt(rig: anytype) !void {
@@ -29,7 +39,7 @@ fn encrypt(rig: anytype) !void {
 }
 
 /// A rig whose servers speak TLS as `scripts` say, under a timeout long enough for any of them.
-fn start(rig: *Rig, seed: u64, scripts: [fixtures.servers]rotor.server.Script) !void {
+fn start(rig: anytype, seed: u64, scripts: [fixtures.servers]rotor.server.Script) !void {
     try encrypt(rig);
     try rig.init(seed, scripts, .{ .servers = &.{}, .timeout_ns = fixtures.stream_timeout_ns, .timeout_ns_max = fixtures.stream_timeout_ns, .failover_retry_chance = 0 });
     rig.use_test_contexts();
@@ -138,6 +148,200 @@ test "a length prefix of 65535 in a record's plaintext is waited for, and the co
     _ = try rig.step(fixtures.channel_read_ns);
     try testing.expect(connection.state == .up);
     try testing.expectEqual(@as(usize, prefix.len), connection.used);
+    try rig.deinit();
+}
+
+/// A lookup answered over TLS, which leaves the connection to the first server up, and its record
+/// buffer and its frame empty.
+pub fn up(rig: anytype, seed: u64) !void {
+    try start(rig, seed, .{ .{}, .{} });
+    _ = try rig.engine.start(question("example.com."), rig.loop.now());
+    _ = try rig.until_result();
+    _ = rig.engine.take(rig.loop.now());
+    const connection = &rig.engine.connections[0];
+    try testing.expect(connection.state == .up and connection.used == 0 and connection.tls.record_in_used == 0);
+}
+
+/// Writes a record of type `content` into `out`, and returns the record's octets. Its body is
+/// `body` octets: one message of zeros with its prefix, which is nobody's answer. The twin's
+/// session opens an application record's body as it is.
+fn record_of_zeros(out: []u8, content: u8, body: usize) usize {
+    const header = io.constants.tls_record_header_bytes;
+    const prefix = cocuyo.constants.tcp_prefix_bytes;
+    @memset(out[0 .. header + body], 0);
+    out[0] = content;
+    std.mem.writeInt(u16, out[rotor.constants.tls_record_version_at..][0..@sizeOf(u16)], rotor.constants.tls_legacy_version, .big);
+    std.mem.writeInt(u16, out[io.constants.tls_record_length_at..][0..@sizeOf(u16)], @intCast(body), .big);
+    std.mem.writeInt(u16, out[header..][0..prefix], @intCast(body - prefix), .big);
+    return header + body;
+}
+
+/// Gives `stream` to the connection in the first slot as the loop gives a stream: in chunks of
+/// `tcp_chunk_bytes`. It stops when the connection reads nothing more.
+fn take_in_chunks(rig: anytype, stream: []const u8) void {
+    const chunk_bytes = io.constants.tcp_chunk_bytes;
+    var chunks = std.mem.window(u8, stream, chunk_bytes, chunk_bytes);
+    while (chunks.next()) |chunk| {
+        const state = rig.engine.connections[0].state;
+        if (state != .up and state != .closing) return;
+        io.tls.take(&rig.engine, 0, chunk, rig.loop.now());
+    }
+}
+
+/// Two records back to back, of the types `contents` names and of the bodies `bodies` gives.
+const BackToBack = struct {
+    octets: [fixtures.records_back_to_back * (io.constants.tls_record_header_bytes + io.constants.tls_record_body_bytes_max)]u8 = undefined,
+    len: usize = 0,
+
+    fn init(self: *BackToBack, contents: [fixtures.records_back_to_back]u8, bodies: [fixtures.records_back_to_back]usize) []const u8 {
+        for (contents, bodies) |content, body| self.len += record_of_zeros(self.octets[self.len..], content, body);
+        return self.octets[0..self.len];
+    }
+};
+
+test "a chunk that ends a record and starts the next keeps the connection up" {
+    // The chunks of a stream do not stop where its records stop (TLS rule 7). Two records come
+    // back to back, and the ninth chunk ends the first and starts the second. The first body is
+    // the longest TLS allows, or a full record of AES-GCM (RFC 9846 §5.2).
+    const application = rotor.constants.tls_content_application;
+    for ([_]usize{ io.constants.tls_record_body_bytes_max, fixtures.full_record_body_bytes }) |body| {
+        var rig: Rig = .{};
+        try up(&rig, 52);
+        var stream: BackToBack = .{};
+        take_in_chunks(&rig, stream.init(.{ application, application }, .{ body, fixtures.short_record_body_bytes }));
+        // Both records came whole, and the message in each went to the table.
+        const connection = &rig.engine.connections[0];
+        try testing.expect(connection.state == .up);
+        try testing.expectEqual(@as(usize, 0), connection.tls.record_in_used);
+        try testing.expectEqual(@as(usize, 0), connection.used);
+        try rig.deinit();
+    }
+}
+
+test "a record the session refuses leaves the rest of its chunk unread, and room for the next" {
+    // The twin's session refuses a handshake record once up, and stages its alert. The connection
+    // closes once the alert has gone, and reads nothing more meanwhile (TLS rules 4 and 5). The
+    // rest of the chunk that ended the record leaves the buffer with it.
+    var rig: Rig = .{};
+    try up(&rig, 53);
+    const body = io.constants.tls_record_body_bytes_max;
+    var stream: BackToBack = .{};
+    take_in_chunks(&rig, stream.init(.{ rotor.constants.tls_content_handshake, rotor.constants.tls_content_application }, .{ body, body }));
+    const connection = &rig.engine.connections[0];
+    try testing.expect(connection.state == .closing);
+    try testing.expectEqual(@as(usize, 0), connection.tls.record_in_used);
+    try rig.deinit();
+}
+
+test "a record opens into the frame after a partial message at its longest" {
+    // The frame holds all but the last octet of a message of 65535. A record ends it and carries
+    // a whole message after it. The record's plaintext fits after the partial message.
+    var rig: Rig = .{};
+    try up(&rig, 54);
+    const connection = &rig.engine.connections[0];
+    const prefix = cocuyo.constants.tcp_prefix_bytes;
+    const partial = prefix + cocuyo.constants.message_bytes_max - 1;
+    @memset(connection.frame[0..partial], 0);
+    std.mem.writeInt(u16, connection.frame[0..prefix], cocuyo.constants.message_bytes_max, .big);
+    connection.used = partial;
+    // The record's body: the message's last octet, then a message of zeros with its prefix.
+    const body = fixtures.record_plaintext_bytes_max;
+    var record: [io.constants.tls_record_header_bytes + body]u8 = undefined;
+    const len = record_of_zeros(&record, rotor.constants.tls_content_application, body);
+    const header = io.constants.tls_record_header_bytes;
+    std.mem.writeInt(u16, record[header + 1 ..][0..prefix], @intCast(body - 1 - prefix), .big);
+    record[header] = 0;
+    take_in_chunks(&rig, record[0..len]);
+    try testing.expect(connection.state == .up);
+    try testing.expectEqual(@as(usize, 0), connection.used);
+    try testing.expectEqual(@as(u8, 0), rig.engine.resolver.servers.failures(0));
+    try rig.deinit();
+}
+
+test "a prefix in a record that says more than the connection assembles ends it after close_notify" {
+    // That message is never whole, and the stream cannot be read past it (the stream's rule 11).
+    // The server drops every query, so the lookup waits until then, and hears the failure at once.
+    // The peer is still there, so the session says close_notify, and the connection closes once
+    // that has gone (TLS rule 5). It reads nothing more, so the record after it is not read. A
+    // send the loop refuses fails the connection at once, and the rest of the chunk is not its.
+    const body = cocuyo.constants.tcp_prefix_bytes + fixtures.tiny_message_bytes + 1;
+    const application = rotor.constants.tls_content_application;
+    for ([_]bool{ false, true }) |refused| {
+        var rig: TinyRig = .{};
+        try start(&rig, 58, .{ .{ .drop_per_256 = fixtures.always }, .{ .down = true } });
+        const handle = try rig.engine.start(question("example.com."), rig.loop.now());
+        try sim_test.until_sent(&rig);
+        var stream: BackToBack = .{};
+        rig.loop.refuse_submissions = refused;
+        take_in_chunks(&rig, stream.init(.{ application, application }, .{ body, body }));
+        rig.loop.refuse_submissions = false;
+        const connection = &rig.engine.connections[0];
+        const state: @TypeOf(connection.state) = if (refused) .closed else .closing;
+        try testing.expect(connection.state == state);
+        try testing.expectEqual(@as(u8, 1), rig.engine.resolver.servers.failures(0));
+        // The last record sealed is the session's close_notify (RFC 9846 §6.1).
+        const notify = rotor.constants.tls_close_notify;
+        const sealed = connection.tls.out[0..connection.tls.out_tail];
+        if (!refused) try testing.expectEqualSlices(u8, &notify, sealed[sealed.len - notify.len ..]);
+        if (!refused) try testing.expectEqual(rotor.constants.tls_content_alert, sealed[sealed.len - io.constants.tls_record_header_bytes - notify.len]);
+        rig.engine.cancel(handle, rig.loop.now());
+        _ = try rig.until_result();
+        _ = rig.engine.take(rig.loop.now());
+        _ = try rig.step(fixtures.wait_ns);
+        try testing.expect(connection.state == .closed and connection.tls.record_in_used == 0);
+        try rig.deinit();
+    }
+}
+
+test "every whole record one chunk carries goes to the session with it, the last one too" {
+    // Here the lookup's answer is in the last record of a full chunk. No chunk follows it,
+    // because the server drops every query. The lookup has its answer before its deadline (TLS
+    // rule 7).
+    var rig: Rig = .{};
+    try start(&rig, 55, .{ .{ .drop_per_256 = fixtures.always }, .{ .down = true } });
+    const handle = try rig.engine.start(question("example.com."), rig.loop.now());
+    try sim_test.until_sent(&rig);
+    var answer: [rotor.constants.tls_payload_bytes_max]u8 = undefined;
+    const answer_bytes = try sim_test.framed_answer(&rig.engine, handle, &answer);
+    // Each record before the answer's record holds a header of zeros. Such a header is a query,
+    // and no lookup takes a query (docs/design.md §7, check 4).
+    const header = cocuyo.constants.header_bytes;
+    var message: [cocuyo.constants.tcp_prefix_bytes + header]u8 = @splat(0);
+    cocuyo.wire.header.write_message_len(&message, @intCast(header));
+    const record_bytes = rotor.constants.tls_record_header_bytes;
+    const others = (io.constants.tcp_chunk_bytes - record_bytes - answer_bytes) / (record_bytes + message.len);
+    var chunk: [io.constants.tcp_chunk_bytes]u8 = undefined;
+    var used: usize = 0;
+    for (0..others) |_| used += rotor.tls.write_record(rotor.constants.tls_content_application, &message, chunk[used..]);
+    used += rotor.tls.write_record(rotor.constants.tls_content_application, answer[0..answer_bytes], chunk[used..]);
+    // `take_chunk` gives the chunk to `take`, and `apply` then drives the engine, as after each
+    // event.
+    io.tls.take(&rig.engine, 0, chunk[0..used], rig.loop.now());
+    rig.engine.drive(rig.loop.now());
+    try testing.expectEqual(@as(usize, 0), rig.engine.connections[0].tls.record_in_used);
+    const result = try rig.until_result();
+    try testing.expectEqual(handle, result.handle);
+    try testing.expect(result.outcome == .answer);
+    try testing.expect(rig.loop.now() < rig.config.timeout_ns);
+    _ = rig.engine.take(rig.loop.now());
+    try rig.deinit();
+}
+
+test "a buffer of records that are their header alone goes to the session whole" {
+    // Each record is at least its five-octet header, and a peer may send empty records (RFC 9846
+    // §5.1). Thus the buffer holds no more records than its length in headers. No whole record
+    // stays for a chunk that may not come (TLS rule 7).
+    var rig: Rig = .{};
+    try up(&rig, 57);
+    const state = &rig.engine.connections[0].tls;
+    const empty = rotor.tls.write_record(rotor.constants.tls_content_application, &.{}, &state.record_in);
+    try testing.expectEqual(io.constants.tls_records_per_buffer_max, state.record_in.len / empty);
+    var at: usize = empty;
+    while (at + empty <= state.record_in.len) : (at += empty) @memcpy(state.record_in[at..][0..empty], state.record_in[0..empty]);
+    state.record_in_used = at;
+    io.tls.take(&rig.engine, 0, &.{}, rig.loop.now());
+    try testing.expectEqual(@as(usize, 0), state.record_in_used);
+    try testing.expect(rig.engine.connections[0].state == .up);
     try rig.deinit();
 }
 

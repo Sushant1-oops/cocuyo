@@ -26,6 +26,8 @@ pub fn add(
     module.addImport("tls", dependency.module("tls"));
     module.addImport("server", dependency.module("server"));
     module.addImport("io", graph.io);
+    // The tests hold the sizes `cocuyo_doh` copies to the engine's and to `cocuyo_quic`'s.
+    module.addImport("cocuyo_quic", graph.io_quic);
     module.addImport("rotor", graph.sim);
     module.link_libc = true;
     const tests = b.addTest(.{ .name = "cocuyo_doh", .root_module = module });

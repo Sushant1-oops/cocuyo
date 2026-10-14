@@ -4,9 +4,9 @@
 //! One connection serves one server and every lookup that needs it, their queries pipelined onto
 //! it and their answers matched back by the table's own demultiplexer (RFC 7766 §6.2.1.1). A
 //! stream carries no message boundaries, so each message is a two-octet length and that many
-//! octets after it (§8), and this file holds the partial bytes until a whole one is there. A
-//! connection nobody is using is closed once `tcp_idle_ns` has passed, which §6.2.3 asks a client
-//! to keep short.
+//! octets after it (§8), and `io_tcp_frame.zig` holds the partial bytes until a whole one is
+//! there. A connection nobody is using is closed once `tcp_idle_ns` has passed, which §6.2.3 asks
+//! a client to keep short.
 //!
 //! Free functions over the engine, split out of `io.zig` so each is scored on its own.
 const std = @import("std");
@@ -17,6 +17,7 @@ const constants = @import("constants.zig");
 const udp = @import("io_udp.zig");
 const queue_module = @import("io_tcp_queue.zig");
 const tls_module = @import("io_tls.zig");
+const frame_module = @import("io_tcp_frame.zig");
 const reset = @import("io_reset.zig");
 
 pub const Error = error{SocketFailed};
@@ -33,6 +34,18 @@ pub fn Connection(comptime message_bytes: u32, comptime lookups: u16, comptime T
         /// close, and waits to connect again in full after a resumed handshake failed (§21, TLS
         /// rules 1, 5 and 8).
         pub const State = enum { closed, connecting, handshaking, up, closing, reopening };
+        /// The longest message the connection assembles. A prefix that says more fails it.
+        pub const message_bytes_max: usize = message_bytes;
+        /// What the frame holds past its partial message: what one take adds. That is a chunk in
+        /// the clear, and a record's body over TLS (docs/design.md §19 step 13, the stream's rule
+        /// 11).
+        const room_bytes = if (Tls.enabled) constants.tls_frame_room_bytes else constants.tcp_frame_room_bytes;
+        pub const frame_bytes = cocuyo.constants.tcp_prefix_bytes + message_bytes + room_bytes;
+
+        comptime {
+            // The loop over the frame ends at the last whole message, never at its bound.
+            assert(frame_bytes / cocuyo.constants.tcp_prefix_bytes <= constants.tcp_messages_per_frame_max);
+        }
 
         state: State = .closed,
         /// The configured server it goes to. Meaningless while closed.
@@ -48,8 +61,9 @@ pub fn Connection(comptime message_bytes: u32, comptime lookups: u16, comptime T
         /// §19 step 13, the stream's rule 10). It outlives the connection, for that reason.
         connect_in_flight: bool = false,
         /// The partial message: a length prefix and as much of the body as has arrived. It holds
-        /// the prefix beside the longest message, so that message can be whole in it.
-        frame: [cocuyo.constants.tcp_prefix_bytes + message_bytes]u8 = undefined,
+        /// the prefix beside the longest message, so that message can be whole in it, and the
+        /// room one take adds past it.
+        frame: [frame_bytes]u8 = undefined,
         used: usize = 0,
         receiving: bool = false,
         /// How many lookups are on it. One with none is closed when it has been idle long enough.
@@ -284,7 +298,7 @@ pub fn on_receive_event(self: anytype, index: usize, event: rotor.Event, now_ns:
     if (event.outcome()) |count| {
         // Zero is the peer closing its side, which ends every lookup on the connection.
         if (count == 0) return fail(self, @intCast(at), now_ns);
-        take_chunk(self, @intCast(at), event, count, now_ns);
+        frame_module.take_chunk(self, @intCast(at), event, count, now_ns);
     } else |err| {
         // A group with no buffer left is not a broken connection: the multishot ends, the bytes
         // wait, and the receive below takes them. A stream is cut into chunks the reader does
@@ -295,47 +309,6 @@ pub fn on_receive_event(self: anytype, index: usize, event: rotor.Event, now_ns:
         connection.receiving = false;
         connection.handle = null;
         receive_again(self, @intCast(at));
-    }
-}
-
-fn take_chunk(self: anytype, at: u8, event: rotor.Event, count: u32, now_ns: u64) void {
-    const connection = &self.connections[at];
-    const buffer = self.loop.provided_buffer(constants.tcp_group_id, event.flags.buffer_id);
-    const chunk = buffer[0..count];
-    // Over TLS the chunk is records, which the session opens into the frame (§21, TLS rule 7).
-    if (tls_module.speaks(self)) {
-        tls_module.take(self, at, chunk, now_ns);
-        self.loop.give_back_buffer(constants.tcp_group_id, event.flags.buffer_id);
-        return;
-    }
-    const fits = connection.used + chunk.len <= connection.frame.len;
-    if (fits) {
-        @memcpy(connection.frame[connection.used..][0..chunk.len], chunk);
-        connection.used += chunk.len;
-    }
-    self.loop.give_back_buffer(constants.tcp_group_id, event.flags.buffer_id);
-    // A message longer than the buffer cannot be assembled, and the stream cannot be resynced
-    // after it: the connection is no good to anybody.
-    if (!fits) return fail(self, at, now_ns);
-    deliver(self, at, now_ns);
-}
-
-/// Hands over every whole message the connection holds, oldest first.
-pub fn deliver(self: anytype, at: u8, now_ns: u64) void {
-    const connection = &self.connections[at];
-    const from = self.config.servers[connection.server].tcp_endpoint();
-    var delivered: usize = 0;
-    while (delivered < constants.tcp_messages_per_chunk_max) : (delivered += 1) {
-        const prefix = cocuyo.constants.tcp_prefix_bytes;
-        if (connection.used < prefix) return;
-        // `usize`, not the `u16` the prefix reads as: with the prefix's two octets a message of
-        // 65534 or 65535 octets passes 65535, and a prefix can say either (RFC 1035 §4.2.2).
-        const length: usize = cocuyo.message_len(connection.frame[0..prefix]);
-        if (connection.used < prefix + length) return;
-        _ = self.resolver.on_datagram(connection.frame[prefix..][0..length], from, now_ns);
-        const whole = prefix + length;
-        std.mem.copyForwards(u8, connection.frame[0 .. connection.used - whole], connection.frame[whole..connection.used]);
-        connection.used -= whole;
     }
 }
 

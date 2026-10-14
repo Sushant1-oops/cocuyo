@@ -2546,4 +2546,49 @@
         },
         .caught_by = .{ .step = "test-cache" },
     },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB19",
+        .what = "the record walk's skip counts labels and not octets",
+        .edits = .{
+            .{ .file = "src/wire/name.zig", .old = "                if (cursor - offset + 1 > core.constants.name_bytes_max) return Error.NameTooLong;", .new = "                if (false and cursor - offset + 1 > core.constants.name_bytes_max) return Error.NameTooLong;" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB20",
+        .what = "the record walk's skip counts no root after the labels",
+        .edits = .{
+            .{ .file = "src/wire/name.zig", .old = "                if (cursor - offset + 1 > core.constants.name_bytes_max) return Error.NameTooLong;", .new = "                if (cursor - offset > core.constants.name_bytes_max) return Error.NameTooLong;" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB21",
+        .what = "the record walk's skip refuses a name of 255 octets",
+        .edits = .{
+            .{ .file = "src/wire/name.zig", .old = "                if (cursor - offset + 1 > core.constants.name_bytes_max) return Error.NameTooLong;", .new = "                if (cursor - offset + 1 >= core.constants.name_bytes_max) return Error.NameTooLong;" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB22",
+        .what = "ndots: is clamped at the cap of timeout:",
+        .edits = .{
+            .{ .file = "src/config/resolv_conf_options.zig", .old = "number(text, constants.ndots_limit)", .new = "number(text, constants.timeout_seconds_limit)" },
+        },
+        .caught_by = .{ .step = "test-config" },
+    },
+    .{
+        .section = "What a survey of the named limits found",
+        .id = "SB23",
+        .what = "the cap of ndots: loses its type in the constants file",
+        .edits = .{
+            .{ .file = "src/config/constants.zig", .old = "pub const ndots_limit: usize = 15;", .new = "pub const ndots_limit = 15;" },
+        },
+        .caught_by = .{ .step = "test-config" },
+    },
 }

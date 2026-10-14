@@ -43,6 +43,19 @@ pub const option_use_vc = "use-vc";
 /// because nothing under `src/` may name `std.time` (CLAUDE.md non-negotiable 4).
 pub const ns_per_s: u64 = 1_000_000_000;
 
+/// The most `ndots:` reads: `resolv.conf(5)` caps it at 15, and a larger value reads as 15.
+pub const ndots_limit: usize = 15;
+
+/// The most `timeout:` reads, in seconds: `resolv.conf(5)` caps it at 30. That is also the most
+/// `Config.timeout_ns_max` may be, so the parser can raise the cap to any timeout it reads.
+pub const timeout_seconds_limit: u64 = 30;
+
+comptime {
+    if (timeout_seconds_limit * ns_per_s > core.constants.timeout_ns_max) {
+        @compileError("a timeout the parser reads would not fit under any cap");
+    }
+}
+
 /// The text fuzz target (`fuzz/fuzz.zig`, docs/design.md §13). The longest text it builds, which
 /// holds the longest file it writes several times over; the most servers, search names and hosts
 /// lines it writes whole, below every limit the parsers keep so that each must come back; the most

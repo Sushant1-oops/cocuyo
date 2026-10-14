@@ -977,6 +977,11 @@ Rejected:
 ### Parsing
 
 - Every length is checked against the end of the message before the bytes are read.
+- A name is at most `name_bytes_max` octets: "names 255 octets or less" (RFC 1035 §2.3.4). Its
+  labels, their length octets and the root count (§3.1). The decode of §8 refuses a longer name.
+  Since 2026-10-13 the skip of the record walk refuses a name whose labels before any pointer,
+  with a root after them, already pass the limit. It does not follow a pointer, so it cannot
+  measure the rest of a compressed name (§8, Record walking).
 - No recursion anywhere in the parser. Compression is a loop with two bounds.
 - A count field is never a reason to read. `ancount` says how many records the sender claims;
   the walk stops at the end of the message or at `records_max`, whichever comes first, and a count
@@ -1035,6 +1040,34 @@ is decompressed only when the type is one the lookup wants (§11). Type-specific
   bytes. Trailing bytes inside an rdata name make the message malformed.
 - `OPT`: the owner must be the root, the class is the sender's UDP payload size, the TTL's high
   byte extends the rcode, and the version must be 0.
+
+The skip reads labels, and stops at the root or at a pointer, which it does not follow. Since
+2026-10-13 it refuses a name whose labels, with a root after them, pass `name_bytes_max`, as the
+decode does (RFC 1035 §2.3.4, §3.1). The error is the decode's, `NameTooLong`. Until then the
+skip counted labels alone, so it took a name of 128 labels, up to 8,193 octets. Such a name then
+passed every walk that decodes nothing at that place:
+
+- the owner of a record of a type the lookup does not want, in `response.collect`;
+- the owners of the records the search for the OPT record passes (§7, check 6);
+- an SOA's owner, MNAME and RNAME, from which a negative answer takes the TTL the cache keeps.
+
+So the type of the record that held the fault decided whether a lookup took the message. Now
+`record.Iterator.next` and `Record.soa_negative_ttl` return `NameTooLong` for such a name. What
+the lookup then does depends on where the name is:
+
+- An owner before the OPT record, or in a message with no OPT record: the search for the OPT
+  record walks that owner and fails. So check 6 of §7 fails, and the lookup ignores the message
+  and keeps its wait. It did the same before when a record it wanted had such an owner.
+- An SOA's MNAME or RNAME: they are in the rdata, which check 6 does not read. Only the negative
+  TTL reads them, and it reads the error as a TTL of 0, as for any malformed authority section
+  (`lookup_response.zig`). So the lookup takes the negative answer, and the cache keeps nothing of
+  it.
+- An owner after the OPT record, in the additional section: no walk reads it, as before.
+
+The fuzz target's check, that the skip agrees with the decode wherever the decode succeeds, still
+holds: the skip refuses no name the decode takes. The skip still does not follow a pointer. A
+compressed name whose labels fit, but whose whole name does not, is refused only where a decode
+runs.
 
 ## 9. Memory the caller provides
 
@@ -1486,7 +1519,7 @@ narrow value is a `usize` too (§16 decision 40).
 | `message_bytes_max` | 65535 | the TCP length prefix is 16 bits |
 | `udp_payload_bytes_default` | 1232 | the widely recommended EDNS0 size that avoids IPv6 fragmentation; recalled, not measured |
 | `query_bytes_max` | 386 | 12 header + 255 qname + 4 type and class + 55 OPT + 4 Padding option header, padded to 384 (§21), + 2 TCP prefix |
-| `name_bytes_max` | 255 | RFC 1035 §2.3.4 |
+| `name_bytes_max` | 255 | RFC 1035 §2.3.4; §3.1 counts the labels, their length octets and the root |
 | `name_text_bytes_max` | 1020 | four bytes per wire byte, the `\DDD` escape worst case |
 | `label_bytes_max` | 63 | RFC 1035 §2.3.4 |
 | `labels_max` | 128 | 255 bytes at two bytes minimum per label |
@@ -1515,6 +1548,8 @@ narrow value is a `usize` too (§16 decision 40).
 | `attempts_default` | 2 | the `resolv.conf` default |
 | `attempts_max` | 5 | bounds the retry loop |
 | `ndots_default` | 1 | the `resolv.conf` default |
+| `ndots_limit` | 15 | `resolv.conf(5)`'s cap on `ndots:`, which reads a larger value as 15; in `src/config/constants.zig` since 2026-10-13, and in the parser's own file before |
+| `timeout_seconds_limit` | 30 | `resolv.conf(5)`'s cap on `timeout:`, in seconds, and `timeout_ns_max` in seconds, so the parser can raise the cap to any timeout it reads; in `src/config/constants.zig` since 2026-10-13 |
 | `timeout_ns_default` | 2 s | a server's wait until it has 3 samples (§5): c-ares's `ARES_OPT_TIMEOUTMS` default, read from its features page, not measured; 5 s, the `resolv.conf` default, until 2026-10-09 |
 | `timeout_ns_max_default` | 5 s | the default cap on every wait, measured or doubled: c-ares's, read from its features page, not measured |
 | `timeout_ns_max` | 30 s | the most a configuration's cap may be, and `resolv.conf(5)`'s cap on `timeout:`; the default cap until 2026-10-09 |
@@ -2184,6 +2219,45 @@ step until `zig build test` passes.
       they are in no list of four.
 
     §5, §12, §13.
+41. **A stream's buffers hold one chunk past their longest item, and every whole item leaves
+    them with the chunk that made it whole.** Ruled by the owner on 2026-10-13, who approved the
+    four limits and the two public names of §17 question 38. A survey of the named limits found
+    four faults in the engine's streams, and each was shown on the twin:
+
+    - A TLS connection's record buffer held one record at its longest and nothing more. It
+      refused a chunk that did not fit beside the partial record, before it handed a whole record
+      to the session. The chunk that ends one record often starts the next, so a sound
+      connection failed.
+    - A connection's frame had the same fault, with a message in place of a record.
+    - The session opens a whole record into the frame after the partial message. The frame had no
+      room for it after a long partial message, so a sound DoT connection failed.
+    - The loops over the frame and over the record buffer stopped after 32 items. The rest
+      waited for a chunk that may not come, and their lookups waited for their deadlines.
+
+    Now each buffer holds its longest item and what one take adds after a partial item. That is
+    one chunk, or one record's body for the frame over TLS. Every whole item leaves the buffer
+    before the chunk's event ends. Each item is at least its prefix or its header, so the
+    buffer's length bounds the loop, and the bound never stops the loop early. The loop moves the
+    rest of the buffer once, after the last whole item. So a chunk of empty messages costs moves
+    in proportion to the chunk, and not to its square. A prefix that says more than
+    `tcp_message_bytes` fails the connection when it arrives. Over TLS the peer is still there, so
+    the session says `close_notify` first (§21, TLS rule 5).
+
+    Rejected:
+
+    - No memory added: copy what fits, hand over the whole items, and copy the rest. It needs more
+      code at both sites. Also, the session opens a whole record into the frame. So the frame over
+      TLS needs room for a record after the partial message in any case.
+    - A bound of 32 kept, and the rest handed over at the next drive. A drive follows an event,
+      and on a quiet stream the next event is the lookup's deadline. The rest would need a timer
+      of its own.
+    - A bound of one answer for each lookup, as `quic_connection_events_max` sets for QUIC. A
+      stream also carries the answers to queries that lookups left, so its whole messages have no
+      tie to the lookups.
+    - Over TLS, a close at once with no `close_notify` when a prefix is too long, as for a peer
+      that has gone. The peer is still there, and RFC 9846 §6.1 asks for the alert.
+
+    §19 step 13, §21, §24.
 
 ## 17. Questions for the owner
 
@@ -2407,7 +2481,24 @@ about.
     files? Recommended: move each limit into its module's constants file, as CLAUDE.md's
     non-negotiable 5 asks. Give the rest a type where they are. The 32 of
     `bench/end_to_end/constants.zig` are a third choice, since nothing of `bench/` is linked
-    into the library.
+    into the library. On 2026-10-13 two of the limits took that path: `ndots_limit` and
+    `timeout_seconds_limit` moved into `src/config/constants.zig`, each with a type (§12). The
+    rest of the question stays open.
+
+### Asked on 2026-10-13, for the stream's buffers
+
+§16 decision 41 records the change. CLAUDE.md asks the owner before a named limit or the public
+API changes. This change does both, and the owner has not ruled on it yet.
+
+38. **Four named limits, and two public names.** `tls_record_in_bytes` grew from 16,645 to
+    18,693 octets. A connection's frame grew by `tcp_frame_room_bytes`, 2,048 octets, or over TLS
+    by `tls_frame_room_bytes`, 16,640. `tcp_messages_per_chunk_max` and
+    `tls_records_per_chunk_max`, 32 each, gave way to `tcp_messages_per_frame_max` and
+    `tls_records_per_buffer_max`, which follow from the buffers. The two old names were public in
+    `cocuyo_rotor.constants`. Answered on 2026-10-13: the change stands. Without it a sound stream
+    fails, or an answer in memory waits for its deadline (§19 step 13, the stream's rule 11; §21,
+    TLS rule 7). The cost is 2,048 octets for each connection in the clear, and 18,688 for each
+    connection over TLS.
 
 ## 18. The cache
 
@@ -3345,7 +3436,8 @@ first `connect_tcp` and shared by every lookup that needs it, their queries pipe
 carries no message boundaries, so a connection holds the partial bytes and takes whole messages
 out of them by the length prefix of §8; the buffer it assembles into holds a message of
 `tcp_message_bytes`, the longest a prefix can describe unless the caller knows its answers are
-smaller, and the two octets of its prefix. A connection
+smaller, and the two octets of its prefix. Since 2026-10-13 it holds one chunk more, or over TLS
+the body of one record more (the stream's rule 11). A connection
 nobody is using is closed after `tcp_idle_ns` (§6.2.3). The chunks arrive in a buffer group of
 their own, since a datagram group carries rotor's prefix before every payload, and a group that
 runs dry is the ordinary end of a receive rather than a broken connection.
@@ -3402,6 +3494,31 @@ of 2026-09-22 broke one, the model found it, and the fix is recorded with it.
     reset sets its fields one by one and leaves the address as it is: until 2026-10-01 the reset
     assigned the whole slot, which in a safe build wrote over the address too, and filled the
     64 KiB frame at every opening and shut (`io/io_reset.zig`).
+11. Written on 2026-10-13. A connection takes each chunk whole into its frame. Then it hands every
+    whole message in the frame to the table, oldest first, before the chunk's event ends. The
+    partial message after them stays for the next chunk. So between two chunks the frame holds one
+    partial message at most. A stream carries no boundaries, and a server may send its answers back
+    to back (RFC 7766 §6.2.1.1). So the chunk that ends a message can start the next one. The frame
+    holds a message of `tcp_message_bytes`, its prefix, and what one take adds after a partial
+    message. In the clear that is one chunk, `tcp_frame_room_bytes`. Over TLS it is the body of one
+    record at its longest, `tls_frame_room_bytes`. The session opens a whole record into the frame
+    (§21, TLS rule 7). A prefix that says more than `tcp_message_bytes` fails the connection when it
+    arrives. That message is never whole, and the stream cannot be read past it. Every lookup on
+    the connection hears the failure at once. In the clear the connection closes at once. Over TLS
+    the peer is still there, so the session says `close_notify` first (TLS rule 5). Each message
+    is at least its two-octet prefix, so a frame holds at most `tcp_messages_per_frame_max` whole
+    messages. That count bounds the loop over the frame, and the loop never stops before the last
+    whole message.
+
+    Until 2026-10-13 the frame held the message and its prefix alone. A connection refused a chunk
+    that did not fit beside the partial message, and it did so before it handed a whole message
+    over. Take a chunk that ends a message of L octets and holds h octets of the next. A sound
+    stream failed when L + h passed `tcp_message_bytes`. At the default, L is then 63,489 octets or
+    more. At a `tcp_message_bytes` of 4,096, two answers of 2,050 octets each are enough. The
+    loop also stopped after 32 messages, `tcp_messages_per_chunk_max`. The rest stayed in the
+    frame until the next chunk. When no chunk came, a lookup whose answer was among them waited
+    until its deadline. The engine model holds no frame. It applies a message at the receive that
+    brings it, so the code now does what the model does, and the model does not change.
 
 **The datagram's rules, written on 2026-09-23** in the same way, for the same model. Rules 6 to 8
 of the stream hold for datagrams as they stand: a send lends its buffer, a completion speaks for
@@ -3876,6 +3993,9 @@ cache hits).
 | `address_lookup_addresses_max` | 32 | both families' `addresses_max`, bounded the way one answer is; `truncated` past it |
 | `address_policy_rows` | 9 | RFC 6724 §2.1's default table |
 | `common_prefix_bits_v6_max` | 64 | RFC 6724 §2.2 stops at the source's prefix, and RFC 4291 §2.5.1 makes the interface identifier the low 64 bits |
+| `tcp_frame_room_bytes` | 2,048 | what a frame holds past its partial message in the clear: one chunk, `tcp_chunk_bytes`; since 2026-10-13 (step 13, the stream's rule 11) |
+| `tls_frame_room_bytes` | 16,640 | what a frame holds past its partial message over TLS: the body of one record at its longest (RFC 9846 §5.2), which the session opens into the frame; colibri asks for room as long as the body |
+| `tcp_messages_per_frame_max` | 41,088 | the most whole messages a frame holds, each at least its two-octet prefix: a TLS connection's frame, the longest, over two. It bounds the loop over the frame, and never stops it before the last whole message. It replaced `tcp_messages_per_chunk_max`, 32, on 2026-10-13 |
 
 ### Order and gates
 
@@ -4177,14 +4297,32 @@ code is.
    meanwhile is not read: the session has said its last. One whose handshake has not
    ended has no session to close, and closes at once. A connection that fails otherwise closes
    at once too: one whose peer has gone has nobody to send anything to. A party that has sent
-   an error alert owes no `close_notify` (§6.1).
+   an error alert owes no `close_notify` (§6.1). Since 2026-10-13 one failure is not the
+   session's or the peer's: a prefix that says more than `tcp_message_bytes` (the stream's rule
+   11). The peer is still there, so the session makes its `close_notify`. RFC 9846 §6.1 asks for
+   it: "Each party MUST send a "close_notify" alert before closing its write side of the
+   connection". Then the connection ends as rule 4 ends a refused record. Its lookups hear the
+   failure at once, its queries not yet sealed leave, and it closes once the alert has gone.
 6. A TLS connection is never closed to make room for another. A TLS configuration needs a slot
    for each of its servers, and the engine asserts it has them.
 7. Records received go to the session whole. The connection reads each record's length from
-   its five-octet header, and keeps a partial record until the rest arrives. A record longer
-   than the buffer fails the connection. The session's `recv` hands over whole records and
-   answers 0 only at a record boundary, which chapulin reads as "no record yet"; a 0 inside a
-   record would kill the session.
+   its five-octet header, and keeps a partial record until the rest arrives. A header that says
+   more than RFC 9846 §5.2 allows fails the connection. The session's `recv` hands over whole
+   records and answers 0 only at a record boundary, which chapulin reads as "no record yet"; a 0
+   inside a record would kill the session. Since 2026-10-13 the connection takes each chunk
+   whole into its record buffer. Then it hands every whole record in the buffer to the session,
+   oldest first, before the chunk's event ends. The partial record after them stays. So the
+   buffer holds a record at its longest, header and all, and one chunk: `tls_record_in_bytes`.
+   Each record is at least its header, so the buffer holds at most `tls_records_per_buffer_max`
+   whole records. That count bounds the loop, and the loop never stops before the last whole
+   record. A record the session refuses puts the connection in its `closing` state. The rest of
+   the chunk then leaves the buffer unread (rules 4 and 5). The session opens each record into
+   the connection's frame after the partial message. So over TLS the frame holds the body of one
+   record past that message (the stream's rule 11). Until 2026-10-13 the buffer held one record
+   alone, and the loop stopped after 32 records, `tls_records_per_chunk_max`. So a sound
+   connection failed when a chunk ended a full AES-GCM record and held 240 octets or more of the
+   next. Records past the 32nd waited for the next chunk. And a full AES-GCM record found no room
+   in the frame after a partial message of more than 49,136 octets.
 8. Each server keeps the newest ticket its sessions were given, and the next connection to that
    server resumes with it. A ticket is used once, since reuse lets an observer link two
    connections (RFC 9846 §C.4). It is dropped at its lifetime, or 7 days after it came,
@@ -4283,7 +4421,8 @@ is what the fake does show: which records go when, what a lookup hears, and when
 - At most 12 trust anchors, the caller's to choose.
 - At most 3 certificates verified in a chain, each at most 3072 octets.
 - A connection holds a `ch_record` of 2744 octets (measured with clang on arm64, 2026-09-23),
-  a buffer of at least 12338 octets for chapulin, and room for one whole record in.
+  a buffer of at least 12338 octets for chapulin, and room for one whole record in and one
+  chunk after it (TLS rule 7, since 2026-10-13).
 
 RFC 8310 §9's other items stand as follows. chapulin speaks TLS 1.3 only and never compresses,
 which meets two MUSTs. It does not cite RFC 7525, and has neither False Start nor Cached
@@ -4304,6 +4443,8 @@ the engine's send and held buffers, per slot.
 | `opt_option_header_bytes` | 4 | an EDNS(0) option's code and length (RFC 6891 §6.1.2) |
 | `port_dns_tls_default` | 853 | RFC 7858 §3.1 |
 | `query_bytes_max` | 328 to 386 | the largest query, padded to 384, and the stream's prefix |
+| `tls_record_in_bytes` | 16,645 to 18,693 | a TLS connection's record buffer: a record at its longest, 16,645 octets with its header (RFC 9846 §5.2), and since 2026-10-13 one chunk of 2,048 after it (TLS rule 7) |
+| `tls_records_per_buffer_max` | 3,738 | the most whole records the buffer holds, each at least its five-octet header (RFC 9846 §5.1). It bounds the loop over the buffer, and never stops it before the last whole record. It replaced `tls_records_per_chunk_max`, 32, on 2026-10-13 |
 
 ### Order and checks
 
@@ -5378,7 +5519,9 @@ through the request interface, so `cocuyo_rotor` never imports colibri. The type
   what it says, one thing at a time, until it has nothing more. The octets of the stream the
   channel has not taken stay with the type until it takes them, as `cocuyo_h2` kept them: a
   partial record until the rest arrives (TLS rule 7), and whole ones while the channel has no
-  room for what they hold. Octets past what the type keeps end the TCP link, as they failed
+  room for what they hold. The type keeps a record at its longest and one of the engine's chunks
+  after it. Since 2026-10-13 the engine's own record buffer has the same size (TLS rule 7).
+  Octets past what the type keeps end the TCP link, as they failed
   `cocuyo_h2`'s connection (request rule 7): the type tells the channel the link ended, and says
   `close` for it. A datagram the channel has not taken when the next arrives is dropped, as the
   network may drop one.
@@ -5721,9 +5864,15 @@ lookup over each transport.
 | `answers_default` | 4 | a DoH connection's answer buffers when the consumer names none, 262 KB of them; chosen, not measured |
 | `doh_channels_max` | `servers_max` | one channel for each DoH server (decision 33) |
 | `doh_fallback_delay_ns` | 250 ms | how long a channel gives QUIC's handshake before TCP opens beside it: the Connection Attempt Delay RFC 8305 §5 recommends, which that RFC sets between attempts at two addresses, not two versions of HTTP; taken from it, not measured |
-| `doh_stream_bytes` | 18,693 | the octets of the stream a channel keeps until colibri takes them: a record at its longest, 16,645 octets with its header (RFC 9846 §5.2), and one of the engine's chunks, 2,048 |
+| `doh_stream_bytes` | 18,693 | the octets of the stream a channel keeps until colibri takes them: a record at its longest, 16,645 octets with its header (RFC 9846 §5.2), and one of the engine's chunks, 2,048. It is the engine's `tls_record_in_bytes` since 2026-10-13 (§21, TLS rule 7) |
 | `doh_datagram_bytes` | 2,048 | the datagram a channel keeps until colibri takes it: the engine's datagram buffer, which holds any datagram the engine reads |
 | `doh_values_bytes` | 256 | where a response's `content-type`, `content-encoding` and `age` are copied; a response whose values do not fit fails its request as too large; chosen, not measured |
+
+`cocuyo_doh` imports neither the engine nor `cocuyo_quic`. So four of its sizes copy theirs:
+`engine_chunk_bytes` is the engine's `tcp_chunk_bytes`, `doh_datagram_bytes` its `buffer_bytes`,
+`doh_stream_bytes` its `tls_record_in_bytes`, and the channel's receive pool `cocuyo_quic`'s
+`receive_bytes_default`. Since 2026-10-13 a test of `cocuyo_doh` imports both, and holds each copy
+to the size it copies.
 
 ### Order and checks
 

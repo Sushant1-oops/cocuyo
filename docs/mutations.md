@@ -4100,8 +4100,8 @@ test; and in the twin, the record-length test of `sim_tls.zig`, the item-length 
 | QO6 | a pointer of a maze keeps the low octet of its target alone, so none aims past offset 255 | RFC 1035 §4.1.4, §13 pointers at every offset | the maze test, `test-wire` | CAUGHT |
 | QO7 | the failover delay and the instant of the failure are summed without saturating | §19 step 12, a delay of any `u64` | the largest-delay test, by a panic, `test-resolver` | CAUGHT |
 | QO8 | both offsets of a question are summed in the octet a name's length is held in, under the engine | RFC 1035 §2.3.4, §7 check 5 | the 255-octet test of `io_sim_test.zig` and the DoQ 255-octet test, by a panic, `test-io` | CAUGHT |
-| QO9 | a stream's length prefix and its own two octets are summed in the sixteen bits the prefix reads as | RFC 1035 §4.2.2 | the prefix, whole-frame and record-prefix tests, by a panic, `test-io` | CAUGHT |
-| QO10 | a connection's frame holds `tcp_message_bytes`, with no room for the prefix beside the longest message | §19 step 13, the buffer a stream assembles into | the whole-frame and tiny-frame tests, `test-io` | CAUGHT |
+| QO9 | a stream's length prefix and its own two octets are summed in the sixteen bits the prefix reads as | RFC 1035 §4.2.2 | the prefix, whole-frame and record-prefix tests, by a panic, `test-io`; since 2026-10-13 also the test of a record after a partial message at its longest (What a survey of the named limits found) | CAUGHT |
+| QO10 | a connection's frame holds `tcp_message_bytes`, with no room for the prefix beside the longest message | §19 step 13, the buffer a stream assembles into | the whole-frame and tiny-frame tests, `test-io`; since 2026-10-13 the whole-frame test and the test of a frame over TLS of empty messages (What a survey of the named limits found) | CAUGHT |
 | QO11 | the DoQ answer buffer holds `tcp_message_bytes`, with no room for the prefix beside the longest message | RFC 9250 §4.2, §24 request rule 5 | the DoQ buffer test, `test-io` | CAUGHT |
 | QO12 | the plain session sums an ALPN length and its own octet in the octet the length reads as | the plain session's hello, an ALPN token after its length | the ALPN test, by a panic, `test-cocuyo_quic` | CAUGHT |
 | QO13 | the plain session sums a handshake message's length and its frame in the 24 bits the length reads as | RFC 9846 §4, a message's framing | the message-length test, by a panic, `test-cocuyo_quic` | CAUGHT |
@@ -5070,3 +5070,143 @@ edit, so each of the three edits the new text.
 | TY34 | the length of a QUIC connection ID loses its type | the test of `cocuyo_quic`'s constants | the test of `io/io_quic_constants.zig`, `test-cocuyo_quic` | CAUGHT |
 | TY35 | the bound of a DoH request loses its type | the test of `doh`'s constants | the test of `io/io_doh_constants.zig`, `test-doh` | CAUGHT |
 | TY36 | the length of a TLS record's header loses its type, in the DoH channel | the test of `cocuyo_doh`'s constants | the test of `io/io_doh_channel_constants.zig`, `test-cocuyo_doh` | CAUGHT |
+
+## What a survey of the named limits found
+
+2026-10-13. A survey read each limit of the ten constants files, the check that uses it, and the
+body of each test that touches it. It found five faults, four in the engine's streams and one in
+the codec. It also found two smaller faults of form. Each fault was shown on the twin before this
+change. The design changed first:
+
+- §7 and §8, the length of a name;
+- §12, the limits;
+- §16 decision 41;
+- §17 questions 37 and 38;
+- §19 step 13, the stream's rule 11;
+- §21, TLS rules 5 and 7;
+- §24, the limits of `cocuyo_doh`.
+
+No model changed. The engine model holds no frame and counts no octets. It applies a message at
+the receive that brings it, so the code now does what the model does.
+
+The faults:
+
+- A TLS connection's record buffer held one record at its longest, 16,645 octets, and no more.
+  `take` in `io/io_tls.zig` added a chunk to the partial record. It failed the connection when
+  the sum passed the buffer, before it handed a whole record to the session. So a sound
+  connection failed when a chunk ended a full AES-GCM record and held 240 octets or more of the
+  next. Since 21918bf, of 2026-09-24, in v0.2.0 to v0.6.0.
+- A connection's frame had the same fault in `take_chunk` of `io/io_tcp.zig`. A chunk that ended
+  a message of L octets and held h octets of the next failed the connection when L + h passed
+  `tcp_message_bytes`. Since 886a4e8, of 2026-09-22, in v0.1.0 to v0.6.0.
+- The session opens a record into the frame after the partial message. The frame had no room for
+  a record after a partial message at its longest. So over DoT a full AES-GCM record found no room
+  after a partial message of more than 49,136 octets, and colibri refused it. Since 21918bf.
+- `deliver` and `take` stopped after 32 messages or records, `tcp_messages_per_chunk_max` and
+  `tls_records_per_chunk_max`. The rest waited for the next chunk. When none came, a lookup whose
+  answer was among them waited until its deadline, and failed over. Since 886a4e8 and 21918bf.
+- `wire.name.skip` counted labels and not octets. It took a name of up to 128 labels, 8,193
+  octets, where RFC 1035 §2.3.4 allows 255. The record walk skips the owners it does not decode.
+  So such a name passed unread in three places:
+  - the owner of a record of a type the lookup does not want;
+  - the owner of a record before the OPT record;
+  - the names of an SOA, from which a negative answer takes its TTL.
+
+  Since 23fd425, of 2026-09-21, in v0.1.0 to v0.6.0.
+
+The two smaller faults: `cocuyo_doh` copied four sizes of the engine's and of `cocuyo_quic`'s,
+with only a comment to tie them. And `ndots_limit` and `timeout_seconds_limit` were in the
+parser's file, and not in a constants file (CLAUDE.md non-negotiable 5).
+
+What the change does:
+
+- Each buffer holds its longest item and what one take adds after a partial item.
+  `tls_record_in_bytes` gains a chunk, 2,048 octets. The frame gains `tcp_frame_room_bytes`,
+  2,048 octets, in the clear, and `tls_frame_room_bytes`, 16,640, over TLS. A comptime check in
+  `io/constants.zig` ties each size to the limits it comes from.
+- `take_chunk` and `take` take each chunk whole. Then the loop hands every whole item to the
+  table or to the session, and moves the rest once. Each loop's bound is the most whole items its
+  buffer holds: `tcp_messages_per_frame_max`, 41,088, and `tls_records_per_buffer_max`, 3,738. An
+  assertion after each loop holds that no whole item is left. The check that refused a chunk is
+  an assertion now. The checks are on what a server writes: the prefix and the record's header.
+- A prefix that says more than `tcp_message_bytes` fails the connection when it arrives. In the
+  clear the connection closes at once. Over TLS the session says `close_notify` first, and the
+  connection closes once the alert has gone (TLS rule 5). Before, the frame filled until a chunk
+  did not fit, or until the session refused a record.
+- A record the session refuses puts the connection in its `closing` state. The rest of its chunk
+  leaves the buffer unread. Before, the rest stayed in the buffer until the next chunk.
+- The stream's messages moved from `io/io_tcp.zig` to `io/io_tcp_frame.zig` by the file-length
+  rule. Their tests moved from `io/io_tcp_test.zig` to `io/io_tcp_frame_test.zig`.
+- `skip` refuses a name whose labels, with a root after them, pass `name_bytes_max`. The error is
+  `decode`'s, `NameTooLong`. `record.Iterator.next` and `Record.soa_negative_ttl` change with it.
+  An assertion at the top of the loop holds that the labels leave room for a root.
+- A test of `cocuyo_doh` holds each copied size to the size it copies. The build binds
+  `cocuyo_quic` into the module's tests for it.
+- `ndots_limit` and `timeout_seconds_limit` are in `src/config/constants.zig`, each with a type.
+  The comptime check of the timeout moved with them.
+
+The tests came first. At e4db956 with the new tests, `zig build test-io` had 9 of 135 tests fail.
+`test-wire` had 2 of 181 fail, and `test-cocuyo_doh` 1 of 21, on the size of the stream. One test
+came with the fix, for a path the fix opened: a prefix in a record that says more than the
+connection assembles. At e4db956 the twin's session refused that record for want of room in the
+frame. This was read from the code, and not run. The connection then closed through TLS rule 4,
+after the session's alert.
+
+A review of the change found four more points, and the change now meets each:
+
+- Over TLS, a prefix that said too much closed the connection at once, with no `close_notify`.
+  The peer is still there, and RFC 9846 §6.1 asks for the alert. The test of that path now asks
+  for it, and `quit` in `io/io_tls.zig` stages it. Before `quit`, `zig build test-io` had 1 of 136
+  tests fail. With `quit`, SB15 went uncaught: `take` reads on past a `closing` connection in any
+  case. So the test has a second pass, where the loop refuses the alert's send. The connection
+  then closes at once, and SB15 reads past the end of its emptied buffer.
+- No test split a prefix between two chunks. A new test does. SB25 and SB26 break the two checks
+  that wait for both octets of a prefix.
+- No row broke the size of `cocuyo_doh`'s stream alone. SB24 does.
+- The test of a frame over TLS of empty messages tests `deliver`. So it moved to
+  `io/io_tcp_frame_test.zig`.
+
+With the fix, `zig build test` has 1,000 tests pass of 1,000.
+
+`zig build mutations` ran the twenty-eight rows below, each against its step, and each was
+`CAUGHT`. It ran QO9 and QO10 again too, since their text moved: QO9 to `io/io_tcp_frame.zig`,
+and QO10 to the frame's new size. It also ran ET14 to ET18 again. Their text did not change, but
+`refuse` now also ends a connection that quits, and `take` reads on past a refused record. Each
+older row was `CAUGHT`. The tests that catch each row were read from a run of each row by hand, in
+a copy of the tree. Fourteen rows are caught by a panic, at least in part. The panic is an
+assertion of this change, or a slice past its end in SB15, SB25 and SB26. SB19 and SB20 are also
+caught by the codec's fuzz gate, through the assertion at the top of the skip's loop.
+
+Twenty-eight new mutations, twenty-eight `CAUGHT`. Seven older rows ran again, QO9, QO10 and ET14
+to ET18, and each is `CAUGHT`.
+
+| # | Mutation | Check it breaks | Caught by | Status |
+| --- | --- | --- | --- | --- |
+| SB1 | a TLS connection's record buffer holds one record at its longest, and no chunk past it | §21, TLS rule 7 | the back-to-back records test and the refused-record test, each by a panic, `test-io` | CAUGHT |
+| SB2 | a frame in the clear holds the longest message and its prefix, and no chunk past them | §19 step 13, the stream's rule 11 | the one-chunk test, by a panic, and the whole-frame test, `test-io` | CAUGHT |
+| SB3 | a frame over TLS holds a chunk past its partial message, and not a record's body | the stream's rule 11 | the test of a record after a partial message at its longest, by a panic, and the test of a frame over TLS of empty messages, `test-io` | CAUGHT |
+| SB4 | a prefix that says more than the connection assembles is waited for, and does not fail it | the stream's rule 11 | the long-answer, tiny-frame and split-prefix tests, each by a panic, and the test of a long prefix over TLS, `test-io` | CAUGHT |
+| SB5 | a prefix that says exactly `tcp_message_bytes` fails the connection | the stream's rule 11 | the one-chunk, tiny-frame, whole-frame, 65534-prefix and record-prefix tests, and the test of a record after a partial message at its longest, `test-io` | CAUGHT |
+| SB6 | the partial message after the whole ones stays where it is, and does not move to the frame's head | the stream's rule 11 | the one-chunk test, and three tests of `io_tcp_test.zig` with two answers on a stream, `test-io` | CAUGHT |
+| SB7 | the loop over the frame stops after 32 messages | the stream's rule 11 | the test of every whole message in a chunk, the whole-frame test and the test of a frame over TLS of empty messages, each by a panic, `test-io` | CAUGHT |
+| SB8 | the loop over the frame stops after 32 messages, and nothing asserts that no whole message is left | the stream's rule 11 | the same three tests, `test-io` | CAUGHT |
+| SB9 | the loop over the frame stops one message short of the most a frame holds | `tcp_messages_per_frame_max` | the test of a frame over TLS of empty messages, by a panic, `test-io` | CAUGHT |
+| SB10 | the loop over the record buffer stops after 32 records | §21, TLS rule 7 | the test of every whole record in a chunk and the test of a buffer of empty records, each by a panic, `test-io` | CAUGHT |
+| SB11 | the loop over the record buffer stops after 32 records, and nothing asserts that no whole record is left | TLS rule 7 | the same two tests, `test-io` | CAUGHT |
+| SB12 | the loop over the record buffer stops one record short of the most the buffer holds | `tls_records_per_buffer_max` | the test of a buffer of empty records, by a panic, `test-io` | CAUGHT |
+| SB13 | the partial record after the whole ones stays where it is, and does not move to the buffer's head | TLS rule 7 | the back-to-back records test and the test of flights before the handshake's end, `test-io` | CAUGHT |
+| SB14 | a record the session refuses ends the loop, and the rest of its chunk stays in the buffer | TLS rules 4, 5 and 7 | the refused-record test, by a panic at the next chunk, `test-io` | CAUGHT |
+| SB15 | a record whose message fails the connection is taken as heard, and the loop reads on | the stream's rule 11 over TLS | the test of a long prefix over TLS, in its pass where the loop refuses the alert's send, by a slice past its end, `test-io` | CAUGHT |
+| SB16 | `cocuyo_doh`'s copy of the engine's chunk is not the engine's chunk | §24, New limits | the test of the copied sizes, `test-cocuyo_doh` | CAUGHT |
+| SB17 | `cocuyo_doh`'s copy of the engine's datagram buffer is not the engine's buffer | §24, New limits | the test of the copied sizes, `test-cocuyo_doh` | CAUGHT |
+| SB18 | `cocuyo_doh`'s copy of `cocuyo_quic`'s receive pool is not `cocuyo_quic`'s | §24, New limits | the test of the copied sizes, `test-cocuyo_doh` | CAUGHT |
+| SB19 | the record walk's skip counts labels and not octets | RFC 1035 §2.3.4, §3.1 | the two skip tests and the fuzz gate, each by a panic, `test-wire` | CAUGHT |
+| SB20 | the record walk's skip counts no root after the labels | RFC 1035 §3.1 | the two skip tests and the fuzz gate, each by a panic, `test-wire` | CAUGHT |
+| SB21 | the record walk's skip refuses a name of 255 octets | RFC 1035 §2.3.4 | the two skip tests, `test-wire` | CAUGHT |
+| SB22 | `ndots:` is clamped at the cap of `timeout:` | `resolv.conf(5)` | the clamp test, `test-config` | CAUGHT |
+| SB23 | the cap of `ndots:` loses its type in the constants file | §16 decision 40 | the type test of `src/config/constants.zig`, `test-config` | CAUGHT |
+| SB24 | `cocuyo_doh`'s stream holds a record at its longest, and no chunk past it | §24, New limits | the test of the copied sizes, `test-cocuyo_doh` | CAUGHT |
+| SB25 | the check of a prefix's length reads it before both its octets have come | the stream's rule 11 | the split-prefix test, and the whole-frame test and the test of a frame over TLS of empty messages, each by a slice past its end, `test-io` | CAUGHT |
+| SB26 | the length of a whole message is read from a prefix before both its octets have come | the stream's rule 11 | the whole-frame test and the test of a frame over TLS of empty messages, each by a slice past its end, `test-io` | CAUGHT |
+| SB27 | a prefix too long over TLS closes the connection at once, its `close_notify` unsaid | §21, TLS rule 5; RFC 9846 §6.1 | the test of a long prefix over TLS, `test-io` | CAUGHT |
+| SB28 | a connection that quits stages no `close_notify`, and closes at once | TLS rule 5; RFC 9846 §6.1 | the test of a long prefix over TLS, `test-io` | CAUGHT |

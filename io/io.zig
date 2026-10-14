@@ -452,6 +452,7 @@ test {
     if (comptime @hasDecl(rotor, "server")) {
         _ = @import("io_sim_test.zig");
         _ = @import("io_tcp_test.zig");
+        _ = @import("io_tcp_frame_test.zig");
         _ = @import("io_lifecycle_test.zig");
         _ = @import("io_lifecycle_cache_test.zig");
         _ = @import("io_tls_test.zig");

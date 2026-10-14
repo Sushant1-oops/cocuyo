@@ -11,6 +11,7 @@ const cocuyo = @import("cocuyo");
 const rotor = @import("rotor");
 const io = @import("io");
 const cocuyo_doh = @import("io_doh_channel.zig");
+const cocuyo_quic = @import("cocuyo_quic");
 const identity = @import("io_doh_channel_identity.zig");
 const server_module = @import("io_doh_channel_server.zig");
 const quic_server = @import("io_doh_channel_server_quic.zig");
@@ -296,4 +297,15 @@ test "a lookup through colibri's channel is answered over HTTP/3 by colibri's se
     try testing.expect(slot.links[@intFromEnum(Resolver.Doh.Link.quic)].state == .running);
     try testing.expect(slot.links[@intFromEnum(Resolver.Doh.Link.tcp)].state == .down);
     try world.destroy();
+}
+
+test "the sizes cocuyo_doh copies are the engine's and cocuyo_quic's" {
+    // cocuyo_doh imports neither module, so each size it shares with one is a copy. This test
+    // holds each copy to the size it copies (docs/design.md §24, New limits).
+    const own = cocuyo_doh.constants;
+    try testing.expectEqual(io.constants.tcp_chunk_bytes, own.engine_chunk_bytes);
+    try testing.expectEqual(io.constants.buffer_bytes, own.datagram_bytes);
+    try testing.expectEqual(cocuyo_quic.constants.receive_bytes_default, own.receive_bytes);
+    // A record at its longest and one chunk after it, as a TLS connection of the engine keeps.
+    try testing.expectEqual(io.constants.tls_record_in_bytes, own.stream_bytes);
 }

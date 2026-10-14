@@ -116,15 +116,18 @@ const Walk = struct {
 /// this to reach a record's type before deciding whether the owner name is worth decoding
 /// (docs/design.md §11).
 ///
-/// A pointer ends the name here and is not followed, so this checks that the pointer's two octets
-/// are inside the message and nothing more. A record the walk goes on to want has its owner name
-/// decoded by `decode`, which is where a pointer is validated.
+/// A pointer ends the name here and is not followed. So this checks that the pointer's two octets
+/// are inside the message. It also checks that the labels before it leave room for the root of
+/// the name it ends in. A record the walk goes on to want has its owner name decoded by `decode`.
+/// That is where a pointer is validated and the whole name is measured.
 pub fn skip(message: []const u8, offset: usize) Error!usize {
     assert(message.len <= core.constants.message_bytes_max);
     assert(offset <= message.len);
     var cursor = offset;
     var labels: usize = 0;
     while (labels <= core.constants.labels_max) {
+        // The labels so far leave room for a root after them.
+        assert(cursor - offset < core.constants.name_bytes_max);
         if (cursor >= message.len) return Error.MalformedMessage;
         const length = message[cursor];
         switch (kind_of(length)) {
@@ -136,6 +139,9 @@ pub fn skip(message: []const u8, offset: usize) Error!usize {
                 if (length == 0) return cursor + 1;
                 cursor += 1 + length;
                 labels += 1;
+                // The labels, and the root after them or the root a pointer's name ends in.
+                // "names 255 octets or less" (RFC 1035 §2.3.4), length octets counted (§3.1).
+                if (cursor - offset + 1 > core.constants.name_bytes_max) return Error.NameTooLong;
             },
             .reserved => return Error.MalformedName,
         }
@@ -284,4 +290,46 @@ test "encode writes the wire bytes and nothing else" {
     var out: [core.constants.name_bytes_max]u8 = @splat(0xff);
     try testing.expectEqual(@as(usize, 13), encode(&name, &out));
     try testing.expectEqualStrings("\x07example\x03com\x00", out[0..13]);
+}
+
+/// A label of `length` octets, every one an `a`, after its length octet.
+fn label_of(comptime length: usize) [1 + length]u8 {
+    return [_]u8{@intCast(length)} ++ [_]u8{'a'} ** length;
+}
+
+test "skip refuses a name longer than 255 octets, as decode does" {
+    // "names 255 octets or less" (RFC 1035 §2.3.4), "label octets and label length octets"
+    // counted (§3.1).
+    const header = [_]u8{0} ** core.constants.header_bytes;
+    const three_longest = label_of(core.constants.label_bytes_max) ** 3;
+    var name: Name = Name.empty;
+    // Three labels of 63, one of 61, and the root: 255 octets.
+    const longest = header ++ three_longest ++ label_of(61) ++ [_]u8{0};
+    try testing.expectEqual(header.len + core.constants.name_bytes_max, longest.len);
+    try testing.expectEqual(longest.len, try decode(&longest, header.len, &name));
+    try testing.expectEqual(longest.len, try skip(&longest, header.len));
+    // One of 62 in place of 61: 256 octets.
+    const one_past = header ++ three_longest ++ label_of(62) ++ [_]u8{0};
+    try testing.expectError(Error.NameTooLong, decode(&one_past, header.len, &name));
+    try testing.expectError(Error.NameTooLong, skip(&one_past, header.len));
+    // The most labels the walk counts, each of 63, and the root: 8,193 octets.
+    const most = header ++ label_of(core.constants.label_bytes_max) ** core.constants.labels_max ++ [_]u8{0};
+    try testing.expectError(Error.NameTooLong, decode(&most, header.len, &name));
+    try testing.expectError(Error.NameTooLong, skip(&most, header.len));
+}
+
+test "skip refuses labels that leave a pointer no room for the root its name ends in" {
+    // A root at offset 12 for the pointer to reach: the shortest name a pointer can end in.
+    const before = [_]u8{0} ** (core.constants.header_bytes + 1);
+    const pointer = [_]u8{ constants.label_kind_pointer, @intCast(core.constants.header_bytes) };
+    const three_longest = label_of(core.constants.label_bytes_max) ** 3;
+    var name: Name = Name.empty;
+    // 254 octets of labels, and the root the pointer reaches: 255 octets.
+    const longest = before ++ three_longest ++ label_of(61) ++ pointer;
+    try testing.expectEqual(longest.len, try decode(&longest, before.len, &name));
+    try testing.expectEqual(longest.len, try skip(&longest, before.len));
+    // 255 octets of labels, so the name the pointer ends is 256 octets at least.
+    const one_past = before ++ three_longest ++ label_of(62) ++ pointer;
+    try testing.expectError(Error.NameTooLong, decode(&one_past, before.len, &name));
+    try testing.expectError(Error.NameTooLong, skip(&one_past, before.len));
 }

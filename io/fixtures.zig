@@ -153,3 +153,27 @@ pub const cap_after_seconds = 30;
 
 /// What a test writes over memory the engine was told to let go of, to see it left alone.
 pub const memory_mark = 0xa5;
+
+/// The body of a full TLS record under AES-GCM: 2^14 octets of plaintext, the inner content type
+/// and the AEAD's 16-octet tag (RFC 9846 §5.2). A server that sends a long answer sends these.
+pub const full_record_body_bytes: usize = (1 << 14) + 1 + 16;
+
+/// The most plaintext a TLS record carries: 2^14 octets (RFC 9846 §5.1).
+pub const record_plaintext_bytes_max: usize = 1 << 14;
+
+/// Records a server sends back to back in a test: the first ends in the chunk that starts the
+/// second.
+pub const records_back_to_back: usize = 2;
+
+/// The body of a record after a long one. It is longer than the part of it that comes with the
+/// end of the long one. Its length is another, so the two headers differ.
+pub const short_record_body_bytes: usize = 4000;
+
+/// The octets of the next message that come in the same chunk as the end of a message. Then the
+/// length its prefix says, shorter than the first message, so the two prefixes differ.
+pub const next_message_octets: usize = 3;
+pub const next_message_bytes: u16 = 32;
+
+/// The seed whose twin hands a message of `tiny_message_bytes`, its prefix and
+/// `next_message_octets` to the tiny engine as one chunk.
+pub const one_chunk_seed: u64 = 36;

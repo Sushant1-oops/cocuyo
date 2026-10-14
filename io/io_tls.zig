@@ -11,6 +11,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const constants = @import("constants.zig");
 const tcp = @import("io_tcp.zig");
+const frame_module = @import("io_tcp_frame.zig");
 const queue_module = @import("io_tcp_queue.zig");
 const ring = @import("io_tcp_queue_ring.zig");
 const reset_module = @import("io_reset.zig");
@@ -133,21 +134,33 @@ pub fn begin(self: anytype, at: u8, now_ns: u64) void {
     _ = make_records(self, at, now_ns);
 }
 
-/// Bytes of a TLS connection's stream: kept until they make whole records, and each whole record
-/// handed to the session (rule 7).
+/// A chunk of a TLS connection's stream: taken whole, and every whole record in the buffer handed
+/// to the session, oldest first. The partial record after them stays, and none waits for a chunk
+/// that may not come (rule 7).
 pub fn take(self: anytype, at: u8, bytes: []const u8, now_ns: u64) void {
-    const state = &self.connections[at].tls;
-    if (state.record_in_used + bytes.len > state.record_in.len) return tcp.fail(self, at, now_ns);
+    const connection = &self.connections[at];
+    const state = &connection.tls;
+    // The buffer holds a partial record at most, and room for a chunk past it. Every whole record
+    // left with the chunk that made it whole, and `record_len` refused a longer record.
+    assert(bytes.len <= constants.tcp_chunk_bytes);
+    assert(state.record_in_used + bytes.len <= state.record_in.len);
     @memcpy(state.record_in[state.record_in_used..][0..bytes.len], bytes);
     state.record_in_used += bytes.len;
+    var start: usize = 0;
     var records: usize = 0;
-    while (records < constants.tls_records_per_chunk_max) : (records += 1) {
-        const whole = record_len(state.record_in[0..state.record_in_used]) catch return tcp.fail(self, at, now_ns);
-        if (whole == 0) return;
-        if (!hear(self, at, state.record_in[0..whole], now_ns)) return;
-        std.mem.copyForwards(u8, state.record_in[0 .. state.record_in_used - whole], state.record_in[whole..state.record_in_used]);
-        state.record_in_used -= whole;
+    while (records < constants.tls_records_per_buffer_max) : (records += 1) {
+        const whole = record_len(state.record_in[start..state.record_in_used]) catch return tcp.fail(self, at, now_ns);
+        if (whole == 0) break;
+        // A connection that failed, or opens again, keeps nothing of this opening's (rule 8). One
+        // that refused the record is closing, and passes the rest over unread (rules 4 and 5).
+        if (!hear(self, at, state.record_in[start..][0..whole], now_ns) and connection.state != .closing) return;
+        start += whole;
     }
+    // Each record is at least its header, so the bound never leaves a whole record behind.
+    assert((record_len(state.record_in[start..state.record_in_used]) catch unreachable) == 0);
+    const rest = state.record_in_used - start;
+    std.mem.copyForwards(u8, state.record_in[0..rest], state.record_in[start..state.record_in_used]);
+    state.record_in_used = rest;
 }
 
 /// The octets of the first whole record, zero while it has not all arrived. A record longer than
@@ -193,7 +206,8 @@ fn shake(self: anytype, at: u8, record: []u8, now_ns: u64) bool {
 /// the session's fatal alert goes out behind what is sealed before the connection closes, as an
 /// idle close's `close_notify` does (rules 4 and 5). "Whenever an implementation encounters a
 /// fatal error condition, it SHOULD send an appropriate fatal alert" (RFC 9846 §6.2). A session
-/// that staged no alert closes the connection once what is sealed has gone, or at once.
+/// that staged no alert closes the connection once what is sealed has gone, or at once. `quit`
+/// ends a connection the same way, its session's `close_notify` staged in place of an alert.
 fn refuse(self: anytype, at: u8, now_ns: u64) void {
     const connection = &self.connections[at];
     assert(connection.state == .handshaking or connection.state == .up);
@@ -205,11 +219,27 @@ fn refuse(self: anytype, at: u8, now_ns: u64) void {
     assert(connection.users == 0);
 }
 
+/// Ends a connection that is up, whose stream it cannot read past a message: a prefix says more
+/// than it assembles (the stream's rule 11). The session is sound and the peer is still there.
+/// So the session says `close_notify` first, as RFC 9846 §6.1 asks: "Each party MUST send a
+/// "close_notify" alert before closing its write side of the connection". Then the connection
+/// ends as a refused record ends it (rule 5).
+pub fn quit(self: anytype, at: u8, now_ns: u64) void {
+    const connection = &self.connections[at];
+    assert(connection.state == .up);
+    connection.tls.session.close();
+    refuse(self, at, now_ns);
+    assert(connection.state == .closing or connection.state == .closed);
+}
+
 /// A record once up: an answer's octets go to the connection's framing, a ticket is kept, and
 /// what the session answered of its own accord goes out (rule 2). The peer's close or a record
 /// the session refuses fails the connection.
 fn open(self: anytype, at: u8, record: []u8, now_ns: u64) bool {
     const connection = &self.connections[at];
+    // The frame holds a partial message at most, and room for a record's body past it (the
+    // stream's rule 11). The session needs no more room than the body.
+    assert(connection.used + record.len - constants.tls_record_header_bytes <= connection.frame.len);
     const opened = connection.tls.session.open(record, connection.frame[connection.used..]) catch {
         // "If the decryption fails, the receiver MUST terminate the connection" (RFC 9846 §5.2),
         // the session's alert said first (rule 4).
@@ -221,7 +251,7 @@ fn open(self: anytype, at: u8, record: []u8, now_ns: u64) bool {
     switch (opened) {
         .data => |count| {
             connection.used += count;
-            tcp.deliver(self, at, now_ns);
+            if (!frame_module.deliver(self, at, now_ns)) return false;
         },
         .nothing => {},
         .closed => {
