@@ -4,6 +4,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const cocuyo = @import("cocuyo");
+const constants = @import("constants.zig");
 const drive_module = @import("io_drive.zig");
 const tcp = @import("io_tcp.zig");
 const send_module = @import("io_send.zig");
@@ -35,6 +36,17 @@ pub fn assert_cache_memory(cache_memory: ?cocuyo.cache.Slices) void {
     assert(memory.valid());
 }
 
+/// What `init` and `reinit` check first, before they change anything: the payload size the
+/// configuration advertises fits a buffer of the datagram group. A longer datagram arrives cut,
+/// so the engine cannot receive a larger size (docs/design.md §19 step 13, the datagram's rule 7;
+/// §16 decision 44).
+pub fn check_payload(config: *const cocuyo.Config) error{UdpPayloadTooLarge}!void {
+    assert(config.udp_payload_bytes >= cocuyo.constants.udp_payload_bytes_min);
+    // "The requestor SHOULD place a value in this field that it can actually receive" (RFC 6891
+    // §6.2.3).
+    if (config.udp_payload_bytes > constants.udp_payload_bytes_max) return error.UdpPayloadTooLarge;
+}
+
 /// A new table over the engine's slots, and under it a new cache over `cache_memory`, which is
 /// what `init` starts with and what `reinit` starts again with. The cache is keyed by `seed`
 /// and capped at the configuration's `cache_ttl_seconds_max`, and it starts empty, since
@@ -43,6 +55,8 @@ pub fn assert_cache_memory(cache_memory: ?cocuyo.cache.Slices) void {
 /// cache's memory; §20). A send the old table made keeps its buffer until its final event, which
 /// then speaks for nobody (the stream's rules 6 and 7).
 pub fn reset_tables(self: anytype, config: *const cocuyo.Config, cache_memory: ?cocuyo.cache.Slices, seed: u64) void {
+    // `check_payload` refused a larger size before the call changed anything (rule 7).
+    assert(config.udp_payload_bytes <= constants.udp_payload_bytes_max);
     self.resolver = cocuyo.Resolver.init(&self.slots, &self.keys, config, seed);
     self.cache = null;
     if (cache_memory) |memory| {
@@ -66,10 +80,15 @@ pub fn reset_tables(self: anytype, config: *const cocuyo.Config, cache_memory: ?
 /// the caller likes, after which the engine never touches the old; or none, which turns the
 /// cache off until a later `reinit` hands some over (§19 step 13, the cache's memory).
 ///
-/// A `reinit` that fails has done all of that but open its sockets. The engine holds the new
-/// configuration and a cache over the memory this call handed it, which stays the engine's
+/// A `reinit` that fails at its sockets has done all of that but open them. The engine holds the
+/// new configuration and a cache over the memory this call handed it, which stays the engine's
 /// until a later `reinit` or `close` returns: a caller that got memory for this call must not
-/// free it on the error. The memory the engine held before is the caller's either way (rule 5).
+/// free it on that error. The memory the engine held before is the caller's then (rule 5).
+///
+/// A configuration whose `udp_payload_bytes` passes `constants.udp_payload_bytes_max` is refused
+/// with `UdpPayloadTooLarge` before anything changes. The engine keeps its configuration, its
+/// tables, its cache over the memory it held, its sockets and its connections. The memory this
+/// call handed it is the caller's again (the datagram's rule 7).
 ///
 /// The engine must be idle: a lookup in flight was started against servers that are
 /// going away, and its handle would name a slot the new table has never heard of. A
@@ -98,6 +117,7 @@ pub fn reinit(
     assert_cache_memory(cache_memory);
     assert(self.resolver.in_flight() == 0);
     _ = now_ns;
+    try check_payload(config);
     tcp.cancel_all(self);
     tcp.close_all(self);
     self.tcp_connection = @splat(null);

@@ -2430,4 +2430,125 @@
         },
         .caught_by = .{ .step = "test-io" },
     },
+    .{
+        .section = "A payload that the engine cannot receive",
+        .id = "PL1",
+        .what = "init has no check of the payload",
+        .edits = .{
+            .{ .file = "io/io.zig", .old = "            try lifecycle.check_payload(config);\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "A payload that the engine cannot receive",
+        .id = "PL2",
+        .what = "reinit has no check of the payload",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "    try check_payload(config);\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "A payload that the engine cannot receive",
+        .id = "PL3",
+        .what = "init has no check of the payload, and the tables no assertion of it",
+        .edits = .{
+            .{ .file = "io/io.zig", .old = "            try lifecycle.check_payload(config);\n", .new = "" },
+            .{ .file = "io/io_lifecycle.zig", .old = "    // `check_payload` refused a larger size before the call changed anything (rule 7).\n    assert(config.udp_payload_bytes <= constants.udp_payload_bytes_max);\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "A payload that the engine cannot receive",
+        .id = "PL4",
+        .what = "reinit has no check of the payload, and the tables no assertion of it",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "    try check_payload(config);\n", .new = "" },
+            .{ .file = "io/io_lifecycle.zig", .old = "    // `check_payload` refused a larger size before the call changed anything (rule 7).\n    assert(config.udp_payload_bytes <= constants.udp_payload_bytes_max);\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "A payload that the engine cannot receive",
+        .id = "PL5",
+        .what = "the check takes one octet past the room",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "    if (config.udp_payload_bytes > constants.udp_payload_bytes_max) return error.UdpPayloadTooLarge;", .new = "    if (config.udp_payload_bytes > constants.udp_payload_bytes_max + 1) return error.UdpPayloadTooLarge;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "A payload that the engine cannot receive",
+        .id = "PL6",
+        .what = "the check refuses the room",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "    if (config.udp_payload_bytes > constants.udp_payload_bytes_max) return error.UdpPayloadTooLarge;", .new = "    if (config.udp_payload_bytes >= constants.udp_payload_bytes_max) return error.UdpPayloadTooLarge;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "A payload that the engine cannot receive",
+        .id = "PL7",
+        .what = "the limit is the whole buffer, rotor's prefix with it",
+        .edits = .{
+            .{ .file = "io/constants.zig", .old = "pub const udp_payload_bytes_max: usize = rotor.datagram.payload_capacity(buffer_bytes, group_options);", .new = "pub const udp_payload_bytes_max: usize = buffer_bytes;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "A payload that the engine cannot receive",
+        .id = "PL8",
+        .what = "the datagram group is provided under options other than the limit's",
+        .edits = .{
+            .{ .file = "io/io_udp.zig", .old = "        const group = constants.group_options;", .new = "        const group: rotor.datagram.GroupOptions = .{ .control_reserve = constants.group_options.control_reserve + 64 };" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "A payload that the engine cannot receive",
+        .id = "PL9",
+        .what = "init checks the payload after it writes the engine",
+        .edits = .{
+            .{ .file = "io/io.zig", .old = "            try lifecycle.check_payload(config);\n            self.loop = loop;\n            self.config = config;\n            self.send_in_flight = @splat(false);\n            self.sent_from = @splat(null);\n", .new = "            self.loop = loop;\n            self.config = config;\n            self.send_in_flight = @splat(false);\n            self.sent_from = @splat(null);\n            try lifecycle.check_payload(config);\n" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "A payload that the engine cannot receive",
+        .id = "PL10",
+        .what = "reinit checks the payload after it closes its connections and its sockets",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "    try check_payload(config);\n    tcp.cancel_all(self);\n    tcp.close_all(self);\n    self.tcp_connection = @splat(null);\n    request_tend.cancel_all(self);\n    request_tend.close_all(self);\n    channel_link.cancel_all(self);\n    channel_link.close_all(self);\n    channel_module.forget_all(self);\n    request_module.forget_all(self);\n    self.sockets.cancel(self.loop);\n    self.sockets.close();\n", .new = "    tcp.cancel_all(self);\n    tcp.close_all(self);\n    self.tcp_connection = @splat(null);\n    request_tend.cancel_all(self);\n    request_tend.close_all(self);\n    channel_link.cancel_all(self);\n    channel_link.close_all(self);\n    channel_module.forget_all(self);\n    request_module.forget_all(self);\n    self.sockets.cancel(self.loop);\n    self.sockets.close();\n    try check_payload(config);\n" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "A payload that the engine cannot receive",
+        .id = "PL11",
+        .what = "reinit cancels the receives of its sockets before the check",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "    try check_payload(config);\n    tcp.cancel_all(self);\n", .new = "    self.sockets.cancel(self.loop);\n    try check_payload(config);\n    tcp.cancel_all(self);\n" },
+            .{ .file = "io/io_lifecycle.zig", .old = "    request_module.forget_all(self);\n    self.sockets.cancel(self.loop);\n    self.sockets.close();\n", .new = "    request_module.forget_all(self);\n    self.sockets.close();\n" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "A payload that the engine cannot receive",
+        .id = "PL12",
+        .what = "reinit closes its streams before the check, and its sockets after it",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "    try check_payload(config);\n    tcp.cancel_all(self);\n", .new = "    tcp.cancel_all(self);\n" },
+            .{ .file = "io/io_lifecycle.zig", .old = "    request_module.forget_all(self);\n    self.sockets.cancel(self.loop);\n", .new = "    request_module.forget_all(self);\n    try check_payload(config);\n    self.sockets.cancel(self.loop);\n" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "A payload that the engine cannot receive",
+        .id = "PL13",
+        .what = "reinit cancels the operations of its streams before the check",
+        .edits = .{
+            .{ .file = "io/io_lifecycle.zig", .old = "    try check_payload(config);\n    tcp.cancel_all(self);\n    tcp.close_all(self);\n", .new = "    tcp.cancel_all(self);\n    try check_payload(config);\n    tcp.close_all(self);\n" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
 }

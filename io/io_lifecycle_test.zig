@@ -1,7 +1,9 @@
 //! What a consumer does to the engine besides asking it questions (docs/design.md §19 step 13):
 //! cancelling everything at once, taking a new configuration, binding to a local address of its
-//! own, and retiring a source port that has carried its share, or failing to. The rig is the one
-//! `io_sim_test.zig` builds, since these drive the same engine over the same scripted servers.
+//! own, and retiring a source port that has carried its share, or failing to. Last, the payload
+//! sizes that `init` and `reinit` refuse (docs/design.md §19 step 13, the datagram's rule 7). The
+//! rig is the one `io_sim_test.zig` builds, since these drive the same engine over the same
+//! scripted servers.
 const std = @import("std");
 const testing = std.testing;
 const cocuyo = @import("cocuyo");
@@ -197,5 +199,114 @@ test "a receive's generation and a socket's epoch wrap at the last of their thir
     _ = rig.engine.take(rig.loop.now());
     try testing.expectEqual(@as(u32, 0), rig.engine.sockets.items[0].armed_generation);
     try testing.expectEqual(@as(u32, 0), rig.engine.sockets.items[0].epoch);
+    try rig.deinit();
+}
+
+/// The sockets the twin holds open, whoever opened them.
+fn open_sockets(loop: *rotor.Loop) usize {
+    var count: usize = 0;
+    for (loop.network().sockets) |socket| count += @intFromBool(socket.open);
+    return count;
+}
+
+/// The payload size that the query of `handle`'s lookup advertises in its OPT record (RFC 6891
+/// §6.1.2). A query over UDP starts at the first octet of its slot's buffer.
+fn advertised(engine: anytype, handle: cocuyo.Handle) !u16 {
+    const query = &engine.send_buffers[handle.index];
+    var name: cocuyo.Name = cocuyo.Name.empty;
+    _ = try cocuyo.wire.question.parse(query, &name);
+    const opt = (try cocuyo.wire.response_opt.find(query, &name)) orelse return error.NoOpt;
+    return opt.class;
+}
+
+/// A configuration of the rig's servers that advertises `payload_bytes`.
+fn advertising(rig: *const Rig, payload_bytes: usize) cocuyo.Config {
+    var config = rig.config;
+    config.udp_payload_bytes = @intCast(payload_bytes);
+    return config;
+}
+
+/// What a refused `reinit` keeps of the stream in the engine's first slot: its state, its socket,
+/// its receive and its opening.
+const Stream = struct { up: bool, descriptor: ?rotor.Descriptor, receive: ?rotor.Handle, receiving: bool, incarnation: u32 };
+
+fn stream_of(engine: anytype) Stream {
+    const connection = &engine.connections[0];
+    return .{
+        .up = connection.state == .up,
+        .descriptor = connection.descriptor,
+        .receive = connection.handle,
+        .receiving = connection.receiving,
+        .incarnation = connection.incarnation,
+    };
+}
+
+test "init takes a payload at the room of a datagram buffer, and refuses one octet more" {
+    // "The requestor SHOULD place a value in this field that it can actually receive" (RFC 6891
+    // §6.2.3). The engine receives into a buffer of its datagram group (docs/design.md §19 step
+    // 13, the datagram's rule 7).
+    const room = io.constants.udp_payload_bytes_max;
+    var refused: Rig = .{};
+    @memset(std.mem.asBytes(&refused.engine), fixtures.memory_mark);
+    const past: cocuyo.Config = .{ .servers = &.{}, .udp_payload_bytes = @intCast(room + 1) };
+    try testing.expectError(error.UdpPayloadTooLarge, refused.init(51, .{ .{}, .{} }, past));
+    // The check came first: the engine's memory is as it was, and no buffer or socket is taken.
+    try testing.expect(std.mem.allEqual(u8, std.mem.asBytes(&refused.engine), fixtures.memory_mark));
+    try testing.expectEqual(@as(u16, 0), refused.loop.groups[io.constants.group_id].count);
+    try testing.expectEqual(@as(usize, 0), open_sockets(&refused.loop));
+    refused.loop.deinit();
+
+    var rig: Rig = .{};
+    try rig.init(52, .{ .{}, .{} }, .{ .servers = &.{}, .udp_payload_bytes = @intCast(room) });
+    // The room is what a buffer of the loop's group holds, under the options the engine gave it.
+    const holds = rotor.datagram.payload_capacity(io.constants.buffer_bytes, rig.loop.group_options);
+    try testing.expectEqual(room, holds);
+    const handle = try rig.engine.start(question("example.com."), rig.loop.now());
+    try testing.expectEqual(@as(u16, @intCast(room)), try advertised(&rig.engine, handle));
+    try testing.expect((try rig.until_result()).outcome == .answer);
+    _ = rig.engine.take(rig.loop.now());
+    try rig.deinit();
+}
+
+test "reinit refuses a payload one octet past the room, and the engine keeps what it held" {
+    // The first server cuts each answer over UDP, so the lookup asks it again over a stream (RFC
+    // 7766 §5). Then the stream stays up and idle beside the socket.
+    var rig: Rig = .{};
+    try rig.init(53, .{ .{ .truncate_per_256 = fixtures.always }, .{} }, .{ .servers = &.{} });
+    _ = try rig.engine.start(question("example.com."), rig.loop.now());
+    try testing.expect((try rig.until_result()).outcome == .answer);
+    _ = rig.engine.take(rig.loop.now());
+    const socket = rig.engine.sockets.items[0];
+    const stream = stream_of(&rig.engine);
+    try testing.expect(stream.up and stream.receiving);
+    const sockets_open = open_sockets(&rig.loop);
+    const past = advertising(&rig, io.constants.udp_payload_bytes_max + 1);
+    var other: cocuyo.cache.Storage(fixtures.cache_least_slots) = undefined;
+    @memset(std.mem.asBytes(&other), fixtures.memory_mark);
+    const refused = rig.engine.reinit(&past, other.slices(), 54, rig.loop.now());
+    try testing.expectError(error.UdpPayloadTooLarge, refused);
+    // Nothing changed: the configuration, the cache over the memory it held, and the socket and
+    // the stream, each with its receive. The memory of the call is the caller's, and the engine
+    // never wrote it.
+    try testing.expectEqual(@as(*const cocuyo.Config, &rig.config), rig.engine.config);
+    try testing.expectEqual(@as([*]cocuyo.cache.Slot, &rig.cache_memory.slots), rig.engine.cache.?.slots.ptr);
+    try testing.expectEqual(@as(u64, 53), rig.engine.cache.?.seed);
+    try testing.expectEqual(socket, rig.engine.sockets.items[0]);
+    try testing.expectEqual(stream, stream_of(&rig.engine));
+    try testing.expectEqual(sockets_open, open_sockets(&rig.loop));
+    try testing.expect(std.mem.allEqual(u8, std.mem.asBytes(&other), fixtures.memory_mark));
+    // The cache still holds the answer, so nothing goes out for it.
+    const hit = try rig.engine.start(question("example.com."), rig.loop.now());
+    try testing.expectEqual(hit, rig.engine.take(rig.loop.now()).?.handle);
+    _ = rig.engine.take(rig.loop.now());
+
+    // At the room the reinit takes the configuration, and its queries advertise the room.
+    const at = advertising(&rig, io.constants.udp_payload_bytes_max);
+    try rig.engine.reinit(&at, rig.cache_memory.slices(), 55, rig.loop.now());
+    try testing.expectEqual(@as(*const cocuyo.Config, &at), rig.engine.config);
+    const handle = try rig.engine.start(question("example.com."), rig.loop.now());
+    try testing.expectEqual(@as(u16, @intCast(io.constants.udp_payload_bytes_max)), try advertised(&rig.engine, handle));
+    try testing.expect((try rig.until_result()).outcome == .answer);
+    _ = rig.engine.take(rig.loop.now());
     try rig.deinit();
 }

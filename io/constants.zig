@@ -2,6 +2,7 @@
 //! lookups its options size and the cache its caller hands it the memory of.
 const std = @import("std");
 const core = @import("cocuyo").core;
+const rotor = @import("rotor");
 
 /// The lookups an engine holds in flight, when the caller says nothing.
 pub const lookups_default: usize = 256;
@@ -28,6 +29,17 @@ pub const index_mask: u64 = (1 << kind_shift) - 1;
 pub const group_buffers_default: usize = 64;
 pub const buffer_bytes: usize = 2048;
 pub const group_id: u16 = 0;
+
+/// The options the engine provides its datagram group with: rotor's own, whose prefix before each
+/// payload is 192 octets.
+pub const group_options: rotor.datagram.GroupOptions = .{};
+
+/// The most `Config.udp_payload_bytes` that the engine's `init` and `reinit` take. It is what one
+/// buffer of the datagram group holds of a datagram: `buffer_bytes` less rotor's prefix, 1,856
+/// octets. It follows from the buffer and the options, so a change of either changes it too. "The
+/// requestor SHOULD place a value in this field that it can actually receive" (RFC 6891 §6.2.3). A
+/// longer datagram arrives cut (docs/design.md §19 step 13, the datagram's rules 6 and 7).
+pub const udp_payload_bytes_max: usize = rotor.datagram.payload_capacity(buffer_bytes, group_options);
 
 /// The most operations and entries the loop is asked to hold for one engine: a receive per
 /// server, a send per lookup, one timer, and slack for the closes.
@@ -193,7 +205,7 @@ comptime {
     if (@as(comptime_int, quic_incarnation_shift) + 32 > kind_shift) {
         @compileError("a QUIC connection's user_data has no room for a thirty-two-bit incarnation");
     }
-    if (buffer_bytes < core.constants.udp_payload_bytes_default + 192) {
+    if (udp_payload_bytes_max < core.constants.udp_payload_bytes_default) {
         @compileError("a group buffer cannot hold the payload cocuyo advertises after rotor's prefix");
     }
     if (!@import("cocuyo").cache.slot_count_valid(cache_slots_default)) {

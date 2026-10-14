@@ -5883,3 +5883,161 @@ Thirty-six mutations, thirty-six `CAUGHT`.
 | OA34 | the model's draining socket stays open while its lookup waits on a stream | the same, in the engine model | TLC's check "rotated" on `mutants/OA34`, `zig build tla` | CAUGHT |
 | OA35 | the same as OA33, against the engine's tests | the datagram's rules 4 and 6 | the test of a draining socket in `io_sim_datagram_test.zig`, `test-io` | CAUGHT |
 | OA36 | a lookup under `ignore_truncation` reads a cut datagram, against the engine's tests | rule 1 | the test of `ignore_truncation` in `io_sim_datagram_test.zig`, `test-io` | CAUGHT |
+
+## A payload that the engine cannot receive
+
+2026-10-14. The owner answered question 47 of docs/design.md §17. The engine's `init` and `reinit`
+now refuse a `Config.udp_payload_bytes` that passes what a buffer of the datagram group holds.
+Each returns `error.UdpPayloadTooLarge`, and the call changes nothing. §16 decision 44 records the
+rule. §17 questions 48 to 50 asked the owner about three choices that the rule left to the build.
+The owner kept each one as built, the same day.
+
+### Where a payload size comes from
+
+- `Config.udp_payload_bytes` holds it. Its default is 1,232 octets, `udp_payload_bytes_default`.
+  `assert_valid` takes 512 to 65,535.
+- No line of a `resolv.conf` sets it, and no option of `RES_OPTIONS` does. The option parser
+  reads `edns0` as no option (`src/config/resolv_conf_options.zig`). No server holds a size of
+  its own.
+- So only the caller's code sets it. Such a caller can read the size from a file of its own.
+
+A buffer of the datagram group is `buffer_bytes`, 2,048 octets. rotor puts a prefix of 192 octets
+before each payload, under the options of the group. So a buffer holds 1,856 octets of a
+datagram. `udp_payload_bytes_max` in `io/constants.zig` names that room. It is what rotor's
+`payload_capacity` gives for `buffer_bytes` under `group_options`. `io_udp.zig` provides the
+group under the same `group_options`, so a change of the buffer or of the options changes the
+limit too.
+
+The tree's rules argue for an assertion. `assert_valid` asserts each rule of a configuration,
+since the caller builds it. But the owner ruled an error, and no rule of CLAUDE.md forbids one, so
+the code follows the owner. An assertion in `reset_tables` stands after the check (decision 44).
+
+### The design
+
+The design changed first:
+
+- §4: a comment on `udp_payload_bytes` in the sketch of `Config`.
+- §7, A datagram that the buffer cut: only a forger or a broken server sends such a datagram now.
+- §16: decision 44, and the end of decision 43. Decision 37 now says a `reinit` that fails at its
+  sockets.
+- §17: the answer to question 47, and questions 48 to 50 with their answers. Question 33 now
+  asks about a `reinit` that fails at its sockets.
+- §19 step 13: the datagram's rule 7, `InitError` in the sketch, rule 5 of the cache's memory,
+  and a row of New limits.
+- §24: the section "What `init` and `reinit` return", and the memory after a refused `reinit`.
+
+Neither model changes. The Lean models hold no size of a payload. The TLA+ model of the engine
+starts from an engine that `init` built, and holds no `reinit` and no octets.
+
+Rule 5 of the cache's memory gives a `reinit` that fails at its sockets the new configuration and
+the new memory. A refused `reinit` is not like it. The check comes before the call changes
+anything, so the engine keeps the old configuration and the old memory. The memory of the call is
+the caller's again at once. Until this rule, the old memory was the caller's whatever `reinit`
+returned, so §17 question 49 asked the owner about the change. The owner accepted it.
+
+### The tests and the code
+
+The tests came first, in `io/io_lifecycle_test.zig`. Run before the code, each failed at its
+first new check: "expected error.UdpPayloadTooLarge, found void".
+
+- The test of `init`. One octet past the room, `init` returns the error. The engine's memory,
+  marked before the call, is as it was. The loop holds no group, and the twin holds no open
+  socket. At the room, `init` starts the engine. The room is what a buffer of the loop's group
+  holds under the options that the engine gave it. A query advertises the room, and its answer
+  comes.
+- The test of `reinit`. The first server cuts each answer over UDP, so the lookup asks it again
+  over a stream. The stream stays up and idle beside the socket. One octet past the room,
+  `reinit` returns the error. The engine keeps its configuration and its cache over the memory
+  that it held, with its seed and its answer. Each field of the socket is as it was, and its
+  receive is one of them. The stream is still up, with the same socket, receive and opening. The
+  twin holds as many open sockets as before. The memory of the call, marked before it, is as it
+  was. At the room, `reinit` takes the configuration, and a query advertises the room.
+
+Then the code:
+
+- `io/constants.zig`: `group_options` and `udp_payload_bytes_max`. The comptime check that a
+  buffer holds the default payload reads the limit. It no longer adds rotor's prefix of 192 by
+  hand.
+- `io/io_udp.zig`: the datagram group gets `constants.group_options`. Its comptime check that a
+  buffer holds the default payload is gone, since the check of `io/constants.zig` says the same.
+- `io/io_lifecycle.zig`: `check_payload`, which `init` and `reinit` call before they change
+  anything, and the assertion of `reset_tables`.
+- `io/io.zig`: `UdpPayloadTooLarge` in `InitError`, and the doc comments of `init` and `reinit`.
+
+README.md and the doc comment of `Config.udp_payload_bytes` say what the engine refuses.
+
+### The review
+
+A review found two gaps in the first test of `reinit`:
+
+- It read three fields of the socket: `open`, the descriptor and the generation of its receive.
+  `Sockets.cancel` changes none of them. It sets the receive alone to none.
+- Its rig held no stream. A check after the streams closed changed nothing that the test read.
+
+Three rows showed the gaps. Against the first test, each was `NOT CAUGHT`:
+
+- PL11: `reinit` cancels the receives of its sockets before the check.
+- PL12: `reinit` closes its streams before the check, and its sockets after it.
+- PL13: `reinit` cancels the operations of its streams before the check.
+
+The test now holds a stream, and compares each field of the socket. Against it, each of the three
+is `CAUGHT`. The engine's map from a lookup to its stream holds nothing for an idle stream:
+`release` clears the entry of a lookup that ends. So the test reads the connection itself.
+
+The review also found that the comptime check of `io_udp.zig` said again what the check of
+`io/constants.zig` says. That check is gone. In its place, a run of the tool tried a check that
+requires the room of the group to equal the limit. The run had a fourteenth row. The check made PL7
+and PL8 stop the build. The tool reads a compile error of this tree's own as an edit that no longer
+applies, so it found both rows `NOT CAUGHT`. The test of `init` already ties the group to the
+limit, and it catches both rows. So no comptime check took the place of the old one, and the
+fourteenth row went with it.
+
+### The users
+
+No example, test, replay or benchmark gives the engine a size above the room:
+
+- The examples over the engine, `test/consumer/embed.zig`, `bench/end_to_end/rotor_loop.zig` and
+  `tools/spec_replay/engine_world.zig` keep the default, 1,232 octets. So do the README's blocks.
+- `src/resolver/lookup_config_test.zig` advertises 65,535 octets, but to the library alone, whose
+  caller holds its own buffer.
+- None of them names an error of `InitError`. Each calls `init` with `try`, so the new error
+  changes none of them.
+
+### What ran
+
+With the change, `zig build test` has 1,086 tests pass of 1,086. The change adds the two tests
+of `io_lifecycle_test.zig`. `zig build lint` passes, with each function at a complexity of 15 or
+less. `zig build spec-lean` passes: 2,680,563 events and 354,997 cut datagrams agree with the
+model, and 66,565 events of the walks. These steps ran too:
+
+- `zig build examples` builds its four programs.
+- `zig build test-cares` has 37 tests pass of 37. The engine of `bench/end_to_end/` keeps the
+  default size.
+
+`zig build spec-engine` and `zig build tla` did not run. Neither model changed, and no walk
+reaches `init` with a size other than the default.
+
+### The rows
+
+Each row ran by hand, in a copy of the tree with a cache of its own. Those runs name the tests
+that catch each row. Then `zig build mutations -- engine PL1 ... PL13` ran the thirteen rows,
+after it ran `zig build test-io` once with nothing mutated. The run found each row `CAUGHT`, and
+left the tree as it was.
+
+Thirteen mutations, thirteen `CAUGHT`.
+
+| # | Mutation | Check it breaks | Caught by | Status |
+| --- | --- | --- | --- | --- |
+| PL1 | `init` has no check of the payload | the datagram's rule 7 | the test of `init` in `io_lifecycle_test.zig`, by the assertion of `reset_tables`, `test-io` | CAUGHT |
+| PL2 | `reinit` has no check of the payload | rule 7 | the test of `reinit` in `io_lifecycle_test.zig`, by the assertion of `reset_tables`, `test-io` | CAUGHT |
+| PL3 | `init` has no check of the payload, and `reset_tables` no assertion of it | rule 7, RFC 6891 §6.2.3 | the test of `init`: "expected error.UdpPayloadTooLarge, found void", `test-io` | CAUGHT |
+| PL4 | `reinit` has no check of the payload, and `reset_tables` no assertion of it | rule 7, RFC 6891 §6.2.3 | the test of `reinit`: "expected error.UdpPayloadTooLarge, found void", `test-io` | CAUGHT |
+| PL5 | the check takes one octet past the room | rule 7 | the tests of `init` and `reinit`, each by the assertion of `reset_tables`, `test-io` | CAUGHT |
+| PL6 | the check refuses the room | rule 7 | the tests of `init` and `reinit`, each at the room, `test-io` | CAUGHT |
+| PL7 | the limit is the whole buffer, rotor's prefix with it | `udp_payload_bytes_max` | the test of `init`: "expected 2048, found 1856", `test-io` | CAUGHT |
+| PL8 | the datagram group is provided under options other than the limit's | `group_options` | the test of `init`, and the test of a datagram that fills a buffer in `io_sim_datagram_test.zig`, each "expected 1856, found 1792", `test-io` | CAUGHT |
+| PL9 | `init` checks the payload after it writes the engine | rule 7: the call changes nothing | the test of `init`, at the engine's memory, `test-io` | CAUGHT |
+| PL10 | `reinit` checks the payload after it closes its connections and its sockets | rule 7: the call changes nothing | the test of `reinit`, at its socket, `test-io` | CAUGHT |
+| PL11 | `reinit` cancels the receives of its sockets before the check | rule 7: the call changes nothing | the test of `reinit`, at the receive of its socket, `test-io` | CAUGHT |
+| PL12 | `reinit` closes its streams before the check, and its sockets after it | rule 7: the call changes nothing | the test of `reinit`, at its stream, which is no longer up, `test-io` | CAUGHT |
+| PL13 | `reinit` cancels the operations of its streams before the check | rule 7: the call changes nothing | the test of `reinit`, at the receive of its stream, `test-io` | CAUGHT |

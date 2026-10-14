@@ -248,7 +248,9 @@ fn rotor_family(family: cocuyo.Family) rotor.Address.Family {
 pub fn Group(comptime buffers: u16) type {
     return struct {
         const Self = @This();
-        const group: rotor.datagram.GroupOptions = .{};
+        /// The options that `constants.udp_payload_bytes_max` is read under. So the room it names
+        /// is the room of these buffers (docs/design.md §19 step 13, the datagram's rule 7).
+        const group = constants.group_options;
 
         const needed = rotor.buffers.group_bytes(buffers, constants.buffer_bytes);
         const alignment = rotor.buffers.group_alignment;
@@ -286,12 +288,6 @@ pub fn Group(comptime buffers: u16) type {
             assert(@intFromPtr(memory.ptr) % alignment == 0);
             loop.provide_datagram_buffers(constants.group_id, memory, buffers, constants.buffer_bytes, group) catch
                 return error.ReceiveFailed;
-        }
-
-        comptime {
-            if (rotor.datagram.payload_capacity(constants.buffer_bytes, group) < cocuyo.constants.udp_payload_bytes_default) {
-                @compileError("a group buffer cannot hold the payload cocuyo advertises");
-            }
         }
     };
 }

@@ -278,13 +278,19 @@ try resolver.reinit(&config, .{ .slots = entries, .keys = index }, new_seed, now
 
 A cache takes 1 to 16,384 slots, 2,984 octets each, and `cocuyo.cache.keys_for` gives the key
 index a slot count needs. The memory must stay valid, and where it is, until the engine's `close`,
-or until a `reinit` hands the engine other memory or none. A `reinit` that fails has still taken
-the memory it was handed, so never free that memory on the error: hand it to the next `reinit`, or
-keep it until `close`. Each engine has its own. The cache keeps no answer longer than
+or until a `reinit` hands the engine other memory or none. A `reinit` that fails at its sockets has
+still taken the memory it was handed. So never free that memory on that error: hand it to the next
+`reinit`, or keep it until `close`. Each engine has its own. The cache keeps no answer longer than
 `Config.cache_ttl_seconds_max`, an hour unless you set it and seven days at most, the cap
 RFC 8767 §4 recommends; `cocuyo.cache.ttl_seconds_max_valid` says whether a cap you read at run
 time is one a cache takes. cocuyo never reads the cap from a `resolv.conf`, which has no line for
 it.
+
+The engine receives each datagram into a buffer that holds 1,856 octets of it,
+`dns.constants.udp_payload_bytes_max`. So `init` and `reinit` refuse a `Config.udp_payload_bytes`
+above it with `error.UdpPayloadTooLarge`, as RFC 6891 §6.2.3 asks. Such a call changes nothing. A
+refused `reinit` keeps the memory it held, so do not free that memory on this error. The memory you
+handed it is yours again. The default, 1,232, fits.
 
 [`examples/`](examples) holds complete programs that resolve real names against real servers: one
 lookup over a blocking UDP socket, the same over [rotor](#an-event-loop-to-drive-it-rotor), and the

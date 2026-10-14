@@ -120,7 +120,9 @@ pub const Config = struct {
     /// far; before 2026-10-09 the default cap was 30 seconds and this needed no such care.
     timeout_ns: u64 = constants.timeout_ns_default,
     /// The UDP payload size cocuyo advertises in OPT, which is also the smallest receive buffer
-    /// the caller may use.
+    /// the caller may use. The engine receives into buffers of its own. Its `init` and `reinit`
+    /// refuse a size above what one of them holds, `cocuyo_rotor.constants.udp_payload_bytes_max`
+    /// (docs/design.md §19 step 13, the datagram's rule 7).
     udp_payload_bytes: u16 = constants.udp_payload_bytes_default,
     /// Whether to randomise the case of the qname (DNS-0x20) and require it back unchanged. On by
     /// default. A server that answers a mixed name in lowercase is asked in lowercase from then

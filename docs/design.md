@@ -214,7 +214,7 @@ pub const Config = struct {
     attempts: u8 = attempts_default,
     timeout_ns: u64 = timeout_ns_default,         // 2 s: a wait before 3 samples (§5)
     timeout_ns_max: u64 = timeout_ns_max_default, // 5 s: the cap on every wait (c-ares maxtimeout)
-    udp_payload_bytes: u16 = udp_payload_bytes_default,
+    udp_payload_bytes: u16 = udp_payload_bytes_default, // in OPT; the engine takes udp_payload_bytes_max at most
     mix_case: bool = true,        // DNS-0x20, but lowercase to a server that lowercases (§7)
     rotate: bool = false,
     use_tcp: bool = false,        // every query over TCP (use-vc, ARES_FLAG_USEVC)
@@ -860,8 +860,8 @@ the octets that fit and marks the datagram as truncated. The rest is gone. rotor
 as `Received.flags.truncated`. The engine's buffer holds 1,856 octets (§19 step 13, the
 datagram's rule 6). A query advertises 1,232 octets by default, "the largest UDP payload" that
 cocuyo takes (RFC 6891 §6.2.3). A server that obeys it sends no datagram that the buffer cuts.
-A caller that sets `Config.udp_payload_bytes` above 1,856 can get such datagrams from any server
-(§17 question 47).
+Since 2026-10-14 the engine refuses a `Config.udp_payload_bytes` above 1,856 (§16 decision 44).
+So only a forger or a broken server sends a datagram that the buffer cuts.
 
 Until 2026-10-14 the engine did not read the mark. The table read the cut octets as a whole
 message. A check or the record walk refused them, and the lookup waited until its deadline.
@@ -2107,9 +2107,10 @@ step until `zig build test` passes.
     - `engine_cache_slots_default` stays, as the size the README and the examples use and no
       default the engine takes (§19 step 13).
     - `cache_memory` sits after the configuration and before the seed, in both functions.
-    - A `reinit` that fails has taken the memory it was handed, as it has taken the
-      configuration and the seed of that call, and the memory it held before is the caller's
-      (§19 step 13, rule 5). Before the ruling `reinit` already built its table and then
+    - A `reinit` that fails at its sockets has taken the memory it was handed, with the
+      configuration and the seed of that call. The memory it held before is the caller's
+      (§19 step 13, rule 5). Since 2026-10-14 a `reinit` refused with `UdpPayloadTooLarge` takes
+      nothing (decision 44). Before the ruling `reinit` already built its table and then
       opened its sockets, and the cache follows the table. The other choice was a failed
       `reinit` that leaves the engine with no cache, so that it holds neither memory and a
       caller's `errdefer` may free what it just got. That changes what `reinit` does, so it is
@@ -2492,12 +2493,19 @@ step until `zig build test` passes.
       reached the lookup, from any server.
     - The cut datagram dropped before the table sees it. The lookup still waits until its
       deadline, and nothing tells it that its answer came and was too long.
+    - Buffers that hold each datagram whole, as c-ares reads one. At 65,536 octets each, the
+      group of 64 takes 4 MiB, against 128 KiB. The owner kept the cut on 2026-10-14, after a
+      probe of that day. No TLD server, public resolver or name server of 56 large domains sent
+      more than the query advertised. The servers that broke the 512-octet limit of a query
+      without EDNS sent 867 octets at most. APNIC reported in 2020 that about 11% of fragmented
+      answers over IPv4 are lost, and 15% over IPv6.
 
     Not decided here: the engine could refuse a `Config.udp_payload_bytes` above its room of 1,856
     octets. RFC 6891 §6.2.3 says that a requestor "SHOULD place a value in this field that it can
     actually receive". Then only a forger or a broken server could send a datagram that the buffer
     cuts. The rule above is still needed for those. The refusal changes what the engine's `init`
-    takes, so it is §17 question 47.
+    takes, so it was §17 question 47. The owner answered it the same day, and decision 44 holds
+    the refusal.
 
     The engine model holds the rule in two configurations of its own. The replay runs the engine
     down the walks of one of them (§19 step 13, Checked on 2026-10-14). The machine code
@@ -2506,6 +2514,67 @@ step until `zig build test` passes.
     of 2026-10-14).
 
     §5, §7, §19 step 13 (the datagram's rule 6).
+44. **The engine refuses a `Config.udp_payload_bytes` that passes the room of a buffer of its
+    datagram group.** Ruled by the owner on 2026-10-14, in answer to §17 question 47. RFC 6891
+    §6.2.3 says that a requestor "SHOULD place a value in this field that it can actually
+    receive". The engine receives each datagram into a buffer of its datagram group. The room of
+    that buffer is `udp_payload_bytes_max`, 1,856 octets. `init` and `reinit` return
+    `error.UdpPayloadTooLarge` for a configuration that advertises more. Then a server that obeys
+    the query sends no datagram that the buffer cuts. A forger or a broken server still can, and
+    decision 43 still takes such a datagram.
+
+    Choices the ruling did not make, made here:
+
+    - The limit follows from the buffer. `udp_payload_bytes_max` in `io/constants.zig` is what
+      rotor's `payload_capacity` gives for `buffer_bytes` under `group_options`. The datagram
+      group gets the same options when the engine provides it. So a change of the buffer, of the
+      options or of rotor's prefix changes the limit too. A comptime check in `io/constants.zig`
+      requires the default payload to fit the limit. A test compares the limit with the room of
+      the loop's group.
+    - The check comes before the call changes anything. A refused `init` writes nothing into the
+      engine, provides no buffer and opens no socket. A refused `reinit` keeps the configuration,
+      the tables, the cache and the memory of the cache. It also keeps the sockets and the
+      connections, each with its receive. The memory that the call was handed is the caller's
+      again at once. A `reinit` that fails at its sockets is not like it (§19 step 13, the
+      cache's memory, rule 5). Until this rule, the old memory was the caller's whatever
+      `reinit` returned. The owner accepted this change to the contract on 2026-10-14 (§17
+      question 49).
+    - The rule holds for each transport, as the owner ruled on 2026-10-14 (§17 question 50).
+      Over TCP, TLS, DoQ and DoH no answer comes to a server's socket as a datagram. A
+      configuration of TLS, DoQ or DoH opens no such socket (§21, TLS rule 9; §24, request rule
+      1). But each query with EDNS carries the same size in its OPT record over each transport.
+      One check of the configuration is one rule, and a check for each transport is more.
+    - An error, as the owner ruled, and an assertion after it. `assert_valid` asserts each rule of
+      a configuration, since the caller builds it (CLAUDE.md non-negotiable 3). No line of a
+      `resolv.conf` and no option of `RES_OPTIONS` sets `udp_payload_bytes`. Only the caller's
+      code sets it. That argues for an assertion. But a size up to 65,535 octets is valid for the
+      library, whose caller holds the receive buffer (§3). The bound is the engine's own.
+      Non-negotiable 3 keeps assertions for programmer errors. It does not ask each programmer
+      error to assert, so no rule forbids the error. `reset_tables` asserts the bound after the
+      check, as non-negotiable 6 asks.
+    - The error is `UdpPayloadTooLarge`, in `InitError` beside `SocketFailed` and `ReceiveFailed`.
+      The limit and the options are public in `cocuyo_rotor.constants`. So a caller can compare a
+      size that it reads at run time with the limit before it calls `init`. CLAUDE.md asks the
+      owner before the public API or a named limit changes. The owner approved the three names
+      on 2026-10-14 (§17 question 48).
+
+    Rejected:
+
+    - A refused `reinit` that takes the configuration, as one that fails at its sockets does. The
+      engine then holds a configuration that it refuses, and its next query advertises the size.
+    - A refused `reinit` that keeps the configuration and lets go of the cache's memory. The old
+      contract then holds, but a refusal changes the engine.
+    - A check of a configuration that asks over UDP alone. That is two rules where one does.
+    - A clamp of the advertised size to the room. The engine then sends a size that the caller did
+      not set, and the caller does not learn of it.
+
+    Neither model changes. The Lean models hold one lookup and the `getaddrinfo` walks, and no
+    size of a payload. The TLA+ model of the engine starts from an engine that `init` built. It
+    holds no `reinit` and no octets. Each replay and example of the tree advertises 1,232 octets,
+    the default. So does each test of the engine but the two of this rule. So none of them
+    changes.
+
+    §7, §19 step 13 (the datagram's rule 7; the cache's memory, rule 5), §24.
 
 ## 17. Questions for the owner
 
@@ -2671,12 +2740,14 @@ about.
     examples hand an engine. Should it go, or move to the `cache` module's constants, where a
     caller of the library alone would find it? Recommended: as built, since the name and the
     place are the ones consumers already read.
-33. **What a `reinit` that fails holds.** It holds the memory that call handed it, with that
-    call's configuration and seed, until a later `reinit` or `close` (§19 step 13, rule 5), so
-    a caller that got memory for the call must not free it on the error. Should a failed
-    `reinit` leave the engine with no cache instead, so that it holds neither the old memory
-    nor the new? Recommended: as built. The engine has taken the new configuration by then,
-    and a cache that follows the table is one rule, where a cache dropped on one path is two.
+33. **What a `reinit` that fails at its sockets holds.** It holds the memory that call handed
+    it, with that call's configuration and seed, until a later `reinit` or `close` (§19 step
+    13, rule 5). So a caller that got memory for the call must not free it on the error. Should
+    such a `reinit` leave the engine with no cache instead, so that it holds neither the old
+    memory nor the new? Recommended: as built. The engine has taken the new configuration by
+    then. A cache that follows the table is one rule, where a cache dropped on one path is
+    two. Since 2026-10-14 a `reinit` refused with `UdpPayloadTooLarge` holds what it held before
+    (§16 decision 44, question 49).
 
 ### Asked on 2026-10-11, for the session a connection names
 
@@ -2799,15 +2870,46 @@ docs/mutations.md, Tests at the named limits, gives the tests behind each questi
 46. **Two public entry points for a cut datagram.** Decision 43 adds `Lookup.on_datagram_cut` and
     `Resolver.on_datagram_cut` to the public API (§4). The answer to question 40 ruled on the
     behaviour, and not on this shape. CLAUDE.md asks the owner before the public API changes.
-    Answered on 2026-10-14: keep the two. A flag on `on_datagram` changes every caller. A TC bit that the
-    engine writes into the cut octets sends them to check 6. That check walks to the OPT record,
-    which the cut took.
+    Answered on 2026-10-14: keep the two. A flag on `on_datagram` changes every caller. A TC bit
+    that the engine writes into the cut octets sends them to check 6. That check walks to the OPT
+    record, which the cut took.
 47. **A payload that the engine cannot receive.** `Config.udp_payload_bytes` may be up to 65,535
     octets, and a buffer of the engine's datagram group holds 1,856. RFC 6891 §6.2.3 says that a
     requestor "SHOULD place a value in this field that it can actually receive". Above 1,856, a
     server that obeys the query can send a datagram that the buffer cuts. Should the engine's
     `init` and `reinit` refuse such a configuration, with an error? Recommended: yes. Then only a
-    forger or a broken server sends a cut datagram, and decision 43 still takes theirs.
+    forger or a broken server sends a cut datagram, and decision 43 still takes theirs. Answered
+    on 2026-10-14: yes, with an error. `init` and `reinit` return `UdpPayloadTooLarge` for a
+    configuration above `udp_payload_bytes_max`, 1,856 octets, and change nothing. §16 decision
+    44 and §19 step 13 (the datagram's rule 7) hold the rule.
+
+### Asked on 2026-10-14, for a payload that the engine cannot receive
+
+§16 decision 44 records the rule that the answer to question 47 gave. The answer left three
+choices to the build. Each changes the public API, so each is a question here.
+
+48. **An error and a limit in the public API.** `cocuyo_rotor.InitError` gains
+    `UdpPayloadTooLarge`. `cocuyo_rotor.constants` gains `udp_payload_bytes_max` and
+    `group_options`. The answer to question 47 ruled on the error, and not on these names.
+    CLAUDE.md asks the owner before the public API or a named limit changes. Recommended: keep
+    the three. A caller that reads a size at run time compares it with the limit before `init`, as
+    it checks a slot count with `cocuyo.cache.slot_count_valid`. Answered on 2026-10-14: keep the
+    three.
+49. **The memory after a refused `reinit`.** Until 2026-10-14, the memory that the engine held
+    was the caller's once `reinit` returned, whatever it returned (§19 step 13, the cache's
+    memory, rule 5). A `reinit` refused with `UdpPayloadTooLarge` changes nothing, so the engine
+    keeps that memory. A consumer that frees the old memory on each error of `reinit` now frees
+    memory that the engine still uses. The other choice keeps the old contract: a refused `reinit`
+    keeps the configuration and lets go of the cache's memory. Then the refusal changes the
+    engine. Recommended: as built. The error says that nothing changed, and rule 5, the doc
+    comment of `reinit`, the README and §24 say so too. Answered on 2026-10-14: as built.
+50. **The refusal over each transport.** The engine receives a server's datagram over plain UDP
+    alone. A `use_tcp` configuration asks over TCP. A configuration of DoT, DoQ or DoH opens no
+    UDP socket for a server. `init` and `reinit` still refuse such a configuration when its
+    `udp_payload_bytes` passes the limit. Each query with EDNS carries that size over each
+    transport. Should the check refuse only a configuration that asks over UDP? Recommended: as
+    built. One check of the configuration is one rule. A size that the engine cannot receive over
+    UDP is wrong in each query that carries it. Answered on 2026-10-14: as built.
 
 ## 18. The cache
 
@@ -3860,6 +3962,15 @@ the attempt that made it, and the drive goes on until nothing is left.
    other datagram to `on_datagram` (§7, A datagram that the buffer cut). A QUIC connection's
    socket is not a server's socket of these rules: colibri reads its datagrams (§24, request
    rule 1).
+7. Written on 2026-10-14 (§16 decision 44). The room of rule 6 is `udp_payload_bytes_max`: what
+   rotor's `payload_capacity` gives for `buffer_bytes` under `group_options`. "The requestor
+   SHOULD place a value in this field that it can actually receive" (RFC 6891 §6.2.3). So `init`
+   and `reinit` refuse a configuration whose `udp_payload_bytes` passes the room. Each returns
+   `error.UdpPayloadTooLarge`, and the check comes before the call changes anything. A refused
+   `init` leaves no engine, as each failed `init` does. A refused `reinit` leaves the engine as it
+   was. It keeps its configuration, its tables, its cache and the memory of that cache. It also
+   keeps its sockets and its connections, each with its receive. The rule holds for each
+   transport, since each query with EDNS carries the size (§17 question 50).
 
 **Checked on 2026-09-23.** The engine model, in Lean then and in `spec/tla/engine/` since
 2026-09-24, holds both sets of rules above. Each lookup is the model of §5, and around the lookups sit
@@ -4007,9 +4118,12 @@ pub const Engine = struct {
         tcp_idle_ns: u64 = tcp_idle_ns_default,
     };
     pub fn memory_bytes(options: Options) usize;
+    /// Since 2026-10-14 a `config.udp_payload_bytes` above `udp_payload_bytes_max`, 1,856 octets,
+    /// is refused. The call then changes nothing (the datagram's rule 7).
+    pub const InitError = error{ SocketFailed, ReceiveFailed, UdpPayloadTooLarge };
     /// `cache_memory` is the cache's slots and key index, or null for an engine with no cache.
     pub fn init(self: *Engine, memory: []align(alignment) u8, loop: *rotor.Loop, config: *const Config,
-        hosts: ?*const Hosts, cache_memory: ?cache.Slices, seed: u64, now_ns: u64, options: Options) Error!void;
+        hosts: ?*const Hosts, cache_memory: ?cache.Slices, seed: u64, now_ns: u64, options: Options) InitError!void;
     pub fn deinit(self: *Engine) void;
 
     pub fn start(self: *Engine, question: Question, now_ns: u64) error{Full}!Handle;
@@ -4027,7 +4141,7 @@ pub const Engine = struct {
     /// New configuration: the cache is flushed, the sockets rebound, and the latency samples and
     /// the marks of servers that lowercase the name forgotten, which is `ares_reinit`. The cache
     /// is built again over `cache_memory`: the same memory, other memory, or none.
-    pub fn reinit(self: *Engine, config: *const Config, cache_memory: ?cache.Slices, seed: u64, now_ns: u64) Error!void;
+    pub fn reinit(self: *Engine, config: *const Config, cache_memory: ?cache.Slices, seed: u64, now_ns: u64) InitError!void;
 };
 
 pub const Result = struct {
@@ -4087,17 +4201,20 @@ without a cache, and the cap on a TTL was the constant of an hour. These rules r
    again. Null turns the cache off, and memory after null turns it on.
 5. The memory is the caller's, and must stay valid and unmoved from the call that hands it over
    until the engine's `close` returns, or until a `reinit` that hands over other memory or null
-   returns, whatever that `reinit` returns. Between those two, any call on the engine may read
-   or write it. No result points into it: a hit is copied into the lookup's slot (§20), so a
-   result outlives the memory it was read from. An `init` that fails leaves no engine, and the
-   memory is the caller's again at once. A `reinit` that fails is not like it. The engine is
-   still there, and it has taken what that call handed it: `reinit` builds the table and the
-   cache before it opens the sockets, so when they fail to open or to arm (`SocketFailed`,
-   `ReceiveFailed`) the engine holds the new configuration, the new seed and a cache over the
-   new memory, or none when it was handed null, and the memory it held before is the caller's.
-   The memory a failed `reinit` was handed stays the engine's until a later `reinit` or `close`
-   returns. A caller that got memory for that call does not free it on the error, as an
-   `errdefer` would: it hands it to the next `reinit`, or shuts the engine first.
+   returns, whatever that `reinit` returns but `UdpPayloadTooLarge`. Between those two, any call
+   on the engine may read or write it. No result points into it: a hit is copied into the
+   lookup's slot (§20), so a result outlives the memory it was read from. An `init` that fails
+   leaves no engine, and the memory is the caller's again at once. A `reinit` refused with
+   `UdpPayloadTooLarge` changes nothing (the datagram's rule 7). The engine keeps the memory that
+   it held, and the memory of that call is the caller's again at once. A `reinit` that fails at
+   its sockets is not like it. The engine is still there, and it has taken what that call handed
+   it: `reinit` builds the table and the cache before it opens the sockets, so when they fail to
+   open or to arm (`SocketFailed`, `ReceiveFailed`) the engine holds the new configuration, the
+   new seed and a cache over the new memory, or none when it was handed null, and the memory it
+   held before is the caller's.
+   The memory handed to a `reinit` that fails at its sockets stays the engine's until a later
+   `reinit` or `close` returns. A caller that got memory for that call does not free it on the
+   error, as an `errdefer` would. It hands it to the next `reinit`, or shuts the engine first.
 6. Each engine has memory of its own. Two engines are never handed the same slices, as they
    share nothing else (§24, a thread per core). Nothing checks it: the engine sees two slices
    and cannot know who else holds them.
@@ -4331,6 +4448,7 @@ cache hits).
 | `tcp_frame_room_bytes` | 2,048 | what a frame holds past its partial message in the clear: one chunk, `tcp_chunk_bytes`; since 2026-10-13 (step 13, the stream's rule 11) |
 | `tls_frame_room_bytes` | 16,640 | what a frame holds past its partial message over TLS: the body of one record at its longest (RFC 9846 §5.2), which the session opens into the frame; colibri asks for room as long as the body |
 | `tcp_messages_per_frame_max` | 41,088 | the most whole messages a frame holds, each at least its two-octet prefix: a TLS connection's frame, the longest, over two. It bounds the loop over the frame, and never stops it before the last whole message. It replaced `tcp_messages_per_chunk_max`, 32, on 2026-10-13 |
+| `udp_payload_bytes_max` | 1,856 | the most `Config.udp_payload_bytes` that the engine's `init` and `reinit` take: what one buffer of the datagram group holds of a datagram, `buffer_bytes` less rotor's prefix under `group_options`. A requestor "SHOULD place a value in this field that it can actually receive" (RFC 6891 §6.2.3); since 2026-10-14 (step 13, the datagram's rule 7) |
 
 ### Order and gates
 
@@ -5985,15 +6103,34 @@ configuration's: `config.cache_ttl_seconds_max`, which the consumer may set from
 
 `reinit` takes the memory as `init` does, so a consumer whose configuration changed may hand
 over a cache of another size, or none, with the new servers. A consumer that hands over other
-memory may free the old once that `reinit` returns, whatever it returns. The memory it handed
-over is the engine's from then on, when that `reinit` fails too: the consumer keeps it for the
-next `reinit`, or until `close` (§19 step 13, rule 5).
+memory may free the old once that `reinit` returns, whatever it returns but `UdpPayloadTooLarge`.
+When that `reinit` fails at its sockets, the memory it handed over is the engine's from then on.
+The consumer keeps it for the next `reinit`, or until `close` (§19 step 13, rule 5). A `reinit`
+refused with `UdpPayloadTooLarge` changes nothing. The old memory is still the engine's, and the
+new memory is the consumer's (What `init` and `reinit` return, below).
 
 The engine and its cache's memory are two values now, and each must stay where it is: the loop
 and the table hold pointers into the engine, and the engine's cache holds the two slices. An
 engine on each core has a `Storage` on each core. `test/consumer/embed.zig` hands its resolver a
 `Storage` of two slots, so `zig build consumer-check` shows the types a consumer names are ones
 it can reach, and `examples/threads_rotor.zig` gives each of its two engines one of its own.
+
+### What `init` and `reinit` return, written on 2026-10-14
+
+`cocuyo_rotor.InitError` holds three errors. Each tells the consumer what the engine holds after
+the call:
+
+- `UdpPayloadTooLarge`: the configuration's `udp_payload_bytes` passes
+  `constants.udp_payload_bytes_max`, 1,856 octets (§16 decision 44). The call changes nothing. A
+  refused `init` leaves no engine. A refused `reinit` leaves the engine as it was, with the
+  memory that it held. The memory of the call is the consumer's again.
+- `SocketFailed`: a socket of a server did not open.
+- `ReceiveFailed`: the loop refused a buffer group or a receive.
+
+After `SocketFailed` or `ReceiveFailed`, a failed `init` leaves no engine. A failed `reinit`
+holds the new configuration and the new memory (§19 step 13, the cache's memory, rule 5). A
+consumer that reads the size of a payload at run time compares it with
+`constants.udp_payload_bytes_max` before it calls `init`.
 
 ### The session a connection names, written on 2026-10-11
 

@@ -65,7 +65,10 @@ pub const Options = struct {
     doh: type = channel.None,
 };
 
-pub const InitError = error{ SocketFailed, ReceiveFailed };
+/// What `init` and `reinit` return. `UdpPayloadTooLarge` refuses a `Config.udp_payload_bytes` above
+/// `constants.udp_payload_bytes_max`. The call then changes nothing (docs/design.md §19 step 13,
+/// the datagram's rule 7; §24, What `init` and `reinit` return).
+pub const InitError = error{ SocketFailed, ReceiveFailed, UdpPayloadTooLarge };
 
 /// What one of the engine's `user_data` values says.
 pub const Kind = enum(u8) { udp_send, udp_receive, timer, tcp_connect, tcp_send, tcp_receive, tls_send, quic_send, quic_receive, doh_connect, doh_send, doh_receive };
@@ -231,7 +234,9 @@ pub fn Resolver(comptime options: Options) type {
         /// are a programmer error: `cocuyo.cache.slot_count_valid` and `keys_for` say what it
         /// takes. The engine starts with no context for DoT, DoQ or DoH, whatever its memory
         /// held: a consumer that speaks one calls `use_tls`, `use_quic` or `use_doh` next, before
-        /// its first lookup (§24, the context a session starts from, rule 4).
+        /// its first lookup (§24, the context a session starts from, rule 4). A
+        /// `config.udp_payload_bytes` above `constants.udp_payload_bytes_max` is refused before
+        /// anything is written (§19 step 13, the datagram's rule 7).
         pub fn init(
             self: *Self,
             loop: *rotor.Loop,
@@ -243,6 +248,7 @@ pub fn Resolver(comptime options: Options) type {
             config.assert_valid();
             assert_tls(config);
             lifecycle.assert_cache_memory(cache_memory);
+            try lifecycle.check_payload(config);
             self.loop = loop;
             self.config = config;
             self.send_in_flight = @splat(false);
@@ -378,10 +384,11 @@ pub fn Resolver(comptime options: Options) type {
         /// over `cache_memory`, empty: the memory the engine holds, other memory of any size
         /// `Cache.init` takes, or null for no cache from here on. Memory the engine held before
         /// and is not handed again is the caller's to free once this returns, whatever it
-        /// returns. A `reinit` that fails has still taken the memory it was handed, which is the
-        /// engine's until a later `reinit` or `close` returns: never free it on the error. The
-        /// contexts of DoT, DoQ and DoH stay as they are: one set before still counts, and one
-        /// never set is still missing (§24, the context a session starts from, rule 5).
+        /// returns but `UdpPayloadTooLarge`, which changes nothing. A `reinit` that fails at its
+        /// sockets has still taken the memory it was handed. That memory is the engine's until a
+        /// later `reinit` or `close` returns: never free it on that error. The contexts of DoT,
+        /// DoQ and DoH stay as they are: one set before still counts, and one never set is still
+        /// missing (§24, the context a session starts from, rule 5).
         pub fn reinit(
             self: *Self,
             config: *const cocuyo.Config,
