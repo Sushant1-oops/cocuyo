@@ -32,7 +32,12 @@ inductive Reply where
   /-- SERVFAIL, REFUSED or NOTIMP. -/
   | servfail
   | formerr
-  /-- TC=1 with NOERROR and no records, which is what a truncated answer over UDP carries. -/
+  /-- TC=1 with NOERROR and no records, which is what a truncated answer over UDP carries. Since
+  2026-10-14 it also stands for a datagram that the buffer cut, when the lookup waits over UDP and
+  not over DoH or DoQ. That datagram moves the lookup as TC=1 does, once it passes the checks of a
+  cut datagram (docs/design.md §7, A datagram that the buffer cut). A cut datagram is `unmatched`
+  everywhere else. The replay hands a cut datagram to each lookup that this reply or `unmatched`
+  reaches, and requires the same move (spec/README.md). -/
   | truncated
   /-- BADCOOKIE (RFC 7873 §5.3). -/
   | badcookie

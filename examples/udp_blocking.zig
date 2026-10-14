@@ -93,7 +93,9 @@ fn resolve(io: std.Io, name: []const u8, config: *const cocuyo.Config, seed: u64
 
 /// One datagram, or nothing when the wait ran out. Either way the next poll decides what happens:
 /// another server, another pass, or the failure. A datagram that is not ours costs one parse and
-/// changes nothing, so this hands over whatever arrives.
+/// changes nothing, so this hands over whatever arrives. One longer than `reply` comes cut, and
+/// the kernel marks it: cocuyo reads it as a cut datagram (docs/design.md §7, A datagram that the
+/// buffer cut).
 fn wait(
     io: std.Io,
     lookup: *cocuyo.Lookup,
@@ -110,7 +112,12 @@ fn wait(
         error.Timeout => return,
         else => return err,
     };
-    _ = lookup.on_response(message.data, endpoint_of(message.from), clock.read());
+    const from = endpoint_of(message.from);
+    if (message.flags.trunc) {
+        _ = lookup.on_datagram_cut(message.data, from, clock.read());
+    } else {
+        _ = lookup.on_response(message.data, from, clock.read());
+    }
 }
 
 /// The clock cocuyo is driven by: monotonic, so it never goes backwards, which is what the library

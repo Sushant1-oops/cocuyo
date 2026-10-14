@@ -2624,3 +2624,205 @@ config 1 2 tls 0
 198 take failed all_servers_failed - o[1,0] c- u- --R | closed s0 u0-- q[] k0- ; closed s0 u0-- q[] k0- |  |  | r[] q[] t0 w[] f[23,22] e[] -- tk[0,0]
 199 take free - u- | closed s0 u0-- q[] k0- ; closed s0 u0-- q[] k0- |  |  | r[] q[] t- w[] f[23,22] e[0] -- tk[0,0]
 200 jam free - u- | closed s0 u0-- q[] k0- ; closed s0 u0-- q[] k0- |  |  | r[] q[] t- w[] f[23,22] e[0] J- tk[0,0]
+config 1 1 udp 2
+0 init free - u- | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t- w[] f[0,0] e[0] --
+1 jam free - u- | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t- w[] f[0,0] e[0] J-
+2 start failed timeout - o[0,1] c- u- --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[1,1] e[] --
+3 finish:L0*:exhausted failed timeout - o[0,1] c- u- --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[1,1] e[] --
+4 take failed timeout - o[0,1] c- u- --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t0 w[] f[1,1] e[] --
+5 starve failed timeout - o[0,1] c- u- --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t0 w[] f[1,1] e[] -Z
+6 jam failed timeout - o[0,1] c- u- --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t0 w[] f[1,1] e[] JZ
+7 finish:L0*:exhausted failed timeout - o[0,1] c- u- --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L1* | r[] q[] t0 w[] f[1,1] e[] --
+8 jam failed timeout - o[0,1] c- u- --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L1* | r[] q[] t0 w[] f[1,1] e[] J-
+9 starve failed timeout - o[0,1] c- u- --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L1* | r[] q[] t0 w[] f[1,1] e[] JZ
+10 take free - u- | closed s0 u0-- q[] | open s0-- ; open s0-- | L1* | r[] q[] t- w[] f[1,1] e[0] --
+11 finish:L1*:exhausted free - u- | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t- w[] f[1,1] e[0] --
+12 starve free - u- | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t- w[] f[1,1] e[0] -Z
+13 start query_ready 0/0/0/0 E--- o[0,1] c- u0c B-- | closed s0 u0-- q[] | open s1-- ; open s0-- | D0* L0* L1* | r[] q[] t- w[] f[1,1] e[] --
+14 finish:L1*:exhausted query_ready 0/0/0/0 E--- o[0,1] c- u0c B-- | closed s0 u0-- q[] | open s1-- ; open s0-- | D0* L0* L1* | r[] q[] t- w[] f[1,1] e[] --
+15 finish:L0*:exhausted query_ready 0/0/0/0 E--- o[0,1] c- u0c B-- | closed s0 u0-- q[] | open s1-- ; open s0-- | D0* L0* L1* | r[] q[] t- w[] f[1,1] e[] --
+16 finish:D0*:ok awaiting_udp 0/0/0/0 E--- o[0,1] c- u0c --- | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[] t- w[[0]] f[1,1] e[] --
+17 message:L0*:0:answer done - - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[0,1] e[] --
+18 finish:L0*:exhausted done - - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[0,1] e[] --
+19 jam done - - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[0,1] e[] J-
+20 starve done - - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[0,1] e[] JZ
+21 take done - - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[] t0 w[] f[0,1] e[] --
+22 jam done - - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[] t0 w[] f[0,1] e[] J-
+23 finish:L0*:exhausted done - - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L1* | r[] q[] t0 w[] f[0,1] e[] --
+24 starve done - - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L1* | r[] q[] t0 w[] f[0,1] e[] -Z
+25 finish:L1*:exhausted done - - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[] t0 w[] f[0,1] e[] --
+26 take free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[] t- w[] f[0,1] e[0] --
+27 jam free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[] t- w[] f[0,1] e[0] J-
+28 start failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[1,2] e[] --
+29 starve failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[1,2] e[] -Z
+30 take failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[] t0 w[] f[1,2] e[] --
+31 jam failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[] t0 w[] f[1,2] e[] J-
+32 take free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[] t- w[] f[1,2] e[0] --
+33 jam free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[] t- w[] f[1,2] e[0] J-
+34 finish:L1*:exhausted free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* | r[] q[] t- w[] f[1,2] e[0] --
+35 jam free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* | r[] q[] t- w[] f[1,2] e[0] J-
+36 starve free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* | r[] q[] t- w[] f[1,2] e[0] JZ
+37 finish:L0*:exhausted free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t- w[] f[1,2] e[0] --
+38 starve free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t- w[] f[1,2] e[0] -Z
+39 jam free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t- w[] f[1,2] e[0] JZ
+40 start failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[0] t- w[] f[2,3] e[] --
+41 take failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t0 w[] f[2,3] e[] --
+42 take free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t- w[] f[2,3] e[0] --
+43 starve free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t- w[] f[2,3] e[0] -Z
+44 jam free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t- w[] f[2,3] e[0] JZ
+45 start failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[0] t- w[] f[3,4] e[] --
+46 starve failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[0] t- w[] f[3,4] e[] -Z
+47 jam failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[0] t- w[] f[3,4] e[] JZ
+48 take failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t0 w[] f[3,4] e[] --
+49 take free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t- w[] f[3,4] e[0] --
+50 starve free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t- w[] f[3,4] e[0] -Z
+51 start query_ready 0/0/0/0 E--- o[0,1] c- u0c B-- | closed s0 u0-- q[] | open s2R- ; open s0-- | D0* L0* L1* | r[] q[] t- w[] f[3,4] e[] --
+52 jam query_ready 0/0/0/0 E--- o[0,1] c- u0c B-- | closed s0 u0-- q[] | open s2R- ; open s0-- | D0* L0* L1* | r[] q[] t- w[] f[3,4] e[] J-
+53 finish:L1*:exhausted query_ready 0/0/0/0 E--- o[0,1] c- u0d B-- | closed s0 u0-- q[] | open s0-D ; open s0-- | D0* M0* | r[] q[] t- w[] f[3,4] e[] --
+54 jam query_ready 0/0/0/0 E--- o[0,1] c- u0d B-- | closed s0 u0-- q[] | open s0-D ; open s0-- | D0* M0* | r[] q[] t- w[] f[3,4] e[] J-
+55 starve query_ready 0/0/0/0 E--- o[0,1] c- u0d B-- | closed s0 u0-- q[] | open s0-D ; open s0-- | D0* M0* | r[] q[] t- w[] f[3,4] e[] JZ
+56 finish:D0*:failed failed timeout - o[0,1] c- u0g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0x | r[] q[0] t- w[] f[4,5] e[] --
+57 starve failed timeout - o[0,1] c- u0g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0x | r[] q[0] t- w[] f[4,5] e[] -Z
+58 finish:L0x:ok failed timeout - o[0,1] c- u0g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[4,5] e[] --
+59 finish:L0*:exhausted failed timeout - o[0,1] c- u0g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[4,5] e[] --
+60 finish:L0*:exhausted failed timeout - o[0,1] c- u0g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[4,5] e[] --
+61 finish:L0*:exhausted failed timeout - o[0,1] c- u0g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[4,5] e[] --
+62 starve failed timeout - o[0,1] c- u0g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[4,5] e[] -Z
+63 finish:L0*:exhausted failed timeout - o[0,1] c- u0g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[4,5] e[] --
+64 finish:L1*:exhausted failed timeout - o[0,1] c- u0g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[4,5] e[] --
+65 take failed timeout - o[0,1] c- u0g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t0 w[] f[4,5] e[] --
+66 jam failed timeout - o[0,1] c- u0g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t0 w[] f[4,5] e[] J-
+67 finish:L1*:exhausted failed timeout - o[0,1] c- u0g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* | r[] q[] t0 w[] f[4,5] e[] --
+68 jam failed timeout - o[0,1] c- u0g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* | r[] q[] t0 w[] f[4,5] e[] J-
+69 finish:L0*:exhausted failed timeout - o[0,1] c- u0g --R | closed s0 u0-- q[] | open s0-- ; open s0-- |  | r[] q[] t0 w[] f[4,5] e[] --
+70 starve failed timeout - o[0,1] c- u0g --R | closed s0 u0-- q[] | open s0-- ; open s0-- |  | r[] q[] t0 w[] f[4,5] e[] -Z
+71 take free - u0g | closed s0 u0-- q[] | open s0-- ; open s0-- |  | r[] q[] t- w[] f[4,5] e[0] --
+72 jam free - u0g | closed s0 u0-- q[] | open s0-- ; open s0-- |  | r[] q[] t- w[] f[4,5] e[0] J-
+73 start failed timeout - o[0,1] c- u0g --R | closed s0 u0-- q[] | open s0-- ; open s0-- |  | r[] q[0] t- w[] f[5,6] e[] --
+74 starve failed timeout - o[0,1] c- u0g --R | closed s0 u0-- q[] | open s0-- ; open s0-- |  | r[] q[0] t- w[] f[5,6] e[] -Z
+75 take failed timeout - o[0,1] c- u0g --R | closed s0 u0-- q[] | open s0-- ; open s0-- |  | r[] q[] t0 w[] f[5,6] e[] --
+76 take free - u0g | closed s0 u0-- q[] | open s0-- ; open s0-- |  | r[] q[] t- w[] f[5,6] e[0] --
+77 start query_ready 0/0/0/0 E--- o[0,1] c- u0c B-- | closed s0 u0-- q[] | open s1-- ; open s0-- | D0* L0* L1* | r[] q[] t- w[] f[5,6] e[] --
+78 finish:D0*:failed query_ready 1/0/0/0 E--- o[0,1] c- u1c B-- | closed s0 u0-- q[] | open s1-- ; open s1-- | D0* L0* L1* | r[] q[] t- w[] f[6,6] e[] --
+79 finish:D0*:failed failed timeout - o[0,1] c- u1c --R | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[0] t- w[] f[6,7] e[] --
+80 take failed timeout - o[0,1] c- u1c --R | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[] t0 w[] f[6,7] e[] --
+81 finish:L1*:exhausted failed timeout - o[0,1] c- u1c --R | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[] t0 w[] f[6,7] e[] --
+82 jam failed timeout - o[0,1] c- u1c --R | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[] t0 w[] f[6,7] e[] J-
+83 finish:L0*:exhausted failed timeout - o[0,1] c- u1c --R | closed s0 u0-- q[] | open s1-- ; open s1-- | L1* | r[] q[] t0 w[] f[6,7] e[] --
+84 finish:L1*:exhausted failed timeout - o[0,1] c- u1c --R | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[] t0 w[] f[6,7] e[] --
+85 finish:L0*:exhausted failed timeout - o[0,1] c- u1c --R | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[] t0 w[] f[6,7] e[] --
+86 jam failed timeout - o[0,1] c- u1c --R | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[] t0 w[] f[6,7] e[] J-
+87 take free - u1c | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[] t- w[] f[6,7] e[0] --
+88 starve free - u1c | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[] t- w[] f[6,7] e[0] -Z
+89 finish:L1*:exhausted free - u1c | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[] t- w[] f[6,7] e[0] --
+90 finish:L1*:exhausted free - u1c | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[] t- w[] f[6,7] e[0] --
+91 starve free - u1c | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[] t- w[] f[6,7] e[0] -Z
+92 finish:L1*:exhausted free - u1c | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[] t- w[] f[6,7] e[0] --
+93 starve free - u1c | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[] t- w[] f[6,7] e[0] -Z
+94 jam free - u1c | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[] t- w[] f[6,7] e[0] JZ
+95 finish:L1*:exhausted free - u1c | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* | r[] q[] t- w[] f[6,7] e[0] --
+96 finish:L0*:exhausted free - u1c | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[] t- w[] f[6,7] e[0] --
+97 finish:L0*:exhausted free - u1c | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[] t- w[] f[6,7] e[0] --
+98 finish:L1*:exhausted free - u1c | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[] t- w[] f[6,7] e[0] --
+99 starve free - u1c | closed s0 u0-- q[] | open s1-- ; open s1-- | L0* L1* | r[] q[] t- w[] f[6,7] e[0] -Z
+100 start query_ready 0/0/0/0 E--- o[0,1] c- u0c B-- | closed s0 u0-- q[] | open s2R- ; open s1-- | D0* L0* L1* | r[] q[] t- w[] f[6,7] e[] --
+101 finish:D0*:ok awaiting_udp 0/0/0/0 E--- o[0,1] c- u0d --- | closed s0 u0-- q[] | open s0-D ; open s1-- | L0* L1* M0* | r[] q[] t- w[[0]] f[6,7] e[] --
+102 expire query_ready 1/0/0/0 E--- o[0,1] c- u1d B-- | closed s0 u0-- q[] | open s0-- ; open s0-D | D0* L0x L0* L1* M1* | r[] q[] t- w[] f[7,7] e[] --
+103 finish:D0*:ok awaiting_udp 1/0/0/0 E--- o[0,1] c- u1d --- | closed s0 u0-- q[] | open s0-- ; open s0-D | L0x L0* L1* M1* | r[] q[] t- w[[0]] f[7,7] e[] --
+104 expire failed timeout - o[0,1] c- u1g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0x L0* L1x L1* | r[] q[0] t- w[] f[7,8] e[] --
+105 jam failed timeout - o[0,1] c- u1g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0x L0* L1x L1* | r[] q[0] t- w[] f[7,8] e[] J-
+106 straggle:L0x failed timeout - o[0,1] c- u1g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0x L0* L1x L1* | r[] q[0] t- w[] f[7,8] e[] --
+107 straggle:L0x failed timeout - o[0,1] c- u1g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0x L0* L1x L1* | r[] q[0] t- w[] f[7,8] e[] --
+108 finish:L1x:failed failed timeout - o[0,1] c- u1g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0x L0* L1* | r[] q[0] t- w[] f[7,8] e[] --
+109 jam failed timeout - o[0,1] c- u1g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0x L0* L1* | r[] q[0] t- w[] f[7,8] e[] J-
+110 finish:L0x:canceled failed timeout - o[0,1] c- u1g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[7,8] e[] --
+111 finish:L1*:exhausted failed timeout - o[0,1] c- u1g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[7,8] e[] --
+112 take failed timeout - o[0,1] c- u1g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t0 w[] f[7,8] e[] --
+113 finish:L0*:exhausted failed timeout - o[0,1] c- u1g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t0 w[] f[7,8] e[] --
+114 starve failed timeout - o[0,1] c- u1g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t0 w[] f[7,8] e[] -Z
+115 finish:L1*:exhausted failed timeout - o[0,1] c- u1g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t0 w[] f[7,8] e[] --
+116 jam failed timeout - o[0,1] c- u1g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t0 w[] f[7,8] e[] J-
+117 starve failed timeout - o[0,1] c- u1g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t0 w[] f[7,8] e[] JZ
+118 finish:L0*:exhausted failed timeout - o[0,1] c- u1g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L1* | r[] q[] t0 w[] f[7,8] e[] --
+119 finish:L1*:exhausted failed timeout - o[0,1] c- u1g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t0 w[] f[7,8] e[] --
+120 jam failed timeout - o[0,1] c- u1g --R | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t0 w[] f[7,8] e[] J-
+121 take free - u1g | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t- w[] f[7,8] e[0] --
+122 finish:L0*:exhausted free - u1g | closed s0 u0-- q[] | open s0-- ; open s0-- | L0* L1* | r[] q[] t- w[] f[7,8] e[0] --
+123 start query_ready 0/0/0/0 E--- o[0,1] c- u0c B-- | closed s0 u0-- q[] | open s1-- ; open s0-- | D0* L0* L1* | r[] q[] t- w[] f[7,8] e[] --
+124 cancel:0 failed canceled - o[0,1] c- u0c B-R | closed s0 u0-- q[] | open s1-- ; open s0-- | D0x L0* L1* | r[] q[0] t- w[] f[7,8] e[] --
+125 finish:L0*:exhausted failed canceled - o[0,1] c- u0c B-R | closed s0 u0-- q[] | open s1-- ; open s0-- | D0x L0* L1* | r[] q[0] t- w[] f[7,8] e[] --
+126 finish:L0*:exhausted failed canceled - o[0,1] c- u0c B-R | closed s0 u0-- q[] | open s1-- ; open s0-- | D0x L0* L1* | r[] q[0] t- w[] f[7,8] e[] --
+127 finish:L0*:exhausted failed canceled - o[0,1] c- u0c B-R | closed s0 u0-- q[] | open s1-- ; open s0-- | D0x L0* L1* | r[] q[0] t- w[] f[7,8] e[] --
+128 finish:D0x:failed failed canceled - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[7,8] e[] --
+129 finish:L1*:exhausted failed canceled - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[7,8] e[] --
+130 finish:L1*:exhausted failed canceled - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[7,8] e[] --
+131 jam failed canceled - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[7,8] e[] J-
+132 finish:L1*:exhausted failed canceled - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* | r[] q[0] t- w[] f[7,8] e[] --
+133 starve failed canceled - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* | r[] q[0] t- w[] f[7,8] e[] -Z
+134 take failed canceled - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* | r[] q[] t0 w[] f[7,8] e[] --
+135 take free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* | r[] q[] t- w[] f[7,8] e[0] --
+136 jam free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* | r[] q[] t- w[] f[7,8] e[0] J-
+137 start failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* | r[] q[0] t- w[] f[8,9] e[] --
+138 finish:L0*:exhausted failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[8,9] e[] --
+139 finish:L0*:exhausted failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[8,9] e[] --
+140 finish:L0*:exhausted failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[8,9] e[] --
+141 finish:L1*:exhausted failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[8,9] e[] --
+142 finish:L1*:exhausted failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[8,9] e[] --
+143 finish:L0*:exhausted failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[8,9] e[] --
+144 finish:L0*:exhausted failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[8,9] e[] --
+145 finish:L0*:exhausted failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[8,9] e[] --
+146 starve failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[8,9] e[] -Z
+147 jam failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* L1* | r[] q[0] t- w[] f[8,9] e[] JZ
+148 finish:L1*:exhausted failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* | r[] q[0] t- w[] f[8,9] e[] --
+149 jam failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* | r[] q[0] t- w[] f[8,9] e[] J-
+150 starve failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- | L0* | r[] q[0] t- w[] f[8,9] e[] JZ
+151 finish:L0*:exhausted failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[0] t- w[] f[8,9] e[] --
+152 jam failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[0] t- w[] f[8,9] e[] J-
+153 starve failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[0] t- w[] f[8,9] e[] JZ
+154 take failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t0 w[] f[8,9] e[] --
+155 take free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t- w[] f[8,9] e[0] --
+156 jam free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t- w[] f[8,9] e[0] J-
+157 starve free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t- w[] f[8,9] e[0] JZ
+158 start failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[0] t- w[] f[9,10] e[] --
+159 take failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t0 w[] f[9,10] e[] --
+160 jam failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t0 w[] f[9,10] e[] J-
+161 take free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t- w[] f[9,10] e[0] --
+162 jam free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t- w[] f[9,10] e[0] J-
+163 starve free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t- w[] f[9,10] e[0] JZ
+164 start failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[0] t- w[] f[10,11] e[] --
+165 jam failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[0] t- w[] f[10,11] e[] J-
+166 take failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t0 w[] f[10,11] e[] --
+167 take free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t- w[] f[10,11] e[0] --
+168 jam free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t- w[] f[10,11] e[0] J-
+169 start failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[0] t- w[] f[11,12] e[] --
+170 take failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t0 w[] f[11,12] e[] --
+171 starve failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t0 w[] f[11,12] e[] -Z
+172 jam failed timeout - o[0,1] c- u0c --R | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t0 w[] f[11,12] e[] JZ
+173 take free - u0c | closed s0 u0-- q[] | open s1-- ; open s0-- |  | r[] q[] t- w[] f[11,12] e[0] --
+174 start query_ready 0/0/0/0 E--- o[0,1] c- u0d B-- | closed s0 u0-- q[] | open s0-D ; open s0-- | D0* L0* L1* M0* | r[] q[] t- w[] f[11,12] e[] --
+175 starve query_ready 0/0/0/0 E--- o[0,1] c- u0d B-- | closed s0 u0-- q[] | open s0-D ; open s0-- | D0* L0* L1* M0* | r[] q[] t- w[] f[11,12] e[] -Z
+176 finish:M0*:exhausted query_ready 0/0/0/0 E--- o[0,1] c- u0d B-- | closed s0 u0-- q[] | open s0-D ; open s0-- | D0* L0* L1* M0* | r[] q[] t- w[] f[11,12] e[] --
+177 finish:D0*:ok awaiting_udp 0/0/0/0 E--- o[0,1] c- u0d --- | closed s0 u0-- q[] | open s0-D ; open s0-- | L0* L1* M0* | r[] q[] t- w[[0]] f[11,12] e[] --
+178 message:M0*:0:cut connecting_tcp 0/0/0/0 E--- o[0,1] c0 u0g --- | connecting s0 u1-- q[] | open s0-- ; open s0-- | C0* L0x L0* L1* | r[] q[] t- w[[0]] f[11,12] e[] --
+179 expire query_ready 1/0/0/0 E--- o[0,1] c- u1c B-- | connecting s0 u0I- q[] | open s0-- ; open s1-- | C0* D0* L0x L0* L1* | r[] q[] t- w[] f[12,12] e[] --
+180 finish:L0x:failed query_ready 1/0/0/0 E--- o[0,1] c- u1c B-- | connecting s0 u0I- q[] | open s0-- ; open s1-- | C0* D0* L0* L1* | r[] q[] t- w[] f[12,12] e[] --
+181 finish:L0*:exhausted query_ready 1/0/0/0 E--- o[0,1] c- u1c B-- | connecting s0 u0I- q[] | open s0-- ; open s1-- | C0* D0* L0* L1* | r[] q[] t- w[] f[12,12] e[] --
+182 finish:C0*:ok query_ready 1/0/0/0 E--- o[0,1] c- u1c B-- | up s0 u0I- q[] | open s0-- ; open s1-- | R0* D0* L0* L1* | r[] q[] t- w[] f[12,12] e[] --
+183 finish:D0*:failed failed timeout - o[0,1] c- u1c --R | up s0 u0I- q[] | open s0-- ; open s1-- | R0* L0* L1* | r[] q[0] t- w[] f[12,13] e[] --
+184 finish:L1*:exhausted failed timeout - o[0,1] c- u1c --R | up s0 u0I- q[] | open s0-- ; open s1-- | R0* L0* L1* | r[] q[0] t- w[] f[12,13] e[] --
+185 finish:L0*:exhausted failed timeout - o[0,1] c- u1c --R | up s0 u0I- q[] | open s0-- ; open s1-- | R0* L0* L1* | r[] q[0] t- w[] f[12,13] e[] --
+186 finish:R0*:exhausted failed timeout - o[0,1] c- u1c --R | up s0 u0I- q[] | open s0-- ; open s1-- | R0* L0* L1* | r[] q[0] t- w[] f[12,13] e[] --
+187 finish:R0*:failed failed timeout - o[0,1] c- u1c --R | closed s0 u0-- q[] | open s0-- ; open s1-- | L0* L1* | r[] q[0] t- w[] f[12,13] e[] --
+188 take failed timeout - o[0,1] c- u1c --R | closed s0 u0-- q[] | open s0-- ; open s1-- | L0* L1* | r[] q[] t0 w[] f[12,13] e[] --
+189 finish:L0*:exhausted failed timeout - o[0,1] c- u1c --R | closed s0 u0-- q[] | open s0-- ; open s1-- | L0* L1* | r[] q[] t0 w[] f[12,13] e[] --
+190 starve failed timeout - o[0,1] c- u1c --R | closed s0 u0-- q[] | open s0-- ; open s1-- | L0* L1* | r[] q[] t0 w[] f[12,13] e[] -Z
+191 jam failed timeout - o[0,1] c- u1c --R | closed s0 u0-- q[] | open s0-- ; open s1-- | L0* L1* | r[] q[] t0 w[] f[12,13] e[] JZ
+192 finish:L1*:exhausted failed timeout - o[0,1] c- u1c --R | closed s0 u0-- q[] | open s0-- ; open s1-- | L0* | r[] q[] t0 w[] f[12,13] e[] --
+193 starve failed timeout - o[0,1] c- u1c --R | closed s0 u0-- q[] | open s0-- ; open s1-- | L0* | r[] q[] t0 w[] f[12,13] e[] -Z
+194 take free - u1c | closed s0 u0-- q[] | open s0-- ; open s1-- | L0* | r[] q[] t- w[] f[12,13] e[0] --
+195 finish:L0*:exhausted free - u1c | closed s0 u0-- q[] | open s0-- ; open s1-- | L0* L1* | r[] q[] t- w[] f[12,13] e[0] --
+196 starve free - u1c | closed s0 u0-- q[] | open s0-- ; open s1-- | L0* L1* | r[] q[] t- w[] f[12,13] e[0] -Z
+197 finish:L1*:exhausted free - u1c | closed s0 u0-- q[] | open s0-- ; open s1-- | L0* L1* | r[] q[] t- w[] f[12,13] e[0] --
+198 jam free - u1c | closed s0 u0-- q[] | open s0-- ; open s1-- | L0* L1* | r[] q[] t- w[] f[12,13] e[0] J-
+199 finish:L1*:exhausted free - u1c | closed s0 u0-- q[] | open s0-- ; open s1-- | L0* | r[] q[] t- w[] f[12,13] e[0] --
+200 starve free - u1c | closed s0 u0-- q[] | open s0-- ; open s1-- | L0* | r[] q[] t- w[] f[12,13] e[0] -Z

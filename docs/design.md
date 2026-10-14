@@ -257,6 +257,9 @@ pub const Lookup = struct {
     pub fn on_sent(self: *Lookup, now_ns: u64) void;
     pub fn on_send_failed(self: *Lookup, now_ns: u64) void;
     pub fn on_response(self: *Lookup, message: []const u8, from: Endpoint, now_ns: u64) Verdict;
+    /// Since 2026-10-14: a datagram longer than the caller's buffer, which the kernel cut and
+    /// marked (§7, A datagram that the buffer cut).
+    pub fn on_datagram_cut(self: *Lookup, message: []const u8, from: Endpoint, now_ns: u64) Verdict;
     pub fn on_tcp_connected(self: *Lookup, now_ns: u64) void;
     pub fn on_tcp_failed(self: *Lookup, now_ns: u64) void;
     /// Over DoH or DoQ (§22, §23): the answer to the transaction `send_request` named, and its
@@ -342,6 +345,9 @@ pub const Resolver = struct {
     /// poll that follows finds the soonest again.
     pub fn next_deadline_ns(self: *const Resolver) ?u64;
     pub fn on_datagram(self: *Resolver, message: []const u8, from: Endpoint, now_ns: u64) Verdict;
+    /// Since 2026-10-14: a datagram that the kernel cut and marked, as `Lookup.on_datagram_cut`
+    /// takes it (§7).
+    pub fn on_datagram_cut(self: *Resolver, message: []const u8, from: Endpoint, now_ns: u64) Verdict;
 
     // Every event goes through the table rather than through the lookup, because each one can
     // move the instant the table is waiting for, and the timer it hands out has to follow.
@@ -470,6 +476,7 @@ Eight states: `query_ready`, `awaiting_udp`, `tcp_needed`, `connecting_tcp`, `tc
 | `awaiting_udp` | `poll` at or past it | `query_ready` or `failed` | a sample as long as the wait, then advance the server, then the attempt |
 | `awaiting_udp` | `on_response` unmatched | unchanged | return `ignored`, the wait stands |
 | `awaiting_udp` | `on_response` with TC=1 | `tcp_needed` | keep the same server |
+| `awaiting_udp` | `on_datagram_cut` that passes the checks of a cut datagram (§7) | `tcp_needed` | keep the same server, and take no sample |
 | `awaiting_udp` | `on_response` with a CNAME and no answer | `query_ready` | new transaction, hop count up |
 | `awaiting_udp` | `on_response` with an answer | `done` | copy the records out |
 | `awaiting_udp` | `on_response` NXDOMAIN or NODATA | `query_ready` or `failed` | keep the smaller negative TTL, advance the search candidate |
@@ -496,6 +503,11 @@ deadline armed for that server reads (retry and timeout policy, below). So does 
 passes in `awaiting_udp` or `awaiting_tcp`, with a sample as long as the wait that try used. A
 response the lookup ignores, unmatched or malformed, takes none, and neither does a deadline that
 passes in `connecting_tcp`, since no query went out.
+
+The row of a cut datagram is the one exception, since 2026-10-14. It accepts the datagram and
+takes no sample, and it tells the server's state nothing (§7, A datagram that the buffer cut). A
+cut datagram is `ignored` in each other state, over DoH or DoQ, and under
+`Config.ignore_truncation`.
 
 An unmatched response changes no state of the lookup's. One that echoes a mixed query's question
 in lowercase can mark its server as one that lowercases the name, in the `Servers` table, and the
@@ -840,6 +852,63 @@ Matching on the transaction id alone is the textbook cache-poisoning hole. Check
 address without the port is the same hole with one extra step. The question compare is exact
 because of the next rule, not case-insensitive.
 
+### A datagram that the buffer cut
+
+Written on 2026-10-14, from the owner's answer to §17 question 40 (§16 decision 43). A caller
+receives each datagram into a buffer. When a datagram is longer than the buffer, the kernel keeps
+the octets that fit and marks the datagram as truncated. The rest is gone. rotor gives the mark
+as `Received.flags.truncated`. The engine's buffer holds 1,856 octets (§19 step 13, the
+datagram's rule 6). A query advertises 1,232 octets by default, "the largest UDP payload" that
+cocuyo takes (RFC 6891 §6.2.3). A server that obeys it sends no datagram that the buffer cuts.
+A caller that sets `Config.udp_payload_bytes` above 1,856 can get such datagrams from any server
+(§17 question 47).
+
+Until 2026-10-14 the engine did not read the mark. The table read the cut octets as a whole
+message. A check or the record walk refused them, and the lookup waited until its deadline.
+
+A caller gives a cut datagram to `on_datagram_cut`, and not to `on_datagram`. The lookup takes it
+by these rules:
+
+1. The lookup reads a cut datagram only in `awaiting_udp`. It ignores the datagram in each other
+   state. It also ignores it over DoH or DoQ, where no answer comes as a datagram (§22, §23).
+   Under `Config.ignore_truncation` it ignores it too. That caller asked to read a truncated
+   answer and not to ask over TCP, and no whole message is left to read.
+2. The checks of a cut datagram are checks 1 to 6 of Response matching, with check 6 as rule 3
+   gives it. Checks 1 to 5 read the cut octets. The header and the question come first in a
+   message. A buffer of 271 octets or more holds them whole: the header, a name of 255 octets,
+   the type and the class. A datagram that fails a check is ignored, as each such datagram is.
+3. Check 6 reads a cut datagram as a message with no COOKIE option. The OPT record is in the
+   additional section (RFC 6891 §6.1.1), the last section of a message (RFC 1035 §4.1). The cut
+   took the end of the message, so the lookup does not look for the OPT record in it. RFC 7873
+   §5.3 says that a response that does not have the COOKIE option that the client expects "MUST
+   be discarded". The lookup expects one when its query carried the server's cookie. It also
+   expects one when the server has given a cookie since. In each of these cases the lookup
+   ignores a cut datagram. An answer with TC set and no OPT record gets the same check 6.
+4. A cut datagram that passes the checks of a cut datagram moves its lookup to `tcp_needed`, on
+   the same server. That is what an answer with TC set does over UDP. No RFC states this rule.
+   RFC 7766 §5 gives the permission to ask over TCP: a stub may send a query over TCP "depending
+   on local operational reasons". A buffer too short for the answer is such a reason.
+5. The cut datagram tells the server's state nothing. It takes no latency sample, and it counts
+   no success and no failure. It teaches no cookie, starts no silence, and marks no server that
+   lowercases the name. Each of these needs check 6 on a whole message.
+
+This rule has a cost. An attacker can match the id, the source port and the question with its
+case. When the lookup expects no COOKIE option, that attacker can send one long datagram. That
+datagram moves the lookup to TCP. Before 2026-10-14 such a datagram changed nothing. But an
+answer with TC set and no OPT record did the same then, and it gets the same checks. The attacker
+gets no answer into the lookup.
+
+Where the lookup goes next depends on TCP:
+
+- Usually the lookup asks the same server over a connection. An off-path attacker cannot race an
+  answer there. The attacker costs the caller one connection.
+- An engine of no TCP connection fails the stream at once. So does an engine whose connection
+  slots are all in use (§19 step 13). A server that refuses TCP fails the connect. In each case the
+  lookup asks the next server over UDP, and the attacker can race that retry.
+
+So decision 10 holds as it held before: a cut datagram moves a lookup only where a forged answer
+with TC set could move it already.
+
 ### Entropy: four fields, one seed
 
 - **Transaction id**, 16 bits, drawn per transaction. A CNAME re-query is a new transaction and
@@ -991,7 +1060,11 @@ Rejected:
   birthday attack of RFC 5452 §4 not worth running against a lookup that keeps listening until its
   deadline. The one exception since 2026-10-09 is a datagram that matches the id, the port and
   the cookie and echoes a mixed question in lowercase: it marks its server, and still leaves the
-  wait as it was (A server that changes the case, above).
+  wait as it was (A server that changes the case, above). Since 2026-10-14 a datagram that the
+  buffer cut and that passes the checks of a cut datagram ends the wait. It moves the lookup to
+  TCP, as an answer with TC set does. Usually an off-path attacker cannot race the answer there.
+  With no connection to have, the lookup asks the next server over UDP (A datagram that the
+  buffer cut, above).
 
 ## 8. The wire codec
 
@@ -1821,7 +1894,11 @@ step until `zig build test` passes.
    machine to save the caller one `start` call.
 10. **A malformed or unmatched datagram never disturbs the wait.** Rejected: treating a malformed
     reply as this attempt's failure, which hands an off-path attacker a cheap way to cut the wait
-    short and force a retry they can race.
+    short and force a retry they can race. Amended on 2026-10-14 by decision 43. A datagram that
+    the buffer cut can move its lookup to TCP, as an answer with TC set does (§7). Over a
+    connection the attacker cannot race that retry. With no connection to have, the lookup asks
+    the next server over UDP, and the attacker can race that retry. A forged answer with TC set
+    could do the same before.
 11. **Sequential servers with rotation.** Rejected: querying every server at once, which multiplies
     load on the resolvers for a latency win that belongs to the caller's policy, not ours.
 12. **Assertions and checks both, on the same bound.** Rejected: one or the other. They are
@@ -2379,6 +2456,56 @@ step until `zig build test` passes.
       same work. But the two loops can come to disagree, and only the fuzz target would see it.
 
     §7, Parsing; §8; §11; §13.
+43. **A datagram that the buffer cut moves its lookup to TCP once the checks of a cut datagram
+    pass.** Ruled by the owner on 2026-10-14, in answer to §17 question 40. A datagram longer than
+    the caller's buffer arrives cut, and the kernel marks it. The engine reads the mark and gives
+    such a datagram to `on_datagram_cut`. The lookup runs checks 1 to 5 of §7 on it, since the
+    header and the question are whole. Check 6 reads it as a message with no COOKIE option. When
+    the checks pass, the lookup moves to `tcp_needed` on the same server, as an answer with TC set
+    does (RFC 7766 §5). A cut datagram that fails a check is ignored, as each such datagram is.
+
+    Choices the ruling did not make, made here:
+
+    - Two new entry points, `Lookup.on_datagram_cut` and `Resolver.on_datagram_cut`, beside
+      `on_response` and `on_datagram`. A flag on `on_datagram` would change every caller. A TC bit
+      that the engine writes into the cut octets would send them through check 6 on a whole
+      message. That check walks the sections to the OPT record, which the cut took. The owner
+      approved this shape of the public API on 2026-10-14 (§17 question 46).
+    - Check 6 runs, on a message with no COOKIE option. The ruling named checks 1 to 5. But RFC
+      7873 §5.3 says that a response without the COOKIE option that the client expects "MUST be
+      discarded". The review of 2026-10-14 found that the cut path did not run check 6. Then a
+      forger with no client cookie could move a lookup that a forged TC answer could not move. Now
+      a lookup that expects a cookie ignores a cut datagram, and waits until its deadline, as
+      before. A lookup that expects none takes it, as it takes an answer with TC set and no OPT
+      record.
+    - The cut datagram tells the server's state nothing: no latency sample, no success, no cookie,
+      no silence and no mark. It did not pass check 6 on a whole message, so nothing in it is the
+      server's word. The answer over TCP gives the sample.
+    - Only `awaiting_udp` takes a cut datagram. Over DoH or DoQ, and under
+      `Config.ignore_truncation`, the lookup ignores it. The caller who sets
+      `ignore_truncation` asked not to go to TCP, and the cut left no whole message to read.
+
+    Rejected:
+
+    - The cut datagram ignored, which is what the engine did before. Its lookup waited until its
+      deadline, then asked the next server over UDP. An answer longer than the buffer never
+      reached the lookup, from any server.
+    - The cut datagram dropped before the table sees it. The lookup still waits until its
+      deadline, and nothing tells it that its answer came and was too long.
+
+    Not decided here: the engine could refuse a `Config.udp_payload_bytes` above its room of 1,856
+    octets. RFC 6891 §6.2.3 says that a requestor "SHOULD place a value in this field that it can
+    actually receive". Then only a forger or a broken server could send a datagram that the buffer
+    cuts. The rule above is still needed for those. The refusal changes what the engine's `init`
+    takes, so it is §17 question 47.
+
+    The engine model holds the rule in two configurations of its own. The replay runs the engine
+    down the walks of one of them (§19 step 13, Checked on 2026-10-14). The machine code
+    of `bench/count.zig`, built as CI counts it, did not change. So its instruction counts will
+    likely not move. Nobody counted them under cachegrind (docs/mutations.md, The owner's answers
+    of 2026-10-14).
+
+    §5, §7, §19 step 13 (the datagram's rule 6).
 
 ## 17. Questions for the owner
 
@@ -2629,30 +2756,58 @@ docs/mutations.md, Tests at the named limits, gives the tests behind each questi
     lookup the most polls that a run gives it in one drive: 49, at eight servers and five passes.
     That 49 is the most comes from a read of the drive. Should the bound be
     `servers_max * (attempts_max + 1) + 1`, 49? Recommended: no. The slack costs no poll that a
-    run makes, and a bound that is exact breaks when the drive changes.
+    run makes, and a bound that is exact breaks when the drive changes. Answered on 2026-10-14:
+    no. The bound stays at 81, with its slack.
 40. **A datagram longer than the room of a buffer.** A buffer of the datagram group holds 1,856
     octets. The kernel cuts a longer datagram and marks it as truncated, and the engine reads no
     such mark. The table reads the cut octets, the message fails a check, and the lookup waits out
     its try. Should the engine drop the datagram, or take it as truncated and ask over TCP?
     Recommended: take it as truncated once checks 1 to 5 of §7 pass, since its header and
-    question are whole.
+    question are whole. Answered on 2026-10-14: as recommended. Once checks 1 to 5 pass, the
+    lookup asks over TCP, as for an answer with TC set. A cut datagram that fails a check of §7 is
+    ignored, as each such datagram is. §7 (A datagram that the buffer cut), §16 decision 43 and
+    §19 step 13 (the datagram's rule 6) hold the rule. The review of the change added check 6, on
+    a message with no COOKIE option, as RFC 7873 §5.3 asks (decision 43).
 41. **The bound of a DoH request.** The comment of `doh_request_bytes_max` and §24 give the bound to
     the HEADERS frame of the GET, with 960 octets for the path. The code gives it to the path
     alone, 1,536 octets. A test sends the longest GET that the code allows, and colibri sends it
     over HTTP/2. Which is correct? Recommended: the code; then the comment and §24 change.
+    Answered on 2026-10-14: the code. The bound is on the path, 1,536 octets. The comment of the
+    constant and §24 now say so, and the code did not change.
 42. **A template's slash.** `doh.template.expand` keeps the first octet of its output for a slash,
     also for a path that starts with one. So such a template gets one octet less of the buffer,
     and `start` refuses it at exactly 1,536 octets. Recommended: fix it, with the test that shows
-    it.
+    it. Answered on 2026-10-14: fix it. A path that starts with a slash now gets the whole buffer
+    (§24, the path).
 43. **`Options.lookups` over `lookup_slots_max`.** An engine of more lookups than the table holds
     compiles, then stops at an assertion in `init`. `tcp_connections` has a comptime check of its
-    own. Recommended: give `lookups` one too.
+    own. Recommended: give `lookups` one too. Answered on 2026-10-14: yes, with a message that
+    names the limit. An engine of more lookups than `lookup_slots_max` now does not compile.
+    Neither does an engine of none, which `init` refused at the same assertion (§19 step 13).
 44. **The codec's fuzz target in the public API.** `cocuyo.wire.fuzz` is public, and grew. Its
     `Message` is 64 KiB, with `most` and `most_at`, and it has two strategies more and
     `strategy_of`. The codec's constants gained `fuzz_long_answers`. Recommended: keep it public,
-    as `wire.fixtures` is, since the fuzz tool reads it.
+    as `wire.fixtures` is, since the fuzz tool reads it. Answered on 2026-10-14: it stays public,
+    as `wire.fixtures` is.
 45. **CLAUDE.md's path to the target.** The target moved to `src/wire/fuzz/` by the layout rule.
     CLAUDE.md names `src/wire/fuzz.zig` under Commands. Recommended: name `src/wire/fuzz/` there.
+
+### Asked on 2026-10-14, for a datagram that the buffer cut
+
+§16 decision 43 records the rule that the answer to question 40 gave. Its review asked these two.
+
+46. **Two public entry points for a cut datagram.** Decision 43 adds `Lookup.on_datagram_cut` and
+    `Resolver.on_datagram_cut` to the public API (§4). The answer to question 40 ruled on the
+    behaviour, and not on this shape. CLAUDE.md asks the owner before the public API changes.
+    Answered on 2026-10-14: keep the two. A flag on `on_datagram` changes every caller. A TC bit that the
+    engine writes into the cut octets sends them to check 6. That check walks to the OPT record,
+    which the cut took.
+47. **A payload that the engine cannot receive.** `Config.udp_payload_bytes` may be up to 65,535
+    octets, and a buffer of the engine's datagram group holds 1,856. RFC 6891 §6.2.3 says that a
+    requestor "SHOULD place a value in this field that it can actually receive". Above 1,856, a
+    server that obeys the query can send a datagram that the buffer cuts. Should the engine's
+    `init` and `reinit` refuse such a configuration, with an error? Recommended: yes. Then only a
+    forger or a broken server sends a cut datagram, and decision 43 still takes theirs.
 
 ## 18. The cache
 
@@ -3686,8 +3841,8 @@ the attempt that made it, and the drive goes on until nothing is left.
    cancelled multishot receive can still deliver datagrams before its final event (rotor
    decision 5, rule 2).
 3. Every event that carries a buffer gives it back before the event is over, whatever the event
-   is for: a datagram once the table has read it, whatever its length, and a stale event's at
-   once.
+   is for: a datagram once the table has read it, whatever its length, cut or whole (rule 6), and
+   a stale event's at once.
 4. A port that has carried `udp_queries_per_port` queries is replaced at the end of the drive
    that sent its share, whoever waits on it. A new socket on a new port takes every query from
    then on, and the old one drains: it keeps its receive, since the answers to its queries come
@@ -3698,6 +3853,13 @@ the attempt that made it, and the drive goes on until nothing is left.
    aside: when it cannot be opened, the old one stays in use and the replacement is tried again
    at the next drive, so a server always has a socket to send from.
 5. A draining socket's receive is held to rule 1 as the current one's is.
+6. Written on 2026-10-14 (§16 decision 43). A buffer of the datagram group holds 1,856 octets of
+   a datagram: `buffer_bytes`, 2,048, less rotor's prefix of 192. The kernel cuts a longer datagram
+   to that room, and marks it as truncated. The engine reads the mark of each datagram that a
+   server's socket receives. It gives a cut datagram to the table's `on_datagram_cut`, and each
+   other datagram to `on_datagram` (§7, A datagram that the buffer cut). A QUIC connection's
+   socket is not a server's socket of these rules: colibri reads its datagrams (§24, request
+   rule 1).
 
 **Checked on 2026-09-23.** The engine model, in Lean then and in `spec/tla/engine/` since
 2026-09-24, holds both sets of rules above. Each lookup is the model of §5, and around the lookups sit
@@ -3780,6 +3942,24 @@ model to that, and the first check of it found the model's own order wrong, a dr
 owed nothing kept for a drive. The missing-socket path of the first rule 4 went with it: the new
 socket is opened before the old one steps aside, so a server always has one.
 
+**Checked on 2026-10-14.** Until then no configuration of the engine model held a truncated UDP
+answer, so in the model no lookup went from a socket to a connection. The model holds no octets.
+It holds the datagram's rule 6 as two more replies of a datagram. One is TC set, and one is a cut
+datagram that passes the checks of a cut datagram (§7). Each sends its lookup to TCP on the same
+server. The operator `Truncates` offers them, and three configurations set it:
+
+- `Engine_truncated_1_1_bound_4_1`: one lookup over UDP, one connection, four operations and one
+  failure. TLC finds that every check holds in its 426,197 states. It reaches a lookup that waits
+  on a stream, and a lookup that moved to a stream after its query left a draining socket.
+- `trace/Trace_udp_truncated_1_1`: the walks of the replay, which hands the engine each cut
+  datagram as the kernel does, cut to the room and marked. Its walks come last in the run, so no
+  walk that was picked before moves.
+- The mutant OA34: a draining socket stays open while its lookup waits on a stream. TLC finds the
+  check of rule 4 broken within 1,000 distinct states, and finds no break without `Truncates`.
+
+Every other configuration holds the states that it held before, and TLC writes the same walks
+for it (spec/README.md; docs/mutations.md, The owner's answers of 2026-10-14).
+
 **The rest of the engine, landed on 2026-09-22.** `cancel_all` ends every lookup at once, which
 is `ares_cancel`, and each failure comes through `take` like any other. `reinit` takes a new
 configuration, which is `ares_reinit`: it empties the cache, whose answers came from servers that
@@ -3819,6 +3999,7 @@ scripted servers. The TCP path, port rotation, `reinit` and `cancel_all` follow.
 ```zig
 pub const Engine = struct {
     pub const Options = struct {
+        // 1 to `lookup_slots_max`: since 2026-10-14 any other count does not compile.
         lookups: u16 = engine_lookups_default,
         // No `cache_slots` since 2026-10-11: the cache's memory is the caller's (decision 37).
         tag: u16 = engine_tag_default,          // the high bits of every user_data the engine submits
@@ -4958,8 +5139,10 @@ all DoQ or all DoH (§22, §23), and the rules hold for both. Where they differ,
 3. **A request is taken at once.** The drive takes a lookup's request onto its server's
    connection whatever the connection's state, and tells the lookup it went out, so the lookup's
    deadline covers the handshake as well. The request's bytes are copied into a request slot,
-   one for each lookup slot: over DoQ the message with its prefix, over DoH the HEADERS frame of
-   a GET. colibri reads a stream's bytes by offset until the server acknowledges them, so they
+   one for each lookup slot: over DoQ the message with its prefix, over DoH the message alone.
+   Over DoH the channel builds the GET from the message. The exchange holds the GET's path in a
+   buffer of its own, of `doh_request_bytes_max` octets (rule 21; DoH over HTTP/3, the path).
+   colibri reads a stream's bytes by offset until the server acknowledges them, so they
    cannot stay in the lookup's send buffer, which the lookup's next poll writes over.
 4. **A request waits for its connection.** A request taken while its connection opens or
    handshakes waits in the connection's queue. When the connection is up, each waiting request
@@ -5267,13 +5450,23 @@ undefined, so skipped (RFC 6570 §2.3, §3.2.1):
 - An empty path is `/` (RFC 9114 §4.3.1).
 
 At `start` the template is expanded once with a `dns` value `dns_variable_bytes_max` long, and
-one whose GET would pass `doh_request_bytes_max` is refused.
+one whose path would pass `doh_request_bytes_max` is refused. The bound is on the path alone, the
+`:path` of the GET. An exchange holds the path in a buffer of that size. Until 2026-10-14 this
+section and the constant's comment gave the bound to the GET's HEADERS frame. That left 960 octets
+for the path. The code gave the bound to the path, and the owner ruled for the code (§17 question
+41).
+
+The expansion has the whole buffer. A path that starts with `?` gives one octet of it to the `/`
+that goes first. Until 2026-10-14 a path that starts with `/` also lost that octet. So `start`
+refused such a template when its path at its longest was exactly 1,536 octets (§17 question 42).
 
 **The GET.** Six field lines: `:method GET`, `:scheme https`, `:authority`, `:path`, `accept:
 application/dns-message` (RFC 8484 §4.1) and `accept-encoding: identity` (request rule 12).
 `:path` is never indexed (RFC 9204 §4.5.4). colibri's `write_request` checks the section, opens
 the stream and writes the HEADERS frame into the request's slot, which the stream then carries
-with FIN.
+with FIN. That was `cocuyo_quic`'s HTTP/3, which went on 2026-09-29. Since then colibri's channel
+builds the GET from an exchange, whose own buffer holds the path (request rule 21). No request
+slot holds a HEADERS frame.
 
 **colibri's `h3` under the interface.** What it asks, beside what `quic` asks:
 
@@ -6014,7 +6207,7 @@ lookup over each transport.
 | `quic_receive_bytes` | 66,560 | colibri's receive pool for a connection: a DoQ answer at its longest, 65,537 octets with its prefix, rounded up to the pool's 1,024-octet blocks. The engine reads a stream once all of it has arrived, so a stream's window holds one whole; colibri's default of 1 MiB is far past it |
 | `quic_idle_timeout_ms` | 30,000 | the idle timeout a connection advertises (RFC 9000 §18.2); the server's may be shorter, and the smaller holds (RFC 9250 §4.4); chosen, not measured |
 | `quic_connection_id_bytes` | 8 | the destination connection ID a client's first Initial carries: RFC 9000 §7.2 asks for 8 octets at least |
-| `doh_request_bytes_max` | 1,536 | a DoH request's slot: colibri's bound on the GET's HEADERS frame is 317 octets beside `:authority` and `:path`, an authority takes 259 at most (a 253-octet name and a port), and 960 are left for the path, whose `dns` value takes 512 |
+| `doh_request_bytes_max` | 1,536 | the `:path` of a DoH GET, which an exchange holds in a buffer of this size: `start` refuses a template whose path, with a `dns` value of 512 octets, passes it (§17 question 41). A test sends that GET with the longest authority, 259 octets, over HTTP/2, and its server answers; HTTP/3 was not tried at that length |
 | `answers_default` | 4 | a DoH connection's answer buffers when the consumer names none, 262 KB of them; chosen, not measured |
 | `doh_channels_max` | `servers_max` | one channel for each DoH server (decision 33) |
 | `doh_fallback_delay_ns` | 250 ms | how long a channel gives QUIC's handshake before TCP opens beside it: the Connection Attempt Delay RFC 8305 §5 recommends, which that RFC sets between attempts at two addresses, not two versions of HTTP; taken from it, not measured |

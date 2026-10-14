@@ -47,8 +47,8 @@ would agree with the code by construction and prove nothing about it.
   loop's operations, and the lookup's transitions in each slot. `Checks` names what every event
   must keep.
 - `tla/engine/Engine_*.cfg` are the configurations TLC walks breadth first, and
-  `tla/engine/mutants/` breaks the model's TLS rules and the stream's rule 9 with
-  `tla/engine/EngineMutants.tla`.
+  `tla/engine/mutants/` breaks the model's TLS rules, the stream's rule 9, the request rules, the
+  channel's rules and the datagram's rules 4 and 6 with `tla/engine/EngineMutants.tla`.
 - `tla/engine/EngineTrace.tla` writes TLC's walks for the replay, one configuration of
   `tla/engine/trace/` for each of the replay's.
 
@@ -60,7 +60,13 @@ would agree with the code by construction and prove nothing about it.
   (docs/design.md §5). The model did not change for either.
 - The message. A reply is what §7's checks and §5's rcode policy make of it: unmatched, an answer,
   a CNAME to a new name, NXDOMAIN, NODATA, a server failure, FORMERR, TC=1 with nothing else, or
-  BADCOOKIE.
+  BADCOOKIE. Since 2026-10-14 a datagram that the buffer cut can move a lookup. When the lookup
+  waits over UDP and the datagram passes the checks of a cut datagram, the lookup moves as TC=1
+  moves it (docs/design.md §7, A datagram that the buffer cut). So the model's TC=1 stands for it
+  there, and its unmatched reply everywhere else. No transition changed, and only the comment of
+  TC=1 says so. The replay checks both claims (below). A cut datagram tells the server's state
+  nothing. The model holds no such state but whether a server failed, and TC=1 does not touch
+  that.
 - The server order of §19 step 12. The model counts a position in the order, which is what the
   lookup's `server_index` is.
 - Entropy, the cookies' values and the answers' records. Which COOKIE option a query carries,
@@ -95,23 +101,36 @@ question the lookup is asking, and it compares the answer and the state after ev
 stage, the server's position, the pass, the candidate, the hops, and the flags EDNS0, NODATA seen,
 a server failed and the cookie retried. A field that drifts is caught at the event that moved it.
 
+Since 2026-10-14 the replay also hands a cut datagram to the lookup at each `reply_truncated`
+line (`tools/spec_replay/replay_cut.zig`). The datagram is the answer to what the lookup asks,
+less its last octet. It goes to the lookup that the line's parent left, before the line's own
+event:
+
+- Where that lookup waits over UDP, the cut datagram must answer and move as the line's TC=1 does.
+- Everywhere else, over DoH or DoQ, on a stream or once the lookup has ended, it must be ignored
+  and leave the parent's state, as the unmatched reply does.
+
+The transcript reaches each state with a `reply_truncated` line, so each state gets a cut
+datagram. No line of the transcript changed for it.
+
 ## The engine
 
-The engine model is written from the stream's rules and the datagram's rules of §19 step 13, the TLS
-rules of §21, the request rules of §24, and rotor's decision 5, with two servers and one pass. A
-configuration asks every query over TCP, every query over TLS, every query as a request over DoQ
-or DoH, or every query over UDP with no answer truncated and a port replaced every two queries,
-the old one draining beside the new. A TLS session is what it does to
-the queue: the records it makes, which are sealed as it makes them, and the steps its handshake
-takes, a flight to answer, the handshake's end or a failure, and later a KeyUpdate to answer or a
-ticket to keep. A kept ticket may lapse at any moment, which stands for its lifetime and the 7-day
-cap. It leaves out the timer, the bytes of a message, the TLS records' contents and the cache.
-So the stream's rule 11 and TLS rule 7 are not in it, since they count octets. In the model a
-message reaches its lookup at the receive that brings it, and rule 11 asks the same of the code.
-Time moves in ticks, each the idle close's wait, and only when a deadline arrives or the caller
-lets a tick pass; a lookup waits two ticks. Two faults stand in for a kernel under pressure: the
-loop refuses every submission for the length of one event, as a full ring does, and every socket
-open fails for the length of one event, as a process with no descriptor left sees.
+The engine model is written from the stream's rules and the datagram's rules of §19 step 13, the
+TLS rules of §21, the request rules of §24, and rotor's decision 5, with two servers and one pass.
+A configuration asks every query over TCP, every query over TLS, every query as a request over DoQ
+or DoH, or every query over UDP with a port replaced every two queries, the old one draining beside
+the new. Over UDP no answer is truncated, but in the configurations that set `Truncates` since
+2026-10-14 (below). A TLS session is what it does to the queue: the records it makes, which are
+sealed as it makes them, and the steps its handshake takes, a flight to answer, the handshake's end
+or a failure, and later a KeyUpdate to answer or a ticket to keep. A kept ticket may lapse at any
+moment, which stands for its lifetime and the 7-day cap. It leaves out the timer, the bytes of a
+message, the TLS records' contents and the cache. So the stream's rule 11 and TLS rule 7 are not in
+it, since they count octets. In the model a message reaches its lookup at the receive that brings
+it, and rule 11 asks the same of the code. Time moves in ticks, each the idle close's wait, and
+only when a deadline arrives or the caller lets a tick pass; a lookup waits two ticks. Two faults
+stand in for a kernel under pressure: the loop refuses every submission for the length of one
+event, as a full ring does, and every socket open fails for the length of one event, as a process
+with no descriptor left sees.
 
 TLC walks it breadth first (`zig build tla`) and checks these rules in every state and every
 event, and the channel's rules below:
@@ -463,6 +482,49 @@ one job checked them all, 29 million states, and the configurations now hold 62 
 The largest configuration CI checks on each push holds 2,897,539 states, and the largest it checks
 once a day 16,382,680.
 
+On 2026-10-14 a datagram that the buffer cut began to send its lookup to TCP, once it passes the
+checks of a cut datagram (docs/design.md §7; §16 decision 43; §19 step 13, the datagram's rule
+6). Until then no configuration held a truncated UDP answer. A message's four replies were an answer,
+NXDOMAIN, SERVFAIL and an unmatched message, so no lookup went from a socket to a connection. The
+model holds no octets, no mark of the kernel and no cookie. So it holds the rule as two more
+replies of a datagram: TC set, and a cut datagram that passes the checks. Each sends its lookup
+to `tcpNeeded` on the same server. TC set counts as the server's success, and a cut datagram
+counts nothing. A cut datagram that fails a check is the unmatched reply. `Truncates` offers the
+two replies. It is an operator, false in the model, and three configurations set it with
+`Truncates <- Truncating`:
+
+- `Engine_truncated_1_1_bound_4_1`, which TLC checks;
+- `trace/Trace_udp_truncated_1_1`, whose walks the replay reads;
+- the mutant `mutants/OA34`.
+
+So no other configuration, mutant or walk changes.
+
+TLC checked the configuration on 2026-10-14 on an Apple M1 Pro while other work ran: 426,197
+states, which hold, in 32 seconds. In a copy of the model, an invariant that says a state is
+never reached broke within these distinct states. So the configuration reaches each state:
+
+- a lookup in `awaitingTcp`: 273;
+- a lookup that moved to a stream after its query left a draining socket: 6,022.
+
+At three operations the configuration held 33,347 states and reached neither. A stream's send is
+a fourth operation beside the receives of the two sockets, so the configuration is checked at
+four.
+
+The mutant OA34 keeps a draining socket open while the lookup whose query left it waits on a
+stream, as the code's OA33 does. TLC finds the check "rotated" broken within 1,000 distinct states.
+The same mutant without `Truncates` holds in 70,400 states, the count of
+`Engine_udp_1_1_bound_4_1`, whose constants are the same. So the configuration catches a broken
+rule that no other configuration reaches.
+
+The trace configuration is the replay's `Trace_udp_1_1` with `Truncates` set. Its name sorts last,
+so its walks come after the twelve configurations' walks, and no walk picked before moves. TLC
+writes the first twelve configurations' walks as it wrote them before, octet for octet. The short
+walks gain ten walks, with two cut datagrams and one TC answer among them. The full run gains
+2,000 walks, with 1,179 cut datagrams and 1,220 TC answers. Of those, 520 and 570 come on a
+draining socket's receive. Its walk 24001, the first of the new walks, catches OA29 and OA33,
+which the short walks miss, so it is a pick (docs/mutations.md, The owner's answers of
+2026-10-14).
+
 ### The walks TLC takes
 
 `tla/engine/EngineTrace.tla` runs the specification in TLC's simulation mode, which takes seeded
@@ -510,8 +572,8 @@ compares the walk's whole state after each.
 - `zig build test` replays `tools/spec_replay/lookup_gate.txt`, a committed slice of 4,414
   transitions: one server, one pass and one name, over UDP, over TCP, over DoH and over DoQ. It also
   replays two sets of engine walks TLC wrote. `tools/spec_replay/engine_gate.txt` holds ten walks
-  of forty events in each of the twelve engine configurations.
-  `tools/spec_replay/engine_picks.txt` holds thirteen walks of the full run, which `engine_picks` in
+  of forty events in each of the thirteen engine configurations.
+  `tools/spec_replay/engine_picks.txt` holds fourteen walks of the full run, which `engine_picks` in
   `build/spec.zig` names: each is where the full run caught a mutation of the engine that the
   short walks miss (docs/mutations.md). The gate also holds `tools/spec_replay/walk_gate.txt`, the
   forward walk with two candidates and both families and every reverse configuration. It needs
@@ -520,9 +582,11 @@ compares the walk's whole state after each.
   11 or newer for TLC. pepegrillo's `lean` tool builds the proofs and the axiom pins first. Then
   the step requires the committed slices to be the ones the models write, and replays the
   lookup's whole transcript, the walks' whole transcript, and TLC's full run: 2,000 engine walks
-  of 200 events in each of the twelve engine configurations, 4,824,000 events. TLC wrote the full
-  run in 872 seconds on an Apple M1 Pro on 2026-09-29, while a TLC check held most of the cores,
-  and its replay took 61 seconds, its build among them, while the check still ran. `zig build
+  of 200 events in each of the thirteen engine configurations, 5,226,000 events. TLC wrote the
+  full run in 872 seconds on an Apple M1 Pro on 2026-09-29, while a TLC check held most of the
+  cores, and its replay took 61 seconds, its build among them, while the check still ran. With the
+  thirteenth configuration, on 2026-10-14 on the same machine, TLC wrote it in 473 seconds and the
+  replay took 44 while other work ran. `zig build
   spec-lean` is the Lean half alone, which needs no Java, and `zig build spec-engine` the engine's
   part alone, which needs no Lean.
 - After a change to a model, `lake exe cocuyo-spec gate 8 > ../../tools/spec_replay/lookup_gate.txt`

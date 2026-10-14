@@ -6,13 +6,22 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-/// Where an expansion is written, and whether it has run out of room.
+/// Where an expansion is written, and whether it has run out of room. The expansion has the whole
+/// of `bytes`, a path that starts with "/" as well (docs/design.md §24, §17 question 42).
 const Out = struct {
     bytes: []u8,
     len: usize = 0,
     full: bool = false,
 
+    /// Appends `text`, after the slash of an empty path when `text` starts the expansion with "?".
     fn put(out: *Out, text: []const u8) void {
+        // An expansion that starts with "?" is a query on an empty path, and an empty path is "/"
+        // (RFC 9114 §4.3.1).
+        if (out.len == 0 and text.len > 0 and text[0] == '?') out.append("/");
+        out.append(text);
+    }
+
+    fn append(out: *Out, text: []const u8) void {
         if (out.full or text.len > out.bytes.len - out.len) {
             out.full = true;
             return;
@@ -23,13 +32,12 @@ const Out = struct {
 };
 
 /// Expands `path`, a split template's path, with `dns`, into `out`, and returns the `:path`, or
-/// null for a template the transport refuses or an `out` too short. An empty path is "/" (RFC 9114
-/// §4.3.1). An expansion that starts with anything but "/" or "?" would carry on the authority, and
-/// is refused.
+/// null for a template the transport refuses or an `out` too short. A path that starts with "?"
+/// has "/" put before it (RFC 9114 §4.3.1). An expansion whose first octet is not "/" would carry
+/// on the authority, and is refused.
 pub fn expand(path: []const u8, dns: []const u8, out: []u8) ?[]const u8 {
     assert(dns.len > 0);
-    if (out.len == 0) return null;
-    var writer: Out = .{ .bytes = out[1..] };
+    var writer: Out = .{ .bytes = out };
     var named = false;
     var at: usize = 0;
     // Bounded by the template: each pass takes one literal character or one expression.
@@ -41,10 +49,10 @@ pub fn expand(path: []const u8, dns: []const u8, out: []u8) ?[]const u8 {
     // A GET carries the query only in `dns` (RFC 8484 §4.1).
     if (writer.full or !named) return null;
     const expanded = writer.bytes[0..writer.len];
-    if (expanded.len > 0 and expanded[0] == '/') return expanded;
-    if (expanded.len > 0 and expanded[0] != '?') return null;
-    out[0] = '/';
-    return out[0 .. expanded.len + 1];
+    // `dns` is in it, and is not empty.
+    assert(expanded.len >= dns.len);
+    if (expanded[0] != '/') return null;
+    return expanded;
 }
 
 /// What `expression_at` and `literal_at` return for a template the transport refuses.
@@ -305,4 +313,16 @@ test "a template that cannot carry the query, or carries on the authority, is re
 test "an expansion longer than its buffer is refused" {
     var out: [8]u8 = undefined;
     try testing.expectEqual(@as(?[]const u8, null), expand("/dns-query{?dns}", "AAAAAAAAAAAA", &out));
+}
+
+test "a path that starts with a slash gets the whole buffer, and one that starts with ? gives the slash one octet" {
+    // `/q?dns=X` is eight octets, and `?dns=X` six, which the slash before it makes seven
+    // (RFC 9114 §4.3.1).
+    var eight: [8]u8 = undefined;
+    try testing.expectEqualStrings("/q?dns=X", expand("/q{?dns}", "X", &eight) orelse return error.Refused);
+    var seven: [7]u8 = undefined;
+    try testing.expectEqual(@as(?[]const u8, null), expand("/q{?dns}", "X", &seven));
+    try testing.expectEqualStrings("/?dns=X", expand("{?dns}", "X", &seven) orelse return error.Refused);
+    var six: [6]u8 = undefined;
+    try testing.expectEqual(@as(?[]const u8, null), expand("{?dns}", "X", &six));
 }

@@ -263,6 +263,13 @@ Awaits(st, op, l) ==
        \/ op.kind = "receiveFrom" /\ ServerOf(st, l) = op.target /\ stage = "awaitingUdp" /\
           sl.sentFrom = {<<op.target, age>>}
 
+\* What the table may make of a message a receive brought (§5, §7). Under `Truncates` a datagram
+\* may also say TC, or come cut by its buffer (§19 step 13, the datagram's rule 6). A stream's
+\* message is never cut. TC on a stream's message reads as NODATA, and no walk here needs it.
+Replies(op) ==
+    {"answer", "servfail", "nxdomain", "unmatched"} \cup
+    (IF Truncates /\ op.kind = "receiveFrom" THEN {"truncated", "cut"} ELSE {})
+
 \* How an operation may end, as rotor decision 5, rule 2 allows.
 Endings(st, op) ==
     IF op.kind = "send"
@@ -346,8 +353,7 @@ Enabled(st) ==
     UNION {{[Ev("finish") EXCEPT !.op = op, !.outcome = o] : o \in Endings(st, op)} :
            op \in DOMAIN st.ops} \cup
     UNION {{[Ev("message") EXCEPT !.op = op, !.slot = l, !.reply = r] :
-                l \in {l \in 0..Slots - 1 : Awaits(st, op, l)},
-                r \in {"answer", "servfail", "nxdomain", "unmatched"}} :
+                l \in {l \in 0..Slots - 1 : Awaits(st, op, l)}, r \in Replies(op)} :
            op \in {op \in DOMAIN st.ops : Receives(op) /\ op.current}} \cup
     UNION {{[Ev("tls") EXCEPT !.op = op, !.step = t] : t \in TlsSteps(st, op)} :
            op \in DOMAIN st.ops} \cup

@@ -1,11 +1,11 @@
 //! The limits of DoH that `cocuyo_doh` reads (docs/design.md §24, New limits).
 const std = @import("std");
 
-/// A DoH request's slot: the HEADERS frame of its GET (docs/design.md §24, New limits). colibri's
-/// bound on the frame is 317 octets beside `:authority` and `:path`, an authority takes 259 at
-/// most (a 253-octet name and a port), and 960 are left for the path, whose `dns` value takes 512.
-/// The bound was read off colibri's HTTP/3; HTTP/2's HEADERS frame is no longer, since its frame
-/// header is nine octets and HPACK's literals are no longer than QPACK's.
+/// A DoH GET's `:path`, which an exchange holds in a buffer of this size (docs/design.md §24, New
+/// limits). The bound is on the path alone, by the owner's ruling of 2026-10-14 (§17 question 41).
+/// A channel's `start` expands its template with a `dns` value at its longest, 512 octets, and
+/// refuses a template whose path then passes this bound. A test sends that GET over HTTP/2, with
+/// an authority of 259 octets: a name of 253 octets and a port. colibri's server answers it.
 pub const doh_request_bytes_max: usize = 1536;
 
 /// A DoH connection's answer buffers when the consumer names none: one for each response in

@@ -2115,4 +2115,319 @@
         },
         .caught_by = .{ .step = "test-io" },
     },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA1",
+        .what = "the engine reads no mark, and hands a cut datagram over as whole",
+        .edits = .{
+            .{ .file = "io/io_events.zig", .old = "    if (delivery.from.flags.truncated) {", .new = "    if (false and delivery.from.flags.truncated) {" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA2",
+        .what = "the engine hands each datagram over as cut",
+        .edits = .{
+            .{ .file = "io/io_events.zig", .old = "    if (delivery.from.flags.truncated) {", .new = "    if (true or delivery.from.flags.truncated) {" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA3",
+        .what = "a lookup reads a cut datagram as a whole message",
+        .edits = .{
+            .{ .file = "src/resolver/lookup.zig", .old = "        return cut_module.on_datagram_cut(self, message, from, now_ns);", .new = "        return response_module.on_response(self, message, from, now_ns);" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA4",
+        .what = "the table hands a cut datagram to its lookups as a whole message",
+        .edits = .{
+            .{ .file = "src/resolver/table.zig", .old = "        return self.offer_datagram(message, from, now_ns, Lookup.on_datagram_cut);", .new = "        return self.offer_datagram(message, from, now_ns, Lookup.on_response);" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA5",
+        .what = "a lookup reads a cut datagram in each state",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    if (self.state != .awaiting_udp) return false;", .new = "    if (false and self.state != .awaiting_udp) return false;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA6",
+        .what = "a lookup over DoH or DoQ reads a cut datagram",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    if (self.config.sends_requests()) return false;", .new = "    if (false and self.config.sends_requests()) return false;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA7",
+        .what = "a lookup under ignore_truncation reads a cut datagram",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    return !self.config.ignore_truncation;", .new = "    return true;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA8",
+        .what = "check 1 is gone from the cut path",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    const header = response.header_of(message) orelse return false;", .new = "    const header = wire.header.parse(message[0..core.constants.header_bytes]) catch return false;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA9",
+        .what = "check 2 is gone from the cut path",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    if (header.id != self.transaction.id) return false;", .new = "    if (false and header.id != self.transaction.id) return false;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA10",
+        .what = "check 3 of the cut path compares the port alone",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    if (!self.server().equal(&from)) return false;", .new = "    if (self.server().port != from.port) return false;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA11",
+        .what = "check 3 of the cut path compares the address alone",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    if (!self.server().equal(&from)) return false;", .new = "    if (!self.server().address.equal(&from.address)) return false;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA12",
+        .what = "check 4 of the cut path takes a query",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    if (!header.is_response()) return false;", .new = "    if (false and !header.is_response()) return false;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA13",
+        .what = "check 4 of the cut path takes any opcode",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    if (header.opcode() != wire.constants.opcode_query) return false;", .new = "    if (false and header.opcode() != wire.constants.opcode_query) return false;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA14",
+        .what = "check 5 of the cut path takes any count of questions",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    if (header.qdcount != 1) return false;", .new = "    if (false and header.qdcount != 1) return false;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA15",
+        .what = "check 5 of the cut path takes any question",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    if (!casing.echoes_question(self, message)) return false;", .new = "    if (false and !casing.echoes_question(self, message)) return false;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA16",
+        .what = "a cut datagram is a latency sample of its server",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    self.state = .tcp_needed;\n    return .accepted;", .new = "    self.servers.record_latency(self.server_slot(), now_ns - self.sent_at_ns, now_ns);\n    self.state = .tcp_needed;\n    return .accepted;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA17",
+        .what = "a cut datagram counts as its server's success",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    self.state = .tcp_needed;\n    return .accepted;", .new = "    self.servers.record_success(self.server_slot());\n    self.state = .tcp_needed;\n    return .accepted;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA18",
+        .what = "a cut datagram with no cookie starts its server's silence",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    self.state = .tcp_needed;\n    return .accepted;", .new = "    @import(\"lookup_cookie.zig\").silence_if_missing(self, null, now_ns);\n    self.state = .tcp_needed;\n    return .accepted;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA19",
+        .what = "a cut datagram moves its lookup to the next server",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    self.state = .tcp_needed;\n    return .accepted;", .new = "    self.next_server(now_ns);\n    return .accepted;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA20",
+        .what = "a template's expansion has one octet less than the buffer, whatever its first octet",
+        .edits = .{
+            .{ .file = "io/io_doh_template.zig", .old = "    var writer: Out = .{ .bytes = out };", .new = "    var writer: Out = .{ .bytes = out[0 .. out.len -| 1] };" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA21",
+        .what = "the same, against the template's own tests",
+        .edits = .{
+            .{ .file = "io/io_doh_template.zig", .old = "    var writer: Out = .{ .bytes = out };", .new = "    var writer: Out = .{ .bytes = out[0 .. out.len -| 1] };" },
+        },
+        .caught_by = .{ .step = "test-doh" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA22",
+        .what = "no slash goes before a path that starts with ?",
+        .edits = .{
+            .{ .file = "io/io_doh_template.zig", .old = "        if (out.len == 0 and text.len > 0 and text[0] == '?') out.append(\"/\");\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-doh" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA23",
+        .what = "a slash goes before each path, one that starts with a slash too",
+        .edits = .{
+            .{ .file = "io/io_doh_template.zig", .old = "        if (out.len == 0 and text.len > 0 and text[0] == '?') out.append(\"/\");", .new = "        if (out.len == 0 and text.len > 0) out.append(\"/\");" },
+        },
+        .caught_by = .{ .step = "test-doh" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA24",
+        .what = "check 6 is gone from the cut path",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    return cookies.accepted(self, null);", .new = "    return true;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA25",
+        .what = "check 6 of the cut path expects a cookie only when the query carried the pair",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    return cookies.accepted(self, null);", .new = "    return self.cookie_form != .paired;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA26",
+        .what = "check 1 of the cut path takes a message longer than a message can be",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    const header = response.header_of(message) orelse return false;", .new = "    const header = wire.header.parse(message) catch return false;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA27",
+        .what = "check 5 compares a question that the message does not hold whole",
+        .edits = .{
+            .{ .file = "src/wire/question.zig", .old = "    if (message.len < end) return false;", .new = "    if (false and message.len < end) return false;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA28",
+        .what = "the engine reads no mark, against the short walks",
+        .edits = .{
+            .{ .file = "io/io_events.zig", .old = "    if (delivery.from.flags.truncated) {", .new = "    if (false and delivery.from.flags.truncated) {" },
+        },
+        .caught_by = .short_walks,
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA29",
+        .what = "a cut datagram counts as its server's success, against the walks",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    self.state = .tcp_needed;\n    return .accepted;", .new = "    self.servers.record_success(self.server_slot());\n    self.state = .tcp_needed;\n    return .accepted;" },
+        },
+        .caught_by = .picked_walks,
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA30",
+        .what = "a lookup reads a cut datagram in each state, against the lookup's replay",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    if (self.state != .awaiting_udp) return false;", .new = "    if (false and self.state != .awaiting_udp) return false;" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA31",
+        .what = "a lookup over DoH or DoQ reads a cut datagram, against the lookup's replay",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    if (self.config.sends_requests()) return false;", .new = "    if (false and self.config.sends_requests()) return false;" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA32",
+        .what = "a cut datagram moves its lookup to the next server, against the replays",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    self.state = .tcp_needed;\n    return .accepted;", .new = "    self.next_server(now_ns);\n    return .accepted;" },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA33",
+        .what = "a draining socket stays open while its lookup waits on a stream",
+        .edits = .{
+            .{ .file = "io/io_drive.zig", .old = "        if (lookup.state == .awaiting_udp and lookup.server_slot() == server) return true;", .new = "        if (lookup.is_waiting() and lookup.server_slot() == server) return true;" },
+        },
+        .caught_by = .picked_walks,
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA35",
+        .what = "the same, against the engine's tests",
+        .edits = .{
+            .{ .file = "io/io_drive.zig", .old = "        if (lookup.state == .awaiting_udp and lookup.server_slot() == server) return true;", .new = "        if (lookup.is_waiting() and lookup.server_slot() == server) return true;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The owner's answers of 2026-10-14",
+        .id = "OA36",
+        .what = "a lookup under ignore_truncation reads a cut datagram, against the engine's tests",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response_cut.zig", .old = "    return !self.config.ignore_truncation;", .new = "    return true;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
 }

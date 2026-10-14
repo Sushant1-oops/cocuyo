@@ -28,6 +28,7 @@ const resolver = @import("resolver");
 const Lookup = resolver.Lookup;
 const Servers = resolver.servers.Servers;
 const fixtures = @import("fixtures.zig");
+const cut_module = @import("replay_cut.zig");
 
 /// The deepest line the replay can follow. The walk over spec/lean/Main.lean's configurations went
 /// 168 deep when it was measured on 2026-09-23; this leaves room for a model that grows.
@@ -113,6 +114,8 @@ pub const Mismatch = struct {
     expected_state_len: usize,
     got_state: [state_bytes_max]u8,
     got_state_len: usize,
+    /// Whether a cut datagram parted from the model, and not the line's own event (`replay_cut.zig`).
+    cut: bool = false,
 };
 
 pub const Replay = struct {
@@ -134,6 +137,8 @@ pub const Replay = struct {
     lines: usize = 0,
     events: usize = 0,
     configs: usize = 0,
+    /// The cut datagrams checked, one at each line whose reply stands for one (`replay_cut.zig`).
+    cuts: usize = 0,
     mismatch: ?Mismatch = null,
     query: [core.constants.query_bytes_max]u8 = undefined,
     reply: [core.constants.udp_payload_bytes_default]u8 = undefined,
@@ -207,6 +212,9 @@ pub const Replay = struct {
         if ((event == .init) == self.started) return error.Malformed;
         if (event == .init) self.start() else self.restore(depth - 1);
         self.path[depth] = event;
+        if (cut_module.applies(self, event) and !cut_module.agrees(self, depth, expected_out, expected_state)) {
+            return error.Mismatch;
+        }
         const got_out = if (event == .init) Out.none else self.apply(event);
         var got_buffer: [state_bytes_max]u8 = undefined;
         const got_state = state_text(&self.lookup, &got_buffer);
@@ -240,7 +248,7 @@ pub const Replay = struct {
         self.frames[depth] = .{ .lookup = self.lookup, .servers = self.servers, .now_ns = self.now_ns };
     }
 
-    fn restore(self: *Replay, depth: usize) void {
+    pub fn restore(self: *Replay, depth: usize) void {
         const frame = &self.frames[depth];
         self.lookup = frame.lookup;
         self.servers = frame.servers;
@@ -285,7 +293,7 @@ pub const Replay = struct {
     /// Where a reply comes from: the server the lookup is on, on the port of the transport it is
     /// waiting on. A lookup with no server has none, and any address will do for the stray reply
     /// the model sends it.
-    fn source(self: *const Replay) core.Endpoint {
+    pub fn source(self: *const Replay) core.Endpoint {
         if (self.config.server_count() == 0) return fixtures.servers[0].endpoint;
         if (self.lookup.state == .awaiting_tcp) return self.lookup.server_tcp();
         return self.lookup.server();
@@ -297,6 +305,7 @@ pub const Replay = struct {
         const mismatch = self.mismatch orelse return;
         std.debug.print("  {s}\n  path:", .{self.config_text[0..self.config_len]});
         for (self.path[0 .. mismatch.depth + 1]) |event| std.debug.print(" {s}", .{@tagName(event)});
+        if (mismatch.cut) std.debug.print("\n  a cut datagram, handed over in place of the last event", .{});
         std.debug.print("\n  the model: {s} {s}\n  the lookup: {s} {s}\n", .{
             @tagName(mismatch.expected_out), mismatch.expected_state[0..mismatch.expected_state_len],
             @tagName(mismatch.got_out),      mismatch.got_state[0..mismatch.got_state_len],
@@ -415,14 +424,18 @@ pub fn main(init: std.process.Init) !void {
         replay.report(err);
         return err;
     };
-    std.debug.print("spec replay: {d} events over {d} configurations agree with the model\n", .{
-        replay.events, replay.configs,
+    std.debug.print("spec replay: {d} events over {d} configurations, and {d} cut datagrams, agree with the model\n", .{
+        replay.events, replay.configs, replay.cuts,
     });
 }
 
 // Tests.
 
 const testing = std.testing;
+
+test {
+    _ = cut_module;
+}
 
 fn replay_text(replay: *Replay, text: []const u8) Error!void {
     var lines = std.mem.splitScalar(u8, text, '\n');
@@ -440,6 +453,7 @@ test "the committed slice of the model's transcript replays against the lookup" 
     };
     try testing.expectEqual(@as(usize, 5), replay.configs);
     try testing.expect(replay.events > 2900);
+    try testing.expect(replay.cuts > 0);
 }
 
 test "a line where the lookup answers otherwise than the model is a mismatch" {

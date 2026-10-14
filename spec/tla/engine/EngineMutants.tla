@@ -2,8 +2,9 @@
 \* The engine's rules broken on purpose, one operator each: the TLS rules as docs/mutations.md's
 \* TM1 to TM3 and R8a to R8d broke the Lean model and R4a and R4b break rule 4's alert, the
 \* stream's rule 9 as TQ1 breaks it, the request rules of §24 as RQ1 to RQ11 and RQ14 break them,
-\* and the channel's rules as CH1 to CH10 do. A configuration in mutants/ puts one in place of the rule
-\* with TLC's `Rule <- Mutant`, and TLC must find the check that catches it.
+\* the channel's rules as CH1 to CH10 do, and the datagram's rules 4 and 6 as OA34 does. A
+\* configuration in mutants/ puts one in place of the rule with TLC's `Rule <- Mutant`, and TLC must
+\* find the check that catches it.
 EXTENDS Engine
 
 \* TM1: the session's records go to the back of the queue, behind queries not yet sealed.
@@ -295,5 +296,16 @@ LinkOpenEager(st, i) ==
     THEN [shut EXCEPT !.links[i].state = "connecting", !.links[i].connectLent = TRUE,
                       !.ops = Add(@, Op("lconnect", i))]
     ELSE StartLink(shut, i)
+
+\* OA34: a draining socket stays open while the lookup whose query left it waits on a stream, as the
+\* code's OA33 breaks `drain_owed`. A lookup moves from a socket to a stream on the same server only
+\* for a truncated answer, so only a configuration that sets `Truncates` reaches it (§19 step 13,
+\* the datagram's rules 4 and 6).
+CloseIfDrainedWaiting(st, v) ==
+    LET owed == \E l \in 0..Slots - 1 :
+            LET sl == st.slots[l] IN
+            sl.sentFrom = {<<v, "draining">>} /\
+            (sl.busy \/ (sl.lookup # {} /\ Waiting(Get(sl.lookup).stage) /\ ServerOf(st, l) = v))
+    IN IF st.socks[v].draining /\ ~owed THEN CloseDrain(st, v) ELSE st
 
 ===============================================================================

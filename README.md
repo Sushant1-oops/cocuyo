@@ -114,7 +114,9 @@ while (true) {
 ```
 
 For many lookups at once, `Resolver` does the same with one `poll` for the whole table, one
-deadline to arm one timer, and one `on_datagram` call per datagram received.
+deadline to arm one timer, and one `on_datagram` call per datagram received. A datagram longer
+than the receive buffer arrives cut, and the kernel marks it as truncated. Hand that one to
+`on_datagram_cut`: the lookup that it matches asks the same server over TCP (docs/design.md §7).
 
 ## An event loop to drive it: rotor
 

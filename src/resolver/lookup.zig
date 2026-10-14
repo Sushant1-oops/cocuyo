@@ -32,6 +32,7 @@ const policy = @import("lookup_policy.zig");
 const poll_module = @import("lookup_poll.zig");
 const init_module = @import("lookup_init.zig");
 const response_module = @import("lookup_response.zig");
+const cut_module = @import("lookup_response_cut.zig");
 const request_module = @import("lookup_request.zig");
 
 pub const State = enum {
@@ -233,13 +234,14 @@ pub const Lookup = struct {
         return poll_module.poll(self, now_ns, out);
     }
 
-    pub fn on_response(
-        self: *Lookup,
-        message: []const u8,
-        from: Endpoint,
-        now_ns: u64,
-    ) Verdict {
+    pub fn on_response(self: *Lookup, message: []const u8, from: Endpoint, now_ns: u64) Verdict {
         return response_module.on_response(self, message, from, now_ns);
+    }
+
+    /// A datagram longer than the caller's buffer, which the kernel cut and marked. Over UDP, one
+    /// that passes the checks of a cut datagram (§7) sends the lookup to TCP.
+    pub fn on_datagram_cut(self: *Lookup, message: []const u8, from: Endpoint, now_ns: u64) Verdict {
+        return cut_module.on_datagram_cut(self, message, from, now_ns);
     }
 
     /// The caller sent what `poll` asked for.

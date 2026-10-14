@@ -5607,3 +5607,279 @@ keep space on the disk. The change does not touch `tools/readme_check.zig`.
 | NS4 | a pointer whose second octet is past the end of the message is read | `read_pointer`'s bound | the truncated-pointer test of `decode`, by a panic, `test-wire` | CAUGHT |
 | NS5 | a name ends after its last pointer, and not after its first | the end of a name, RFC 1035 §4.1.4 | the test of as many pointers as the hop bound allows, the test of every hop and the fuzz gate, `test-wire` | CAUGHT |
 | NS6 | a label may run past the end of the message, in the walk of `decode` and `skip` | `label_at`'s bound | the test of a label past the end of the message, by a panic, `test-wire` | CAUGHT |
+
+## The owner's answers of 2026-10-14
+
+2026-10-14. The owner answered questions 39 to 44 of docs/design.md §17, which the section "Tests
+at the named limits" asked. §17 records each answer in the form of the other answers:
+
+- 39: `drive_polls_per_lookup_max` stays at 81, with its slack. No change.
+- 40: a datagram that the buffer cut moves its lookup to TCP once checks 1 to 5 of §7 pass. This
+  changes behaviour, and §16 decision 43 records it. Since the review below, check 6 runs too, on
+  a message with no COOKIE option.
+- 41: the bound of a DoH request is on the path, 1,536 octets, as the code had it. The comment of
+  `doh_request_bytes_max` and §24 changed, and the code did not.
+- 42: a template's path that starts with a slash now gets the whole buffer.
+- 43: an engine of more lookups than `lookup_slots_max` does not compile.
+- 44: `cocuyo.wire.fuzz` stays public. No change.
+
+Question 45 is still open. CLAUDE.md still names `src/wire/fuzz.zig`, and only the owner edits it.
+The review of the change asked questions 46 and 47 (The review, below).
+
+### A datagram that the buffer cut
+
+The design changed first:
+
+- §4: `Lookup.on_datagram_cut` and `Resolver.on_datagram_cut`, the public API that the rule needs.
+- §5: a row of the table, and the cut datagram's exception to the rule that an accepted response
+  takes a sample.
+- §7: the section "A datagram that the buffer cut", and the last rule of Parsing.
+- §16: decision 43, and an amendment to decision 10.
+- §17: questions 46 and 47.
+- §19 step 13: the datagram's rule 6, rule 3's pointer to it, and "Checked on 2026-10-14".
+
+Then the models. The Lean model of `Lookup` holds the rule already. Its TC=1 moves a lookup that
+waits over UDP to `tcpNeeded` on the same server, and records no failure. A cut datagram that
+passes the checks of a cut datagram is that reply, and each other cut datagram is its unmatched
+reply. No transition changed, and the comment of TC=1 now says so. The replay checks it
+(spec/README.md, The replay).
+
+The engine model held no truncated UDP answer: spec/README.md said "every query over UDP with no
+answer truncated". A message's replies were an answer, NXDOMAIN, SERVFAIL and an unmatched
+message. Rule 6 is a new rule of §19 step 13, so the model changed before the code. `Truncates`
+gives a datagram two replies more, TC set and a cut datagram, and each sends its lookup to TCP. TC
+set counts as the server's success, as in the code, and a cut datagram counts nothing. Three
+configurations set it:
+
+- `Engine_truncated_1_1_bound_4_1`: TLC finds that each check holds in its 426,197 states.
+  spec/README.md says what the configuration reaches.
+- `trace/Trace_udp_truncated_1_1`: the replay's walks of the rule.
+- `mutants/OA34`: a draining socket kept open while its lookup waits on a stream.
+
+`Truncates` is an operator that is false, so each other configuration reaches what it reached
+before. TLC ran the configurations and the mutants that CI runs on each push, after the review's
+changes:
+
+- Each configuration holds, with the states that spec/README.md gives it:
+  - the channel: 1,672,552;
+  - requests: 22,688, 217,540 and 2,897,539;
+  - TCP: 18,625, 561,813 and 2,438,035;
+  - TLS: 252,573;
+  - UDP: 25,385 and 70,400;
+  - truncated: 426,197.
+- Each of the 33 mutants is violated, as its header expects.
+
+The configurations that CI checks once a day did not run. They set no `Truncates` either.
+
+Then the code, each change with its failing test first:
+
+- The 1,857-octet test of `io/io_sim_datagram_test.zig` held the old behaviour: the lookup ignored
+  the cut datagram and waited. Now it requires the new rule. The cut answer comes from the server
+  that the query went to, and that server answers over TCP from then on. Run before the code, the
+  test failed at its first new check: "expected .connecting_tcp, found .awaiting_udp". With the
+  code, the lookup asks over TCP, and its answer comes on a connection to that server.
+- A new test of the same file hands the same cut answer from the other server. Check 3 refuses it,
+  and the lookup waits, as before. It passed before the code too, so it guards rule 2 of the new
+  section of §7.
+- `src/resolver/lookup_response_cut.zig` holds the cut path and its tests: each check of 1 to 6,
+  the server's state left as it was, and the states and the configurations that ignore a cut
+  datagram. `table.zig` has a test of `Resolver.on_datagram_cut`.
+
+The two entry points of the table share one loop, `offer_datagram`, which takes the lookup's
+function at compile time. So `on_datagram` gives the same machine code as before.
+
+### The review of 2026-10-14
+
+A review read the change before its commit. It found three things to fix and twelve to consider.
+Each change below came with its failing test first, where it changed what the code does.
+
+Check 6 was not on the cut path. RFC 7873 §5.3 says that a response without the COOKIE option
+that the client expects "MUST be discarded". A lookup that expected a cookie took a cut datagram
+with none, and ignored an answer with TC set and no OPT record. So a forger who matched the id,
+the port and the question could move that lookup with a cut datagram alone. The fix runs check 6
+on the cut path, on a message with no COOKIE option: the cut took the OPT record. Two new tests of
+`lookup_response_cut.zig` failed before it, each with "expected .ignored, found .accepted":
+
+- a lookup whose query carried the server's cookie;
+- a lookup whose fresh cookie went out before the server gave a cookie.
+
+No replay reached rule 6. The engine model held the rule, but no walk had `Truncates` set, and
+the lookup replay handed no cut datagram to the code. Now both replays do:
+
+- `tools/spec_replay/replay_cut.zig` hands a cut datagram to the lookup at each `reply_truncated`
+  line where the lookup waits over UDP, and at each `reply_unmatched` line elsewhere. The lookup
+  must answer and move as the line's reply does. `zig build spec-lean` checks 354,997 cut
+  datagrams that way over the whole transcript, and the gate checks 605 over the slice.
+  No line of either transcript changed.
+- The engine replay has a reply `cut`: the answer, grown by a Padding option to one octet past the
+  room, cut to the room, with the kernel's mark. `trace/Trace_udp_truncated_1_1` is the
+  replay's `Trace_udp_1_1` with `Truncates` set. Its name sorts last, so its walks come last, and
+  no pick moves. TLC wrote the walks of the other twelve configurations as before, octet for octet.
+  The short walks gained ten walks, and the full run 2,000, 5,226,000 events in all. The engine
+  agrees with the model on each.
+- The short walks catch OA28, the engine that reads no mark, in walk 123. They miss OA29 and OA33.
+  The full run catches both first in walk 24001, the first walk of the new configuration, so it is
+  the fourteenth pick of `build/spec.zig`.
+
+The public API changed without the owner's word on its shape: `Lookup.on_datagram_cut` and
+`Resolver.on_datagram_cut`. The answer to question 40 ruled on the behaviour. No change here can
+give the owner's word, so §17 question 46 asks for it, and the commit waits for the answer.
+
+What the review asked to consider, and what changed:
+
+- §7 and decision 10 said that an attacker cannot race the retry. That is false in three cases:
+  an engine of no TCP connection, one whose connection slots are all in use, and a server that
+  refuses TCP. In each, the lookup asks the next server over UDP. §7, decision 10 and Parsing now say so,
+  and say that a forged TC answer did the same before. A new twin test shows the engine of no TCP
+  connection.
+- A cut datagram whose question is itself cut had no test. A new test hands each length from the
+  header to the question's end less one, and requires each to be ignored. The question's end is
+  taken. OA27 breaks the check of the length, and the test catches it by the assertion after it.
+- Check 1's upper bound on the cut path had no test. A new test hands 65,536 octets, which check 1
+  refuses, and 65,535, which it takes. OA26 keeps the parse and drops the bound.
+- The twin reached two cases of rule 6. Three new tests of `io_sim_datagram_test.zig` reach three
+  more: an engine of no TCP connection, a draining socket and `ignore_truncation`. The 1,857-octet
+  test now also hands a copy of the cut datagram once the lookup is on its way to a stream, which
+  the lookup ignores.
+- No TLA mutant showed that the new configuration can catch a broken rule. OA34 keeps a draining
+  socket open while its lookup waits on a stream. TLC finds the check "rotated" broken within
+  1,000 distinct states. Without `Truncates` the same mutant holds in 70,400 states.
+- `examples/udp_rotor.zig` handed each datagram to `on_response`. It now reads rotor's mark, and
+  hands a cut datagram to `on_datagram_cut`. `examples/udp_blocking.zig` does the same with the
+  `trunc` flag of `std.Io`. No test runs the examples, so no row breaks them.
+- The cut path quoted RFC 1035 §4.2.1 mid-sentence. It now cites RFC 7766 §5 alone, as the
+  permission to ask over TCP, and says that no RFC states the rule.
+- Decision 43 did not weigh RFC 6891 §6.2.3. It now does, and §17 question 47 asks the owner
+  whether the engine refuses a `Config.udp_payload_bytes` above its room.
+- §24's request rule 3 said that a DoH request slot holds a HEADERS frame. It holds the message,
+  and the exchange holds the path. The rule and "The GET" now say so.
+- The test of a slash path only started the channel. It now sends the longest GET on that path,
+  and requires colibri's server to answer it.
+- Some new sentences ran past 25 words, and a line of spec/README.md past 100 columns. They are
+  shorter now.
+- `takes_cut` and `matches` held no assertion. Each now asserts what the state of the lookup must
+  be, and `matches` asserts the header's length after check 1. With them, OA6 is caught by a crash
+  where the DoH test once failed an expectation.
+
+### What CI's instruction check will do
+
+`bench/count.zig` was built for x86-64 Linux at the baseline CPU, ReleaseSafe, at 1008e9a and with
+the change, after the review. That is the program that CI counts under cachegrind. The disassembly
+of the two programs is the same, instruction for instruction and immediate for immediate, once
+the addresses are left out. No case of `bench/count.zig` reaches the cut path, the engine or the
+DoH template. So CI's instruction check will likely find each of the fourteen counts of
+`bench/instructions.zon`, and pass. Nobody counted them under cachegrind.
+
+### The DoH template's slash
+
+The tests came first:
+
+- `io/io_doh_template.zig`: a path that starts with a slash expands into a buffer of its own
+  length. A path that starts with `?` needs one octet more, for the slash before it. Before the
+  fix, `/q?dns=X` did not fit in eight octets.
+- `io/io_doh_channel_test.zig`: a channel starts on the path of question 42: `/`, 1,018 octets of
+  `p`, then `{?dns}`. With a `dns` value of 512 octets that path has 1,536 octets. Before the fix,
+  `start` returned `error.Failed` at its check of the path. Since the review the test also sends
+  the longest GET on that path, and colibri's server answers it. One octet more is still refused.
+
+The fix gives the expansion the whole buffer. The first octet that `Out.put` writes decides: when
+it is `?`, a slash goes before it. Each other expansion keeps the buffer for itself.
+
+### The bound of a DoH request
+
+The comment of `doh_request_bytes_max` and §24 now give the bound to the path alone. No code
+changed, so no row is new. LM50 and LM51 still break the check of the path, and the test at the
+limit catches each. The new test of question 42 catches each too.
+
+### `Options.lookups`
+
+`io.Resolver` checks `Options.lookups` when it compiles. An engine of 1 to `lookup_slots_max`
+lookups compiles. An engine of any other count stops with an error that names the bound. The tool
+reads a compile error of this tree's own as a mutation whose text no longer applies. So the check
+has no row, as the comptime checks of the index shifts have none. It was shown by hand, in a copy
+of the tree with a cache of its own. Each probe ran `zig build test-io` with a `comptime` block
+that sizes an engine:
+
+- 1,025 lookups: `error: an engine holds 1 to 1024 lookups, lookup_slots_max, and these Options
+  name 1025`.
+- 0 lookups: the same error, which names 0. `Resolver.init` asserted both bounds before, when the
+  engine ran.
+- 1,024 lookups: it compiles, and the 153 tests pass.
+- 1,025 lookups with the check taken out: it compiles, and the 153 tests pass. The engine stops
+  at the assertion of `init` when it runs, as question 43 said.
+
+### What ran
+
+With the change, `zig build test` has 1,084 tests pass of 1,084. The change adds these tests:
+nine in `lookup_response_cut.zig`, four in `io_sim_datagram_test.zig`, two in `replay_cut.zig`,
+and one each in `table.zig`, `io_doh_template.zig` and `io_doh_channel_test.zig`. The replay's
+tests run under two roots, so the gate counts those of `replay_cut.zig` twice. `zig build lint`
+passes, with each function at a complexity of 15 or less. `zig build spec-lean` passes: 2,680,563
+events and 354,997 cut datagrams agree with the model, and 66,565 events of the walks. Steps that
+the gate does not run were run too:
+
+- `zig build examples` builds its four programs.
+- `zig build test-cares` has 37 tests pass of 37.
+- `zig build spec-engine` has TLC write the short walks and the full run again, finds the
+  committed walks the same, and replays 5,226,000 events over 26,000 walks.
+- `zig build tla` holds the eleven configurations that CI checks on each push, and finds each of
+  the 33 mutants violated.
+
+### The rows
+
+Each row ran by hand, in a copy of the tree with a cache of its own, against the check that it
+names. Those runs name the tests that catch each row. Then `zig build mutations -- engine` ran the
+35 rows of the section, OA1 to OA36 but OA34, after it ran each of their checks once with
+nothing mutated. `--walks` named the full run that TLC wrote for this change, so TLC did not write
+it again. The run found each row `CAUGHT`, and left the tree as it was:
+
+- OA28 in walk 123 of the short walks.
+- OA29 and OA33 in walk 24001 of the full run, and in walk 14 of the picked walks, which is that
+  walk.
+- OA32 in the lookup's replay and in walk 123 of the short walks, both under `test-tools`.
+- Each other row in the step that it names.
+
+OA34 is a mutant of the model, which `zig build tla` checks. OA15's edit follows the cut path's
+check 5, which the review moved to an `if`. The cache of the tree and old caches of the scratch
+directory were cleared before the run, to keep 20 GB free on the disk.
+
+Thirty-six mutations, thirty-six `CAUGHT`.
+
+| # | Mutation | Check it breaks | Caught by | Status |
+| --- | --- | --- | --- | --- |
+| OA1 | the engine reads no mark, and hands a cut datagram over as whole | the datagram's rule 6 | three tests of `io_sim_datagram_test.zig`: a datagram one octet longer than the room, a draining socket and an engine of no TCP connection, `test-io` | CAUGHT |
+| OA2 | the engine hands each datagram over as cut | the datagram's rule 6 | fourteen tests of `test-io`, seven by a crash: among them a datagram that fills a buffer in `io_sim_datagram_test.zig`, a name of 255 octets in `io_sim_test.zig`, a refused connection in `io_tcp_test.zig`, and a port that cannot be replaced in `io_lifecycle_test.zig` | CAUGHT |
+| OA3 | a lookup reads a cut datagram as a whole message | `Lookup.on_datagram_cut` | the test of a cut answer that passes the checks of a cut datagram in `lookup_response_cut.zig`, and the cut test of `table.zig`, `test-resolver` | CAUGHT |
+| OA4 | the table hands a cut datagram to its lookups as a whole message | `Resolver.on_datagram_cut` | the cut test of `table.zig`, `test-resolver` | CAUGHT |
+| OA5 | a lookup reads a cut datagram in each state | rule 1 of §7, A datagram that the buffer cut | the test of `ignore_truncation`, a stream and an end in `lookup_response_cut.zig`, by a crash, `test-resolver` | CAUGHT |
+| OA6 | a lookup over DoH or DoQ reads a cut datagram | rule 1 | the DoH test of `lookup_response_cut.zig`, by a crash, `test-resolver` | CAUGHT |
+| OA7 | a lookup under `ignore_truncation` reads a cut datagram | rule 1 | the test of `ignore_truncation`, a stream and an end, `test-resolver` | CAUGHT |
+| OA8 | check 1 is gone from the cut path | check 1 of §7 | the test of checks 1, 2 and 3 in `lookup_response_cut.zig`, by a panic, `test-resolver` | CAUGHT |
+| OA9 | check 2 is gone from the cut path | check 2 | the same test, `test-resolver` | CAUGHT |
+| OA10 | check 3 of the cut path compares the port alone | check 3, RFC 5452 §4.4, §4.5 | the same test, `test-resolver` | CAUGHT |
+| OA11 | check 3 of the cut path compares the address alone | check 3, RFC 5452 §4.5 | the same test, `test-resolver` | CAUGHT |
+| OA12 | check 4 of the cut path takes a query | check 4 | the test of checks 4 and 5 in `lookup_response_cut.zig`, `test-resolver` | CAUGHT |
+| OA13 | check 4 of the cut path takes any opcode | check 4 | the same test, `test-resolver` | CAUGHT |
+| OA14 | check 5 of the cut path takes any count of questions | check 5 | the same test, `test-resolver` | CAUGHT |
+| OA15 | check 5 of the cut path takes any question | check 5, RFC 5452 §9.1 | the same test, `test-resolver` | CAUGHT |
+| OA16 | a cut datagram is a latency sample of its server | rule 5 | the test of a cut answer that passes the checks of a cut datagram, `test-resolver` | CAUGHT |
+| OA17 | a cut datagram counts as its server's success | rule 5 | the same test, `test-resolver` | CAUGHT |
+| OA18 | a cut datagram with no cookie starts its server's silence | rule 5 | the same test, `test-resolver` | CAUGHT |
+| OA19 | a cut datagram moves its lookup to the next server | rule 4, RFC 7766 §5 | the same test, and the cut test of `table.zig`, `test-resolver` | CAUGHT |
+| OA20 | a template's expansion has one octet less than the buffer, whatever its first octet | §24, the path; §17 question 42 | the two tests at `doh_request_bytes_max` in `io_doh_channel_test.zig`, `test-cocuyo_doh` | CAUGHT |
+| OA21 | the same, against the template's own tests | the same | the test of a path that starts with a slash in `io_doh_template.zig`, `test-doh` | CAUGHT |
+| OA22 | no slash goes before a path that starts with `?` | RFC 9114 §4.3.1 | the test of each operator and the test of a path that starts with a slash in `io_doh_template.zig`, `test-doh` | CAUGHT |
+| OA23 | a slash goes before each path, one that starts with a slash too | RFC 9114 §4.3.1 | five tests of `io_doh_template.zig`: RFC 8484's example, each operator, the literals, the refused templates and a path that starts with a slash, `test-doh` | CAUGHT |
+| OA24 | check 6 is gone from the cut path | check 6, RFC 7873 §5.3 | the two cookie tests of `lookup_response_cut.zig`, `test-resolver` | CAUGHT |
+| OA25 | check 6 of the cut path expects a cookie only when the query carried the pair | check 6, RFC 7873 §5.3 | the test of a fresh cookie whose server gave one since, `test-resolver` | CAUGHT |
+| OA26 | check 1 of the cut path takes a message longer than a message can be | check 1 | the test of 65,535 and 65,536 octets in `lookup_response_cut.zig`, `test-resolver` | CAUGHT |
+| OA27 | check 5 compares a question that the message does not hold whole | check 5's length, in `src/wire/question.zig` | the test of a cut datagram that ends inside its question, by the assertion after the check, `test-resolver` | CAUGHT |
+| OA28 | the engine reads no mark, against the short walks | the datagram's rule 6 | the short walks, walk 123 | CAUGHT |
+| OA29 | a cut datagram counts as its server's success, against the walks | rule 5 | the picked walks, walk 24001 of the full run | CAUGHT |
+| OA30 | a lookup reads a cut datagram in each state, against the lookup's replay | rule 1 | the replay of the committed slice, and the test of `replay_cut.zig` that holds a stream, each by a crash, `test-tools` | CAUGHT |
+| OA31 | a lookup over DoH or DoQ reads a cut datagram, against the lookup's replay | rule 1 | the replay of the committed slice, by a crash, `test-tools` | CAUGHT |
+| OA32 | a cut datagram moves its lookup to the next server, against the replays | rule 4 | the replay of the committed slice, the test of `replay_cut.zig` that holds a stream, and the engine's short and picked walks, `test-tools` | CAUGHT |
+| OA33 | a draining socket stays open while its lookup waits on a stream | the datagram's rules 4 and 6 | the picked walks, walk 24001 of the full run | CAUGHT |
+| OA34 | the model's draining socket stays open while its lookup waits on a stream | the same, in the engine model | TLC's check "rotated" on `mutants/OA34`, `zig build tla` | CAUGHT |
+| OA35 | the same as OA33, against the engine's tests | the datagram's rules 4 and 6 | the test of a draining socket in `io_sim_datagram_test.zig`, `test-io` | CAUGHT |
+| OA36 | a lookup under `ignore_truncation` reads a cut datagram, against the engine's tests | rule 1 | the test of `ignore_truncation` in `io_sim_datagram_test.zig`, `test-io` | CAUGHT |

@@ -49,6 +49,10 @@ pub const Reply = enum {
     formerr,
     truncated,
     badcookie,
+    /// A datagram longer than a buffer's room, which the kernel cut to the room and marked: the
+    /// engine model's reply alone (spec/tla/engine/EngineEvents.tla, `Replies`), which `build_cut`
+    /// writes.
+    cut,
 };
 
 /// An A record owned by the question's name, 192.0.2.1, TTL 300. The owner is the compression
@@ -102,6 +106,8 @@ fn shape_of(reply: Reply, kind: core.Kind) Shape {
         .formerr => .{ .rcode = .format_error },
         .truncated => .{ .truncated = true },
         .badcookie => .{ .rcode = .bad_cookie },
+        // The answer, before the cut took its end (`build_cut`).
+        .cut => .{ .records = answer_of(kind), .ancount = 1 },
     };
 }
 
@@ -137,4 +143,27 @@ pub fn build(lookup: *const Lookup, reply: Reply, out: []u8) []const u8 {
     }
     assert(offset <= out.len);
     return out[0..offset];
+}
+
+/// Where an OPT record's RDLENGTH sits: after the root owner, the type, the class and the TTL
+/// (RFC 6891 §6.1.2).
+const opt_rdlength_at = 9;
+
+/// The answer to what `lookup` is asking, grown to one octet past `room` by a Padding option of
+/// zeros in an OPT record (RFC 7830 §3), and the first `room` octets of it: what a buffer of that
+/// room keeps of the datagram. The cut takes the last octet of the padding.
+pub fn build_cut(lookup: *const Lookup, room: usize, out: []u8) []const u8 {
+    assert(out.len > room);
+    const answer = build(lookup, .answer, out);
+    var header = wire.header.parse(answer) catch unreachable;
+    header.arcount = 1;
+    wire.header.write(&header, out);
+    const opt_at = answer.len;
+    const options_at = opt_at + wire.edns.write(core.constants.udp_payload_bytes_default, null, out[opt_at..]);
+    const padding = room + 1 - options_at - core.constants.opt_option_header_bytes;
+    wire.integer.write_u16(out, options_at, wire.constants.padding_option_code);
+    wire.integer.write_u16(out, options_at + 2, @intCast(padding));
+    @memset(out[options_at + core.constants.opt_option_header_bytes ..][0..padding], 0);
+    wire.integer.write_u16(out, opt_at + opt_rdlength_at, @intCast(core.constants.opt_option_header_bytes + padding));
+    return out[0..room];
 }

@@ -441,3 +441,27 @@ test "a template whose GET path at its longest fills the path buffer starts, and
     const over = .{ .authority = "dns.example:8443", .host = "dns.example", .port = port, .path = query_part ++ "p" ** (filler + 1) ++ "{&dns}" };
     try testing.expectError(error.Failed, pair.doh.start(.{ .server = 0, .endpoint = pair.endpoint, .tls = &named, .https = over, .alternative = null, .context = &pair.context, .now_ns = pair.now_ns }));
 }
+
+test "a template whose path starts with a slash and fills the path buffer starts, and its longest GET is answered; one octet more is refused" {
+    // The slash is the template's own, so the expansion has the whole buffer: a slash, the
+    // filler, `?dns=` and a value of 512 octets make 1536 (docs/design.md §24, §17 question 42).
+    const value_part = "?dns=";
+    const filler = doh_constants.doh_request_bytes_max - 1 - value_part.len - cocuyo.wire.constants.dns_variable_bytes_max;
+    const pair = try testing.allocator.create(Pair);
+    defer testing.allocator.destroy(pair);
+    pair.* = .{ .endpoint = endpoint };
+    try pair.server.init(.{}, identity.unix_seconds);
+    const named: cocuyo.Tls = .{ .name = try cocuyo.Name.from_text(identity.server_name) };
+    const fills = .{ .authority = "dns.example:8443", .host = "dns.example", .port = port, .path = "/" ++ "p" ** filler ++ "{?dns}" };
+    try pair.doh.start(.{ .server = 0, .endpoint = pair.endpoint, .tls = &named, .https = fills, .alternative = null, .context = &pair.context, .now_ns = pair.now_ns });
+    // The longest query a `dns` value of 512 octets carries goes out on that path, and colibri's
+    // server answers it.
+    var longest_query: [cocuyo.wire.constants.dns_variable_bytes_max / 4 * 3]u8 = @splat(0);
+    @memcpy(longest_query[0..query.len], &query);
+    try testing.expect(pair.doh.request(0, &longest_query, pair.now_ns));
+    const answer = (try pair.run(.finished)).finished.answer orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(longest_query.len, answer.message.len);
+    pair.doh.wipe();
+    const over = .{ .authority = "dns.example:8443", .host = "dns.example", .port = port, .path = "/" ++ "p" ** (filler + 1) ++ "{?dns}" };
+    try testing.expectError(error.Failed, pair.doh.start(.{ .server = 0, .endpoint = pair.endpoint, .tls = &named, .https = over, .alternative = null, .context = &pair.context, .now_ns = pair.now_ns }));
+}

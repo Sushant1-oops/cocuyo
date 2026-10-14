@@ -388,9 +388,12 @@ fn message(self: anytype, op: []const u8, slot: usize, reply: fixtures.Reply) Er
     const loop_slot = try operation(self, op);
     const user_data = self.loop.slots[loop_slot].user_data;
     const lookup = self.engine.resolver.lookup_of(self.engine.handles[slot]);
-    var body_buffer: [512]u8 = undefined;
-    const body = fixtures.build(lookup, reply, &body_buffer);
+    var body_buffer: [io.constants.buffer_bytes]u8 = undefined;
+    const room = rotor.datagram.payload_capacity(io.constants.buffer_bytes, self.loop.group_options);
+    const body = if (reply == .cut) fixtures.build_cut(lookup, room, &body_buffer) else fixtures.build(lookup, reply, &body_buffer);
     const kind = kind_of(user_data) orelse return error.Malformed;
+    // Only a datagram comes cut, and it comes with the kernel's mark (the datagram's rule 6).
+    if (reply == .cut and kind != .udp_receive) return error.Malformed;
     const group_id: u16 = switch (kind) {
         .tcp_receive => io.constants.tcp_group_id,
         .udp_receive => io.constants.group_id,
@@ -404,7 +407,10 @@ fn message(self: anytype, op: []const u8, slot: usize, reply: fixtures.Reply) Er
     } else {
         const server: u8 = @intCast((user_data & io.constants.index_mask) & io.constants.receive_index_mask);
         const peer = rotor.Network.server_address(server);
-        length = rotor.buffers.write_delivery(buffer, .{}, &peer, body);
+        length = rotor.buffers.write_delivery(buffer, self.loop.group_options, &peer, body);
+        const metadata = buffer[rotor.constants.prefix_head_bytes..][0..@sizeOf(rotor.datagram.Received)];
+        const received: *rotor.datagram.Received = @ptrCast(@alignCast(metadata));
+        received.flags.truncated = reply == .cut;
     }
     var event = rotor.Event.success(user_data, length);
     event.flags = .{ .buffer = true, .more = true, .buffer_id = buffer_id };

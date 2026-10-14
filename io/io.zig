@@ -76,6 +76,17 @@ fn with_quic(comptime options: Options, comptime count: usize) usize {
     return if (options.quic.enabled) count else 0;
 }
 
+/// The table holds 1 to `lookup_slots_max` lookups, which `Resolver.init` asserts. An engine of any
+/// other count does not compile, and the error names the bound (docs/design.md §19 step 13, §17
+/// question 43).
+fn check_lookups(comptime options: Options) void {
+    if (options.lookups > 0 and options.lookups <= cocuyo.constants.lookup_slots_max) return;
+    @compileError(std.fmt.comptimePrint(
+        "an engine holds 1 to {d} lookups, lookup_slots_max, and these Options name {d}",
+        .{ cocuyo.constants.lookup_slots_max, options.lookups },
+    ));
+}
+
 /// A request slot holds a DoQ message at its longest, prefix and all (request rule 3).
 fn check_transports(comptime options: Options) void {
     assert(!options.quic.enabled or options.quic.request_bytes_max >= cocuyo.constants.query_bytes_max);
@@ -100,6 +111,7 @@ fn request_bytes_of(comptime options: Options) usize {
 }
 
 pub fn Resolver(comptime options: Options) type {
+    comptime check_lookups(options);
     const quic_servers = with_quic(options, cocuyo.constants.servers_max);
     const doh_servers = with_doh(options, cocuyo.constants.servers_max);
     const request_lookups = with_requests(options, options.lookups);

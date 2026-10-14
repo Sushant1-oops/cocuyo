@@ -156,10 +156,27 @@ pub const Resolver = struct {
         from: Endpoint,
         now_ns: u64,
     ) Verdict {
+        return self.offer_datagram(message, from, now_ns, Lookup.on_response);
+    }
+
+    /// Hands a datagram that the kernel cut to the lookup it belongs to, if any: one longer than
+    /// the caller's buffer, whose end is gone (docs/design.md §7, A datagram that the buffer cut).
+    /// The candidates are the ones `on_datagram` asks, and each reads it as `Lookup.on_datagram_cut`.
+    pub fn on_datagram_cut(self: *Resolver, message: []const u8, from: Endpoint, now_ns: u64) Verdict {
+        return self.offer_datagram(message, from, now_ns, Lookup.on_datagram_cut);
+    }
+
+    fn offer_datagram(
+        self: *Resolver,
+        message: []const u8,
+        from: Endpoint,
+        now_ns: u64,
+        comptime respond: fn (*Lookup, []const u8, Endpoint, u64) Verdict,
+    ) Verdict {
         const header = wire.header.parse(message) catch return .ignored;
         var candidates = keys_module.Candidates.init(self.keys, header.id);
         while (candidates.next()) |slot| {
-            if (self.deliver(slot, message, from, now_ns) == .accepted) return .accepted;
+            if (self.deliver(slot, message, from, now_ns, respond) == .accepted) return .accepted;
         }
         return .ignored;
     }
@@ -264,6 +281,7 @@ pub const Resolver = struct {
         message: []const u8,
         from: Endpoint,
         now_ns: u64,
+        comptime respond: fn (*Lookup, []const u8, Endpoint, u64) Verdict,
     ) Verdict {
         assert(index < self.slots.items.len);
         const slot = &self.slots.items[index];
@@ -271,7 +289,7 @@ pub const Resolver = struct {
         // tombstones the key it held, so nothing can reach a free slot's lookup, which is
         // `undefined` until something takes it.
         assert(slot.occupied);
-        const verdict = slot.lookup.on_response(message, from, now_ns);
+        const verdict = respond(&slot.lookup, message, from, now_ns);
         if (verdict == .accepted) self.follow(index);
         return verdict;
     }
@@ -460,4 +478,20 @@ test "two lookups sharing a transaction id are both offered the datagram" {
     // and ignores this datagram, so a walk that stopped there would drop `first`'s answer.
     try testing.expectEqual(Verdict.accepted, table.answer(first));
     try testing.expect(table.resolver.lookup_of(first).state == .done);
+}
+
+test "a cut datagram reaches the lookup whose transaction it carries, which then asks over TCP" {
+    var table: Table = .{ .config = .{ .servers = &servers } };
+    table.open();
+    const first = try table.start("one.example.");
+    const second = try table.start("two.example.");
+    while (table.poll()) |event| table.resolver.on_sent(event.handle, table.now_ns);
+    const lookup = table.resolver.lookup_of(second);
+    const whole = table.build(lookup, fixtures.answer_a);
+    try testing.expectEqual(Verdict.accepted, table.resolver.on_datagram_cut(whole[0 .. whole.len - 1], lookup.server(), table.now_ns));
+    // The table follows the lookup that moved: its next poll asks for the stream (docs/design.md §7).
+    const event = table.poll().?;
+    try testing.expectEqual(second, event.handle);
+    try testing.expect(event.action == .connect_tcp);
+    try testing.expect(table.resolver.lookup_of(first).state == .awaiting_udp);
 }

@@ -28,6 +28,13 @@ CONSTANTS
     FailuresMax,  \* the walk's bound on a server's failures
     SentMax       \* the walk's bound on the queries a port has carried
 
+\* Whether a datagram's answer may come truncated: TC set by its server, or the datagram cut by the
+\* buffer it arrives in (docs/design.md §7, §19 step 13, the datagram's rule 6). Only the
+\* configurations of that rule set it, with `Truncates <- Truncating`. So each other configuration
+\* reaches what it reached before.
+Truncates == FALSE
+Truncating == TRUE
+
 -------------------------------------------------------------------------------
 \* Helpers.
 
@@ -55,7 +62,9 @@ MapBag(B, F(_)) == [y \in {F(x) : x \in DOMAIN B} |-> SumOver({x \in DOMAIN B : 
 \* The lookup of spec/lean/Spec/Lookup.lean, as the engine runs it: one pass over the servers,
 \* one name, no CNAME past the answer, and the four replies the table makes of a message. Over
 \* DoQ or DoH a query is a request, sent and answered as a datagram's, and a request that fails is
-\* the server's failure (§22, §23).
+\* the server's failure (§22, §23). Under `Truncates` a datagram has two replies more: TC set, and
+\* a datagram the buffer cut that passes the checks of a cut datagram (§7). Each sends its lookup
+\* to TCP.
 
 Stream == UseTcp \/ Tls
 Fresh == IF Stream THEN "tcpNeeded" ELSE "queryReady"
@@ -87,6 +96,8 @@ LReply(lk, r) ==
       [] r = "answer" -> <<[lk EXCEPT !.stage = "done"], "accepted">>
       [] r = "nxdomain" -> <<NoName(lk), "accepted">>
       [] r = "servfail" -> <<AdvanceServer([lk EXCEPT !.serverFailed = TRUE]), "accepted">>
+      \* The same server, over TCP (§5). Only a datagram brings either, so only `awaitingUdp`.
+      [] r \in {"truncated", "cut"} -> <<[lk EXCEPT !.stage = "tcpNeeded"], "accepted">>
 
 LPoll(lk) ==
     CASE lk.stage = "queryReady" ->
@@ -239,9 +250,10 @@ LookupEvent(st, l, ev, r) ==
                     IF lk.stage = "awaitingUdp" THEN RecordFailure(st, v) ELSE st
               [] ev = "expire" -> IF Waiting(lk.stage) THEN RecordFailure(st, v) ELSE st
               \* SERVFAIL is the server's failure, as a timeout is, and any other answer the lookup
-              \* accepts is the server up; a reply it ignores says nothing (§19 step 12).
+              \* accepts is the server up; a reply it ignores says nothing (§19 step 12). Nor does
+              \* a datagram the buffer cut, which no check 6 read (§7).
               [] ev = "reply" ->
-                    IF out # "accepted" \/ r = "unmatched" THEN st
+                    IF out # "accepted" \/ r \in {"unmatched", "cut"} THEN st
                     ELSE IF r = "servfail" THEN RecordFailure(st, v)
                     ELSE RecordSuccess(st, v)
               [] OTHER -> st

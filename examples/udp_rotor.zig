@@ -179,12 +179,19 @@ const Driver = struct {
 
     /// The datagram the loop picked a buffer for. Read through the loop, handed to cocuyo, and
     /// the buffer given straight back: cocuyo copies what it keeps, so nothing here has to hold
-    /// the bytes.
+    /// the bytes. A datagram longer than the buffer comes cut, and the kernel marks it. cocuyo
+    /// reads such a datagram as a cut one, and asks for TCP when it matches (docs/design.md §7, A
+    /// datagram that the buffer cut).
     fn receive(self: *Driver, lookup: *cocuyo.Lookup, event: rotor.Event, now_ns: u64) void {
         const bytes = event.outcome() catch return;
         if (bytes == 0) return;
         const delivery = self.loop.datagram(group_id, event);
-        _ = lookup.on_response(delivery.bytes, endpoint_of(delivery.from.peer), now_ns);
+        const from = endpoint_of(delivery.from.peer);
+        if (delivery.from.flags.truncated) {
+            _ = lookup.on_datagram_cut(delivery.bytes, from, now_ns);
+        } else {
+            _ = lookup.on_response(delivery.bytes, from, now_ns);
+        }
         self.loop.give_back_buffer(group_id, event.flags.buffer_id);
     }
 };

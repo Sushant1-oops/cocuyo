@@ -71,9 +71,16 @@ fn on_receive_event(self: anytype, index: usize, event: rotor.Event, now_ns: u64
     }
 }
 
-/// Hands a datagram to the table, whatever its length, and its buffer back to the group.
+/// Hands a datagram to the table, whatever its length, and its buffer back to the group. One
+/// longer than a buffer's room comes cut, and the kernel marks it: the table takes it as cut
+/// (docs/design.md §19 step 13, the datagram's rule 6).
 fn deliver(self: anytype, event: rotor.Event, now_ns: u64) void {
     const delivery = self.loop.datagram(constants.group_id, event);
-    _ = self.resolver.on_datagram(delivery.bytes, udp.endpoint_of(delivery.from.peer), now_ns);
+    const from = udp.endpoint_of(delivery.from.peer);
+    if (delivery.from.flags.truncated) {
+        _ = self.resolver.on_datagram_cut(delivery.bytes, from, now_ns);
+    } else {
+        _ = self.resolver.on_datagram(delivery.bytes, from, now_ns);
+    }
     self.loop.give_back_buffer(constants.group_id, event.flags.buffer_id);
 }
