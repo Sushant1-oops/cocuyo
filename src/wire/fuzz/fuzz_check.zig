@@ -9,7 +9,8 @@
 //! - Every offset a parser returns is inside the message and strictly ahead of where it started,
 //!   so no walk can stand still.
 //! - Parsing is a pure function of the bytes: the same message parses the same way twice.
-//! - `skip` agrees with `decode` wherever `decode` succeeded.
+//! - `skip` agrees with `decode` on every name: the same end, or the same error.
+//! - Every owner the record walk passes over decodes, since the walk skips it.
 //!
 //! A check returns the name of the promise that broke rather than panicking, so the caller can
 //! print the seed that produced it.
@@ -69,7 +70,11 @@ fn name_sweep(message: []const u8) ?[]const u8 {
 
 fn name_at(message: []const u8, offset: usize) ?[]const u8 {
     var first: Name = Name.empty;
-    const end = name_codec.decode(message, offset, &first) catch return null;
+    const decoded = name_codec.decode(message, offset, &first);
+    // `skip` walks the name `decode` walks, through every pointer, and copies nothing
+    // (docs/design.md §8, Record walking).
+    if (!agree(decoded, name_codec.skip(message, offset))) return "skip and decode disagreed on a name";
+    const end = decoded catch return null;
     if (first.len < 1 or first.len > core.constants.name_bytes_max) return "a decoded name has an impossible length";
     if (first.bytes[first.len - 1] != 0) return "a decoded name does not end in the root";
     if (end > message.len) return "a name ended past the end of the message";
@@ -78,10 +83,17 @@ fn name_at(message: []const u8, offset: usize) ?[]const u8 {
     var second: Name = Name.empty;
     const again = name_codec.decode(message, offset, &second) catch return "a name decoded once and failed twice";
     if (again != end or !std.mem.eql(u8, first.wire(), second.wire())) return "a name decoded differently twice";
-
-    const skipped = name_codec.skip(message, offset) catch return "skip failed where decode succeeded";
-    if (skipped != end) return "skip and decode disagreed on where a name ends";
     return null;
+}
+
+/// Whether two walks of one name gave one result: the same end, or the same error.
+fn agree(decoded: core.Error!usize, skipped: core.Error!usize) bool {
+    const end = decoded catch |err| {
+        _ = skipped catch |other| return other == err;
+        return false;
+    };
+    const other = skipped catch return false;
+    return other == end;
 }
 
 fn question_check(message: []const u8) ?[]const u8 {
@@ -155,14 +167,22 @@ fn record_sweep(message: []const u8) ?[]const u8 {
     var walk = record_codec.Iterator.init(message, parsed.end, header.ancount);
     var previous = parsed.end;
     while (walk.next() catch return null) |record| {
-        if (record.end > message.len) return "a record ended past the end of the message";
-        if (record.end <= previous) return "a record did not advance the walk";
-        if (record.rdata.len > message.len) return "a record's rdata is longer than the message";
         if (walk.walked > core.constants.records_max) return "the walk read more records than the bound";
+        if (walked_check(message, &record, previous)) |failure| return failure;
         previous = record.end;
-        if (rdata_check(message, &record)) |failure| return failure;
     }
     return null;
+}
+
+/// One record the walk gave. It must be inside the message and past the record before it. Its
+/// owner must decode: the walk skipped the owner, and a skip refuses each name a decode refuses.
+fn walked_check(message: []const u8, record: *const record_codec.Record, previous: usize) ?[]const u8 {
+    if (record.end > message.len) return "a record ended past the end of the message";
+    if (record.end <= previous) return "a record did not advance the walk";
+    if (record.rdata.len > message.len) return "a record's rdata is longer than the message";
+    var owner: Name = Name.empty;
+    record.owner_name(message, &owner) catch return "the walk passed an owner that does not decode";
+    return rdata_check(message, record);
 }
 
 /// The OPT record's options, as a lookup reads them (docs/design.md §7 check 6): each option's

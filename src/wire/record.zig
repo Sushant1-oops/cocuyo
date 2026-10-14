@@ -13,7 +13,8 @@
 //! The owner name is skipped rather than decoded on the way past. Decoding it costs a copy into a
 //! 256-octet name, and most records in a message are of a type the caller did not ask for
 //! (docs/design.md §11), so the walk reaches the type first and the caller decodes the owner only
-//! when the type says it matters.
+//! when the type says it matters. The skip follows the owner's pointers and measures the whole
+//! name, so the walk refuses each owner a decode refuses (§8, Record walking).
 const std = @import("std");
 const assert = std.debug.assert;
 const core = @import("core");
@@ -63,7 +64,8 @@ pub const Record = struct {
     /// The MINIMUM field of an SOA record, capped by the record's own TTL: what a negative answer
     /// is cached for (RFC 2308 §5). The rdata is two names, either of which may be compressed,
     /// then five four-octet fields of which MINIMUM is the last (RFC 1035 §3.3.13). The names are
-    /// skipped rather than decoded, and the fixed fields must fit inside the rdata exactly.
+    /// skipped rather than decoded, each measured through its pointers, and the fixed fields must
+    /// fit inside the rdata exactly.
     pub fn soa_negative_ttl(self: *const Record, message: []const u8) Error!u32 {
         assert(self.is_kind(.soa));
         const start = self.end - self.rdata.len;
@@ -332,4 +334,32 @@ test "an SOA whose fixed fields do not fill its rdata exactly is malformed, eith
     var long = Iterator.init(&fixtures.answer_soa_long_rdata, fixtures.authority_offset_no_answers, 1);
     const soa_long = (try long.next()).?;
     try testing.expectError(Error.MalformedMessage, soa_long.soa_negative_ttl(&fixtures.answer_soa_long_rdata));
+}
+
+/// A label of 63 octets, the longest, after its length octet.
+const label_longest = [_]u8{core.constants.label_bytes_max} ++ [_]u8{'a'} ** core.constants.label_bytes_max;
+
+/// `fixtures.answer_name_error_soa` with `labels` put before the SOA's MNAME, and the rdlength made
+/// to hold them. The MNAME was `ns` and then a pointer to the question's name: 16 octets whole.
+fn soa_mname_through_pointer(comptime labels: []const u8) [fixtures.answer_name_error_soa.len + labels.len]u8 {
+    const message = fixtures.answer_name_error_soa;
+    const fixed_at = fixtures.authority_offset_no_answers + constants.pointer_bytes;
+    const rdata_at = fixed_at + core.constants.record_fixed_bytes;
+    var out = message[0..rdata_at].* ++ labels[0..labels.len].* ++ message[rdata_at..].*;
+    integer.write_u16(&out, fixed_at + constants.record_rdlength_offset, @intCast(out.len - rdata_at));
+    return out;
+}
+
+test "an SOA's MNAME longer than 255 octets through its pointer is refused" {
+    // "label octets and label length octets" count (RFC 1035 §3.1), those a pointer reaches too
+    // (§4.1.4), in a name of "255 octets or less" (§2.3.4). Until 2026-10-14 the skip did not
+    // follow the MNAME's pointer, so it read the MINIMUM after an MNAME of 256 octets too.
+    // Labels of 239 octets, and the 16 of `ns.example.com`: 255 octets.
+    const longest = soa_mname_through_pointer(&(label_longest ** 3 ++ [_]u8{46} ++ [_]u8{'b'} ** 46));
+    var walk = Iterator.init(&longest, fixtures.authority_offset_no_answers, 1);
+    try testing.expectEqual(@as(u32, 60), try (try walk.next()).?.soa_negative_ttl(&longest));
+    // A label of one octet more: 256 octets.
+    const one_past = soa_mname_through_pointer(&(label_longest ** 3 ++ [_]u8{47} ++ [_]u8{'b'} ** 47));
+    var past = Iterator.init(&one_past, fixtures.authority_offset_no_answers, 1);
+    try testing.expectError(Error.NameTooLong, (try past.next()).?.soa_negative_ttl(&one_past));
 }

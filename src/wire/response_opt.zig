@@ -64,3 +64,27 @@ test "an OPT owned by a name is malformed" {
     const question = try Name.from_text("example.com");
     try testing.expectError(Error.MalformedMessage, find(&fixtures.answer_a_with_opt_bad_owner, &question));
 }
+
+/// A label of 63 octets, the longest, after its length octet.
+const label_longest = [_]u8{core.constants.label_bytes_max} ++ [_]u8{'a'} ** core.constants.label_bytes_max;
+
+/// `fixtures.answer_a_with_opt` with `labels` put before the A record's owner. That owner was a
+/// pointer to the question's name, 13 octets, so it is now `labels` and those 13.
+fn opt_after_owner_through_pointer(comptime labels: []const u8) [fixtures.answer_a_with_opt.len + labels.len]u8 {
+    const at = fixtures.answer_offset;
+    const message = fixtures.answer_a_with_opt;
+    return message[0..at].* ++ labels[0..labels.len].* ++ message[at..].*;
+}
+
+test "an owner longer than 255 octets through its pointer, before the OPT, fails the search" {
+    // "label octets and label length octets" count (RFC 1035 §3.1), those a pointer reaches too
+    // (§4.1.4), in a name of "255 octets or less" (§2.3.4). Until 2026-10-14 the search did not
+    // follow the owner's pointer, and found the OPT of the second message.
+    const question = try Name.from_text("example.com");
+    // Labels of 242 octets, and the 13 that the pointer reaches: 255 octets.
+    const longest = opt_after_owner_through_pointer(&(label_longest ** 3 ++ [_]u8{49} ++ [_]u8{'b'} ** 49));
+    try testing.expectEqual(longest.len, (try find(&longest, &question)).?.end);
+    // A label of one octet more: 256 octets.
+    const one_past = opt_after_owner_through_pointer(&(label_longest ** 3 ++ [_]u8{50} ++ [_]u8{'b'} ** 50));
+    try testing.expectError(Error.NameTooLong, find(&one_past, &question));
+}

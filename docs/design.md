@@ -978,10 +978,10 @@ Rejected:
 
 - Every length is checked against the end of the message before the bytes are read.
 - A name is at most `name_bytes_max` octets: "names 255 octets or less" (RFC 1035 §2.3.4). Its
-  labels, their length octets and the root count (§3.1). The decode of §8 refuses a longer name.
-  Since 2026-10-13 the skip of the record walk refuses a name whose labels before any pointer,
-  with a root after them, already pass the limit. It does not follow a pointer, so it cannot
-  measure the rest of a compressed name (§8, Record walking).
+  labels, their length octets and the root count (§3.1), and so do the labels that a pointer
+  reaches (§4.1.4). The decode of §8 refuses a longer name. Since 2026-10-14 the skip of the
+  record walk follows each pointer as the decode does. It refuses the names that the decode
+  refuses, with the same errors (§8, Record walking; §16 decision 42).
 - No recursion anywhere in the parser. Compression is a loop with two bounds.
 - A count field is never a reason to read. `ancount` says how many records the sender claims;
   the walk stops at the end of the message or at `records_max`, whichever comes first, and a count
@@ -1011,17 +1011,25 @@ library that faces an attacker, so it is the half with the fuzz target and most 
 
 ### Name decoding
 
-One loop, two bounds, no recursion.
+One loop, two bounds, no recursion. The decode and the skip of the record walk share the loop.
+The decode copies each label into a `Name`. The skip counts the octets of each label, and copies
+nothing (Record walking, below).
 
 - Read one length byte. The top two bits select the form: `00` is a label of that length, which
   must be at most `label_bytes_max`; `11` is a pointer whose low 14 bits are an offset; `01` and
   `10` are reserved and make the message malformed.
 - A pointer offset must be **strictly less** than the offset of the pointer's own first byte. A
-  pointer that points forwards or at itself is malformed. This alone makes a loop impossible,
-  because every hop strictly decreases the offset.
-- `compression_hops_max` bounds the hops anyway, asserted as well as checked, so a long legal
-  chain is cheap and a pathological one is cheaper.
+  pointer that points forwards or at itself is malformed. So is a pointer past the end of the
+  message, since it points forwards. This rule does not make a loop impossible. A pointer can
+  point back at labels that lead to the same pointer again. Each hop of that loop points
+  backwards, so the next two bounds end it. Until 2026-10-14 this section said that the rule
+  alone made a loop impossible. That was not true.
+- `compression_hops_max` bounds the hops, asserted as well as checked. A chain or a loop of more
+  than 16 pointers fails with `BadCompressionPointer` at the seventeenth pointer. So a long legal
+  chain is cheap, and a pathological one is cheaper.
 - The reconstructed name, counting length octets and the root, must be at most `name_bytes_max`.
+  The labels that a pointer reaches count too (RFC 1035 §3.1, §4.1.4). A loop through labels of
+  63 octets fails with `NameTooLong` in its fourth round, before the hop bound.
 - Decoding writes an uncompressed copy into a caller-provided `*Name`, so no caller ever holds a
   pointer into a datagram buffer it is about to reuse.
 
@@ -1031,9 +1039,15 @@ hostile, the second says the code that already rejected the hostile input did it
 
 ### Record walking
 
-For each record: skip the owner name without decompressing it, read type, class, TTL and
-rdlength, check `offset + rdlength <= message.len`, then hand out the rdata slice. The owner name
-is decompressed only when the type is one the lookup wants (§11). Type-specific rules:
+For each record:
+
+1. Skip the owner name, without a copy.
+2. Read the type, the class, the TTL and the rdlength.
+3. Check `offset + rdlength <= message.len`.
+4. Hand out the rdata slice.
+
+The owner name is decompressed into a `Name` only when the type is one the lookup wants (§11).
+Type-specific rules:
 
 - `A`: rdlength is exactly 4. `AAAA`: exactly 16. Anything else is malformed.
 - `CNAME` and `PTR`: an rdata name, decompressed, and the decode must consume exactly `rdlength`
@@ -1041,33 +1055,54 @@ is decompressed only when the type is one the lookup wants (§11). Type-specific
 - `OPT`: the owner must be the root, the class is the sender's UDP payload size, the TTL's high
   byte extends the rcode, and the version must be 0.
 
-The skip reads labels, and stops at the root or at a pointer, which it does not follow. Since
-2026-10-13 it refuses a name whose labels, with a root after them, pass `name_bytes_max`, as the
-decode does (RFC 1035 §2.3.4, §3.1). The error is the decode's, `NameTooLong`. Until then the
-skip counted labels alone, so it took a name of 128 labels, up to 8,193 octets. Such a name then
-passed every walk that decodes nothing at that place:
+The skip walks the name as the decode does, through each pointer, and counts its octets. It
+copies nothing (§16 decision 42). It refuses each name that the decode refuses, with the decode's
+error:
+
+- a name longer than `name_bytes_max` octets, with the labels that a pointer reaches counted
+  (RFC 1035 §2.3.4, §3.1, §4.1.4): `NameTooLong`;
+- a pointer that does not point strictly backwards, or a pointer past the end of the message:
+  `BadCompressionPointer`;
+- a chain or a loop of more than `compression_hops_max` pointers: `BadCompressionPointer`;
+- a label or a pointer whose octets go past the end of the message: `MalformedMessage`;
+- a reserved label kind: `MalformedName`.
+
+The skip returns the offset that the decode returns: the octet after the root, or the octet after
+the first pointer. That is where the name ends in the message, so the record walk continues where
+it did before. A pointer loop ends in the skip as it ends in the decode (Name decoding, above). A
+pointer at itself or ahead of itself fails at its first hop. A pointer back at labels that lead to
+it again fails at the seventeenth pointer, or earlier when the labels pass 255 octets.
+
+Until 2026-10-14 the skip stopped at a pointer, and did not follow it. From 2026-10-13 it refused
+a name whose labels before the pointer, with a root after them, passed `name_bytes_max`. Before
+that date it counted labels alone, so it took a name of 128 labels, up to 8,193 octets. Each name
+that the skip took and the decode refused passed every walk that decodes nothing at that place.
+One such name is a compressed name whose labels fit and whose whole name does not. A pointer
+forward, a loop and a pointer past the end of the message are such names too. The walks are:
 
 - the owner of a record of a type the lookup does not want, in `response.collect`;
-- the owners of the records the search for the OPT record passes (§7, check 6);
-- an SOA's owner, MNAME and RNAME, from which a negative answer takes the TTL the cache keeps.
+- the owners of the records that the search for the OPT record passes (§7, check 6);
+- the owners of the records that the negative TTL steps over;
+- an SOA's MNAME and RNAME, from which a negative answer takes the TTL that the cache keeps.
 
 So the type of the record that held the fault decided whether a lookup took the message. Now
-`record.Iterator.next` and `Record.soa_negative_ttl` return `NameTooLong` for such a name. What
-the lookup then does depends on where the name is:
+`record.Iterator.next` and `Record.soa_negative_ttl` return the decode's error for such a name.
+What the lookup then does depends on where the name is:
 
 - An owner before the OPT record, or in a message with no OPT record: the search for the OPT
   record walks that owner and fails. So check 6 of §7 fails, and the lookup ignores the message
-  and keeps its wait. It did the same before when a record it wanted had such an owner.
+  and keeps its wait. It does not learn the server cookie from the message. Before, a record that
+  the lookup wanted with such an owner passed check 6. Then `response.collect` failed, and the
+  lookup ignored the message after it had learned the server cookie.
 - An SOA's MNAME or RNAME: they are in the rdata, which check 6 does not read. Only the negative
   TTL reads them, and it reads the error as a TTL of 0, as for any malformed authority section
   (`lookup_response.zig`). So the lookup takes the negative answer, and the cache keeps nothing of
   it.
 - An owner after the OPT record, in the additional section: no walk reads it, as before.
 
-The fuzz target's check, that the skip agrees with the decode wherever the decode succeeds, still
-holds: the skip refuses no name the decode takes. The skip still does not follow a pointer. A
-compressed name whose labels fit, but whose whole name does not, is refused only where a decode
-runs.
+The fuzz target holds the skip to the decode at each offset where it aims both: the same end, or
+the same error. It also decodes each owner that the record walk passes, and each such owner must
+decode (§13).
 
 ## 9. Memory the caller provides
 
@@ -1224,6 +1259,10 @@ move together (below):
 | cache put, replacing an entry in place | 35.3 | 36.1 |
 | cache put, evicting, 1024 entries and the table full | 91.6 | 93.5 |
 
+The table and the notes below are older than §16 decision 42 (2026-10-14). Since that decision
+the skip of each owner follows its pointers. So each record walked costs more than these rows
+show.
+
 What the table says, against the estimates:
 
 - The estimates hold, and were pessimistic. A query builds in 9 ns. A response with one record
@@ -1371,9 +1410,10 @@ The slot grew by eight octets for the links and the flag, which §9 records.
 **Do the cheap rejection first, and no unnecessary work.** The id compare precedes the endpoint
 compare, which precedes the question compare, which precedes the answer walk. The security order
 and the fast order are the same order, which is a pleasant accident worth writing down. In the
-record walk the owner name is skipped without decompression until the type says the record is
-wanted. The fast path — one server, no search expansion, the answer in the first datagram — makes
-one pass and rebuilds nothing.
+record walk the owner name is skipped without a copy until the type says the record is wanted.
+Since 2026-10-14 the skip measures the whole name through its pointers (§16 decision 42). The
+fast path — one server, no search expansion, the answer in the first datagram — makes one pass
+and rebuilds nothing.
 
 Two hints applied by refusing a feature: **thread-compatible, not thread-safe** (a `Lookup` is
 touched only by its owner and cocuyo contains no lock or atomic), and **no promises that constrain
@@ -1631,6 +1671,16 @@ offset 16,383, the farthest offset that a pointer names. A pointer to it is the 
 answer, which ends the message. Tests pin that the gate's seeds reach each value, and that each
 value reaches its reader (docs/mutations.md, Tests at the named limits). That day the target
 moved to `src/wire/fuzz/`.
+
+Since 2026-10-14 the target holds the skip of the record walk to the decode. At each offset where
+it aims both, the two give the same end or the same error. Before, it compared the two only where
+the decode took the name. The target also decodes each owner that the record walk passes, and each must
+decode. The long-question strategy now writes the first answer's owner as labels and a pointer to
+the question's name, 255 octets whole or 256. Before that day no strategy wrote such a name on
+purpose. Over the gate's 4096 seeds, noise held 2,415 names longer than 255 octets that the old
+skip took. The target compared no two walks where the decode refused, and the record walk passed
+none of those names as an owner. A test pins that the seeds reach an owner of 255 octets and one
+of 256. The skip and the decode end the first, and refuse the second (§16 decision 42).
 
 A second target, since 2026-09-26, reads what the caller hands in rather than what the network
 sends (`src/config/fuzz/`): an address, a name, a `resolv.conf`, a hosts file and an SPKI pin.
@@ -2269,6 +2319,66 @@ step until `zig build test` passes.
       that has gone. The peer is still there, and RFC 9846 §6.1 asks for the alert.
 
     §19 step 13, §21, §24.
+42. **The skip of the record walk follows each pointer, and measures the whole name.** Ruled by
+    the owner on 2026-10-14, on c4milo/cocuyo#46: close it. The skip walks a name as the decode
+    does, through each pointer. `compression_hops_max` bounds the hops and `name_bytes_max` the
+    octets, as in the decode. The skip counts the octets, the labels that a pointer reaches among
+    them (RFC 1035 §3.1, §4.1.4), and copies nothing. It refuses a name longer than 255 octets
+    (§2.3.4), and each other name that the decode refuses, with the same error. It still returns
+    the octet after the first pointer, where the name ends in the message.
+
+    The decode and the skip share one loop in `src/wire/name.zig`. The decode gives it a `Name`,
+    which copies each label. The skip gives it a `Measure`, which counts the octets of each label
+    and refuses where `Name` refuses. So the two agree by construction. The fuzz target holds them
+    to one result at each offset where it aims both (§13).
+
+    The cost was measured on 2026-10-14, on an Apple M1 Pro, by single step: a count of each
+    instruction that one operation runs. The program is `bench/count.zig`, built ReleaseSafe at
+    the baseline CPU, as `zig build instructions` builds it, at 05567b7 and with the change. CI
+    counts the x86-64 Linux build under cachegrind. That build does not run under single step on
+    this machine, so two other builds were counted:
+
+    - aarch64 Linux, in a container, under `ptrace`. The CPU is the baseline with LSE atomics, so
+      that no exclusive-load loop stops the single step. cocuyo has no atomics, so its code is
+      the baseline's.
+    - x86-64 macOS, under Rosetta 2, with lldb.
+
+    What the counts show:
+
+    - One call of the skip, on x86-64 macOS. An owner that is one pointer to `example.com` took
+      39 instructions, and takes 172. The root, the owner of an OPT record, took 35 and takes 51.
+      `host.example.net` took 131 and takes 174, so each label took 32 and takes 41.
+    - One call of the decode, on x86-64 macOS. A name through one pointer takes 7 instructions
+      fewer. A name of labels alone takes as many as before.
+    - One operation of each case that walks records, before and after, on each build:
+      - `parse-one`: 730 to 817 on aarch64 Linux (+11.9%), 1,077 to 1,183 on x86-64 macOS (+9.8%).
+      - `parse-cname`: 2,795 to 2,981 (+6.7%), and 4,195 to 4,445 (+6.0%).
+      - `parse-sixteen`: 8,537 to 10,160 (+19.0%), and 11,660 to 13,672 (+17.3%).
+      - `match-accept`: 2,736 to 2,922 (+6.8%), and 3,128 to 3,367 (+7.6%).
+      - `round-trip`: 3,748 to 3,938 (+5.1%), and 4,992 to 5,247 (+5.1%).
+    - The other cases walk no record. On aarch64 Linux each of the nine was counted, and none
+      changed. On x86-64 macOS `match-wrong` and `query-build` were counted, and neither changed.
+
+    The x86-64 Linux build was not counted. Its code is a little different from the macOS build.
+    Its five cases will likely grow by 5% to 20% too. Each change is over the 2% threshold of `zig
+    build instructions`. So CI's Linux job fails on those five cases until a commit writes the
+    counts again, as e36416a did after 356eeb7.
+
+    Mutation W5 held the old contract, that the skip ends at a pointer. It is written again to
+    break the new one the way the old code did (docs/mutations.md, The skip follows each pointer).
+
+    Rejected:
+
+    - A cheap skip, and the gap kept. Some names then passed each walk that decodes nothing at
+      that place. They are a compressed owner longer than 255 octets, a pointer forward, a loop,
+      and a pointer past the end. The type of the record that held the fault decided whether a
+      lookup took the message.
+    - A decode of each owner in the walk. It refuses the same names. It also copies each label
+      into a 256-octet name, through a call to `memcpy` for each label.
+    - A loop of its own for the skip, apart from the decode's. To give the same errors it does the
+      same work. But the two loops can come to disagree, and only the fuzz target would see it.
+
+    §7, Parsing; §8; §11; §13.
 
 ## 17. Questions for the owner
 

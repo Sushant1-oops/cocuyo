@@ -49,7 +49,8 @@ pub const Strategy = enum {
     /// A response whose one answer is a record of a type the codec reads, written whole, or with
     /// one octet of its rdata changed.
     record,
-    /// A plausible header and a question of a long name, of a type cocuyo asks, then noise.
+    /// A plausible header, and a question of a long name, of a type cocuyo asks. Then an owner of
+    /// labels and a pointer to that name, 255 octets whole or one past, and then noise.
     long_question,
     /// A response whose one record holds a length field at its most (`fuzz_generate_records.zig`).
     lengths_at_most,
@@ -191,19 +192,33 @@ fn write_question(generator: *Generator, out: *Message) void {
 /// The header above, then a question whose name is `fuzz_question_name_bytes_min` octets long or
 /// more, up to the longest a name can be (RFC 1035 §2.3.4), so its type and class can lie past
 /// octet 255 of the message. Its type is one cocuyo asks and its class IN, so check 5's compare
-/// reads all of it (docs/design.md §7).
+/// reads all of it (docs/design.md §7). After it, the first answer's owner: labels, then a pointer
+/// to the question's name (§4.1.4), so the record walk measures the owner through the pointer.
 fn write_long_question(generator: *Generator, out: *Message) void {
     write_header(generator, out);
     const lengths = core.constants.name_bytes_max - constants.fuzz_question_name_bytes_min + 1;
     const name_bytes = constants.fuzz_question_name_bytes_min + generator.below(lengths);
+    const owner_bytes = owner_label_bytes(generator, name_bytes);
     const end = core.constants.header_bytes + name_bytes + core.constants.question_fixed_bytes;
-    out.len = @max(out.len, end);
+    out.len = @max(out.len, end + owner_bytes + constants.pointer_bytes);
     var writer: Writer = .{ .bytes = out.bytes[0..out.len], .at = core.constants.header_bytes };
     write_labels(generator, &writer, name_bytes - 1);
     writer.octet(0);
     writer.short(record_kinds[generator.below(record_kinds.len)].code());
     writer.short(core.constants.class_internet);
     assert(writer.at == end);
+    write_labels(generator, &writer, owner_bytes);
+    writer.short(pointer_to(core.constants.header_bytes));
+}
+
+/// The octets of the labels before the owner's pointer to a question name of `name_bytes`. A coin
+/// gives the owner 255 octets whole, the most a name holds (RFC 1035 §2.3.4), or 256. The labels
+/// take two octets at least, so after a question of 254 octets or more the owner is longer than
+/// 255 octets.
+fn owner_label_bytes(generator: *Generator, name_bytes: usize) usize {
+    assert(name_bytes <= core.constants.name_bytes_max);
+    const whole = core.constants.name_bytes_max + @intFromBool(generator.coin());
+    return @max(whole - name_bytes, constants.label_wire_bytes_min);
 }
 
 /// Labels of noise that take `area_bytes` octets, length octets included, of lengths the seed

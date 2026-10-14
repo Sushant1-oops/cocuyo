@@ -2551,7 +2551,7 @@
         .id = "SB19",
         .what = "the record walk's skip counts labels and not octets",
         .edits = .{
-            .{ .file = "src/wire/name.zig", .old = "                if (cursor - offset + 1 > core.constants.name_bytes_max) return Error.NameTooLong;", .new = "                if (false and cursor - offset + 1 > core.constants.name_bytes_max) return Error.NameTooLong;" },
+            .{ .file = "src/wire/name.zig", .old = "        if (self.len + 1 + label.len + 1 > core.constants.name_bytes_max) return Error.NameTooLong;", .new = "        if (false and self.len + 1 + label.len + 1 > core.constants.name_bytes_max) return Error.NameTooLong;" },
         },
         .caught_by = .{ .step = "test-wire" },
     },
@@ -2560,7 +2560,7 @@
         .id = "SB20",
         .what = "the record walk's skip counts no root after the labels",
         .edits = .{
-            .{ .file = "src/wire/name.zig", .old = "                if (cursor - offset + 1 > core.constants.name_bytes_max) return Error.NameTooLong;", .new = "                if (cursor - offset > core.constants.name_bytes_max) return Error.NameTooLong;" },
+            .{ .file = "src/wire/name.zig", .old = "        if (self.len + 1 + label.len + 1 > core.constants.name_bytes_max) return Error.NameTooLong;", .new = "        if (self.len + 1 + label.len > core.constants.name_bytes_max) return Error.NameTooLong;" },
         },
         .caught_by = .{ .step = "test-wire" },
     },
@@ -2569,7 +2569,7 @@
         .id = "SB21",
         .what = "the record walk's skip refuses a name of 255 octets",
         .edits = .{
-            .{ .file = "src/wire/name.zig", .old = "                if (cursor - offset + 1 > core.constants.name_bytes_max) return Error.NameTooLong;", .new = "                if (cursor - offset + 1 >= core.constants.name_bytes_max) return Error.NameTooLong;" },
+            .{ .file = "src/wire/name.zig", .old = "        if (self.len + 1 + label.len + 1 > core.constants.name_bytes_max) return Error.NameTooLong;", .new = "        if (self.len + 1 + label.len + 1 >= core.constants.name_bytes_max) return Error.NameTooLong;" },
         },
         .caught_by = .{ .step = "test-wire" },
     },
@@ -2888,6 +2888,69 @@
         .what = "strategy_of draws the strategy of another seed than the one generate builds",
         .edits = .{
             .{ .file = "src/wire/fuzz/fuzz_generate.zig", .old = "    var generator = Generator.init(seed);\n    return draw_strategy(&generator);", .new = "    var generator = Generator.init(seed +% 1);\n    return draw_strategy(&generator);" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "The skip follows each pointer",
+        .id = "W5",
+        .what = "skip ends at a pointer and does not follow it, as before 2026-10-14",
+        .edits = .{
+            .{ .file = "src/wire/name.zig", .old = "            .pointer => try self.follow(),", .new = "            .pointer => if (@TypeOf(out) == *Measure) end: {\n                _ = try read_pointer(self.message, self.cursor);\n                try out.terminate();\n                break :end self.cursor + constants.pointer_bytes;\n            } else try self.follow()," },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "The skip follows each pointer",
+        .id = "NS1",
+        .what = "skip follows each pointer, and counts no label after the first hop",
+        .edits = .{
+            .{ .file = "src/wire/name.zig", .old = "        try out.append_label(try label_at(self.message, self.cursor, length));", .new = "        if (@TypeOf(out) != *Measure or self.hops == 0) try out.append_label(try label_at(self.message, self.cursor, length));" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "The skip follows each pointer",
+        .id = "NS2",
+        .what = "the walk of decode and skip allows a seventeenth hop",
+        .edits = .{
+            .{ .file = "src/wire/name.zig", .old = "        if (self.hops == core.constants.compression_hops_max) return Error.BadCompressionPointer;", .new = "        if (self.hops == core.constants.compression_hops_max + 1) return Error.BadCompressionPointer;" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "The skip follows each pointer",
+        .id = "NS3",
+        .what = "a pointer may point at itself, forwards, or past the end of the message",
+        .edits = .{
+            .{ .file = "src/wire/name.zig", .old = "        if (target >= self.cursor) return Error.BadCompressionPointer;", .new = "        if (false and target >= self.cursor) return Error.BadCompressionPointer;" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "The skip follows each pointer",
+        .id = "NS4",
+        .what = "a pointer whose second octet is past the end of the message is read",
+        .edits = .{
+            .{ .file = "src/wire/name.zig", .old = "    if (cursor + constants.pointer_bytes > message.len) return Error.MalformedMessage;", .new = "    if (false and cursor + constants.pointer_bytes > message.len) return Error.MalformedMessage;" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "The skip follows each pointer",
+        .id = "NS5",
+        .what = "a name ends after its last pointer, and not after its first",
+        .edits = .{
+            .{ .file = "src/wire/name.zig", .old = "        if (self.end == null) self.end = self.cursor + constants.pointer_bytes;", .new = "        self.end = self.cursor + constants.pointer_bytes;" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "The skip follows each pointer",
+        .id = "NS6",
+        .what = "a label may run past the end of the message, in the walk of decode and skip",
+        .edits = .{
+            .{ .file = "src/wire/name.zig", .old = "    if (start + length > message.len) return Error.MalformedMessage;", .new = "    if (false and start + length > message.len) return Error.MalformedMessage;" },
         },
         .caught_by = .{ .step = "test-wire" },
     },

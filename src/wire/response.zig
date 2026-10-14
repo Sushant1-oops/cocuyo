@@ -192,6 +192,8 @@ pub fn note_ttl(ttl_seconds: u32, out: *Answers) void {
 
 const testing = std.testing;
 const fixtures = @import("fixtures.zig");
+const integer = @import("integer.zig");
+const wire_constants = @import("constants.zig");
 
 test {
     _ = response_answers;
@@ -341,6 +343,45 @@ test "a response echoing a maximal name parses, and its offsets do not overflow 
     try testing.expectEqual(Outcome.answered, outcome);
     try testing.expectEqualSlices(u8, &.{ 192, 0, 2, 1 }, collected.addresses()[0].slice());
     try testing.expectEqual(@as(u32, 0), try negative_ttl_seconds(&fixtures.answer_a_long_name, &test_chain));
+}
+
+/// A label of 63 octets, the longest, after its length octet.
+const label_longest = [_]u8{core.constants.label_bytes_max} ++ [_]u8{'a'} ** core.constants.label_bytes_max;
+
+/// `fixtures.answer_aaaa` and then `fixtures.record_a`, with `labels` put before the AAAA's owner.
+/// That owner was a pointer to the question's name, 13 octets, so it is now `labels` and those 13.
+fn aaaa_owned_through_pointer(comptime labels: []const u8) [fixtures.answer_aaaa.len + labels.len + fixtures.record_a.len]u8 {
+    const at = fixtures.answer_offset;
+    const aaaa = fixtures.answer_aaaa;
+    var message = aaaa[0..at].* ++ labels[0..labels.len].* ++ aaaa[at..].* ++ fixtures.record_a;
+    // The A record is one answer more than the AAAA message counts.
+    const ancount = integer.read_u16(&message, wire_constants.header_ancount_offset);
+    integer.write_u16(&message, wire_constants.header_ancount_offset, ancount + 1);
+    return message;
+}
+
+test "an owner longer than 255 octets through its pointer fails the collection, of a type not asked for too" {
+    // "label octets and label length octets" count (RFC 1035 §3.1), those a pointer reaches too
+    // (§4.1.4), in a name of "255 octets or less" (§2.3.4). Until 2026-10-14 the walk did not
+    // follow the AAAA owner's pointer. An A question does not want the AAAA, so the walk passed
+    // its owner of 256 octets, and the message answered.
+    var collected: Answers = undefined;
+    // Labels of 242 octets, and the 13 that the pointer reaches: 255 octets.
+    const longest = aaaa_owned_through_pointer(&(label_longest ** 3 ++ [_]u8{49} ++ [_]u8{'b'} ** 49));
+    try testing.expectEqual(Outcome.answered, try collect_from(&longest, .a, &collected));
+    // A label of one octet more: 256 octets.
+    const one_past = aaaa_owned_through_pointer(&(label_longest ** 3 ++ [_]u8{50} ++ [_]u8{'b'} ** 50));
+    try testing.expectError(Error.NameTooLong, collect_from(&one_past, .a, &collected));
+}
+
+test "an owner longer than 255 octets through its pointer fails the negative TTL's walk" {
+    // The walk steps over the answers to reach the authority section, and skips each owner. Until
+    // 2026-10-14 it passed the owner of 256 octets, and gave a TTL of 0.
+    const question = try Name.from_text("example.com");
+    const longest = aaaa_owned_through_pointer(&(label_longest ** 3 ++ [_]u8{49} ++ [_]u8{'b'} ** 49));
+    try testing.expectEqual(@as(u32, 0), try negative_ttl_seconds(&longest, &question));
+    const one_past = aaaa_owned_through_pointer(&(label_longest ** 3 ++ [_]u8{50} ++ [_]u8{'b'} ** 50));
+    try testing.expectError(Error.NameTooLong, negative_ttl_seconds(&one_past, &question));
 }
 
 test {

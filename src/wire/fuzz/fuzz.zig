@@ -98,6 +98,47 @@ test "a long question of every name length from the shortest long one to 255 oct
     for (seen) |reached| try testing.expect(reached);
 }
 
+test "a long question's answer is owned through a pointer to it, at 255 octets whole and at 256" {
+    // A name counts the labels that its pointer reaches (RFC 1035 §3.1, §4.1.4). It holds "255
+    // octets or less" (§2.3.4). The record walk's skip measures the owner through its pointer.
+    var reached: [2]bool = @splat(false);
+    var message: Message = .{};
+    for (0..seed_count) |seed| {
+        if (strategy_of(seed) != .long_question) continue;
+        generate(seed, &message);
+        const whole = try long_owner_whole(message.slice());
+        if (whole == core.constants.name_bytes_max) reached[0] = true;
+        if (whole == core.constants.name_bytes_max + 1) reached[1] = true;
+    }
+    for (reached) |was| try testing.expect(was);
+}
+
+/// The length of a long question's owner: labels, then a pointer to the question's name. `skip`
+/// and `decode` end it after its pointer at 255 octets or fewer, and refuse it past 255.
+fn long_owner_whole(bytes: []const u8) !usize {
+    const constants = @import("../constants.zig");
+    var name: core.Name = core.Name.empty;
+    const question = try question_codec.parse(bytes, &name);
+    var pointer_at = question.end;
+    for (0..core.constants.labels_max) |_| {
+        if (bytes[pointer_at] & constants.label_kind_mask == constants.label_kind_pointer) break;
+        pointer_at += 1 + bytes[pointer_at];
+    }
+    const pointer = generate_module.pointer_to(core.constants.header_bytes);
+    try testing.expectEqual(pointer, integer.read_u16(bytes, pointer_at));
+    const whole = pointer_at - question.end + name.len;
+    var owner: core.Name = core.Name.empty;
+    if (whole > core.constants.name_bytes_max) {
+        try testing.expectError(error.NameTooLong, name_codec.skip(bytes, question.end));
+        try testing.expectError(error.NameTooLong, name_codec.decode(bytes, question.end, &owner));
+    } else {
+        const end = pointer_at + constants.pointer_bytes;
+        try testing.expectEqual(end, try name_codec.skip(bytes, question.end));
+        try testing.expectEqual(end, try name_codec.decode(bytes, question.end, &owner));
+    }
+    return whole;
+}
+
 /// The farthest offset a pointer of a maze aims at: every two octets after the header are one.
 fn farthest_target(message: *const Message) usize {
     const constants = @import("../constants.zig");

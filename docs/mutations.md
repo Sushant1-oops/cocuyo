@@ -51,8 +51,8 @@ of them only after a test was written for it.
 | W1 | a pointer may point forwards | strictly backwards, RFC 1035 §4.1.4 | the forwards-pointer test | CAUGHT |
 | W2 | the hop bound allows one more hop | `compression_hops_max` | the seventeen-pointer chain | CAUGHT |
 | W3 | a reserved label kind is read as a label | the kind bits | the `01` and `10` cases | CAUGHT |
-| W4 | a label may run past the end of the message | `copy_label`'s bound | the truncated-label test | CAUGHT |
-| W5 | `skip` follows the pointer instead of ending | `skip`'s contract | the skip offsets | CAUGHT |
+| W4 | a label may run past the end of the message | `copy_label`'s bound, `label_at`'s since 2026-10-14 (NS6) | the truncated-label test | CAUGHT |
+| W5 | `skip` follows the pointer instead of ending | `skip`'s contract until 2026-10-14, when it became the contract: W5 was written again (The skip follows each pointer) | the skip offsets | CAUGHT |
 | W6 | the case mixer walks bytes, not labels | `mix_case` | **a test written for it** | CAUGHT |
 | W7 | the case mixer reuses one word of entropy | `mix_case` | the 96-letter test | CAUGHT |
 | W8 | the question compare folds case | RFC 5452 §9.2, DNS-0x20 | the flipped-letter test | CAUGHT |
@@ -5501,3 +5501,109 @@ Sixty-eight new mutations, sixty-eight `CAUGHT`.
 | LM66 | the strategy of a seed | the test of `strategy_of` in `fuzz_generate.zig`, the test of each type in `fuzz_generate_records.zig`, by a panic, and four tests of `fuzz.zig` that read one strategy, `test-wire` | `strategy_of` draws from the seed after the one that `generate` reads | CAUGHT |
 | LM67 | `drive_polls_per_lookup_max`, 81, at the most a run reaches, 49 | the test of one drive through each try at eight servers in `io_sim_servers_test.zig`, `test-io` | one drive polls a lookup 48 times at most | CAUGHT |
 | LM68 | `buffer_bytes`, 2,048, of the datagram group | the test of a datagram that fills a buffer of the group in `io_sim_datagram_test.zig`, `test-io` | the buffers of the datagram group are 1,536 octets | CAUGHT |
+
+## The skip follows each pointer
+
+2026-10-14. `wire.name.skip` ended a name at its first pointer, and did not follow the pointer
+(c4milo/cocuyo#46). From 356eeb7 it refused a name whose labels before the pointer passed 255
+octets. A name of short labels and a pointer to a long name passed it, but the whole name passed
+255 octets. A pointer forward, a pointer loop and a pointer past the end of the message passed it
+too. `decode` refuses each of these names. The record walk skips each owner that it does not
+decode, so such an owner passed each walk that decodes nothing at that place. The owner ruled on
+2026-10-14: close the issue. The design changed first:
+
+- §7, Parsing;
+- §8, Name decoding and Record walking;
+- §11, the notes on the record walk;
+- §13, the fuzz target;
+- §16 decision 42.
+
+No model changed. The Lean models and the engine model hold no octets of a message.
+
+What the change does:
+
+- `skip` and `decode` share one walk in `src/wire/name.zig`. `decode` gives the walk a `Name`,
+  which copies each label. `skip` gives it a `Measure`, which counts the octets of each label and
+  copies nothing. A `Measure` refuses a label where `Name.append_label` refuses it. That is where
+  the label, its length octet and a root after them pass 255 octets (RFC 1035 §2.3.4, §3.1).
+- So `skip` follows each pointer (§4.1.4), and `compression_hops_max` bounds its hops, as in
+  `decode`. It still returns the octet after the first pointer.
+- `copy_label` is now `label_at`. It returns the octets of a label, and the walk gives them to a
+  `Name` or a `Measure`. A `Measure` copies nothing, so the old name was not true for `skip`.
+- The fuzz target compares `skip` with `decode` at each offset where it aims both: the same end,
+  or the same error. Before, it compared them only where `decode` took the name. It also decodes
+  each owner that the record walk passes.
+- The long-question strategy writes the first answer's owner as labels and a pointer to the
+  question's name, 255 octets whole or 256. Before, no strategy wrote such a name on purpose. Over
+  the gate's 4096 seeds, noise held 2,415 names longer than 255 octets that the old `skip` took.
+  The record walk passed none of them as an owner. A test pins that the gate's seeds reach an
+  owner of each length.
+
+The change also found an error in §8 and in the comment at the top of `src/wire/name.zig`. Both
+said that the strictly-backwards rule alone makes a loop impossible. A pointer can point back at
+labels that lead to the same pointer, and each hop of that loop points backwards. The hop bound
+ends such a loop at the seventeenth pointer. The length of the name ends it first when its labels
+are long. A test holds each of the two cases. The rule did not change.
+
+The tests came first. At 05567b7 with the new tests, `zig build test-wire` had 14 of 208 tests
+fail:
+
+- eight tests of `src/wire/name.zig`:
+  - a name through its pointer, and a name through every hop;
+  - a pointer at itself, a pointer forward, and a pointer past the end of the message;
+  - a loop that the hop bound ends, and a loop that the length ends;
+  - a chain longer than the hop bound, which now runs `skip` too.
+- four tests of the walks that skip an owner. Each holds an owner of labels and a pointer, 255
+  octets whole and 256. They are `Record.soa_negative_ttl` in `record.zig`, `response.collect` and
+  `response.negative_ttl_seconds` in `response.zig`, and `response_opt.find` in
+  `response_opt.zig`. At 05567b7 each took the owner of 256 octets.
+- the fuzz gate, at seed 0, where `skip` and `decode` disagreed on a name;
+- the test of the long question's owner in `fuzz.zig`, which `skip` took at 256 octets.
+
+Each of those failures came from a run, and each test shows its own failure. One new test passed
+at 05567b7: the test of a pointer whose second octet is past the end. The old `skip` had a check
+of its own for that octet. So that test is a guard of the check that `read_pointer` now makes for
+both walks. With the change, `zig build test` has 1,062 tests pass of 1,062. `zig build fuzz-gate
+-- 4096` and `zig build fuzz-gate`, 1,048,576 seeds, each held.
+
+`zig build mutations -- lookup` ran W5, NS1 to NS6 and SB19 to SB21, each against `test-wire`,
+and each was `CAUGHT`. Each row also ran by hand, in a copy of the tree with a cache of its own.
+Those runs name the tests that catch each row. A panic stops the test binary. So for a row that
+panics, the table names the first test that the panic stops.
+
+- W5 held the old contract, that `skip` ends at a pointer. It is written again to break the new
+  contract the way the old code did: `skip` reads the pointer's two octets, ends the name, and
+  returns. The 14 tests that failed at 05567b7 catch it, and no other test.
+- SB19 to SB21 broke the length check of the old `skip`. That check is now the check of
+  `Measure`, so their text moved there. Each still breaks the one check that it broke before.
+  SB19 and SB20 are caught by a panic of the assertion after the check. SB21 is caught with no
+  panic, by eleven tests. One of them is the test of a response that echoes a name of 255 octets,
+  since its owner is a pointer to that name.
+- NS3 removes the strictly-backwards rule. The tests of a pointer at itself and of the loops do
+  not catch it. The hop bound then refuses each of them with the same error. The tests of a pointer
+  forward catch it, in `decode` and in `skip`. The test of a pointer past the end catches it too.
+  The walk then goes to an offset past the end, and fails with `MalformedMessage`.
+- NS4 is the row of the pointer's second octet past the end of the message. Before, `skip` had a
+  check of its own for it. Now `read_pointer` makes the check for both walks.
+- NS6 removes the bound of `label_at`, which W4 of Step 2 broke as the bound of `copy_label`. No
+  row of `lookup.zon` held that bound until now. The walk then reads past the end of the message,
+  and the slice of the label panics.
+
+Seven new or rewritten rows, seven `CAUGHT`. The text of NS1 changed with `label_at`, and the row
+was run again. Three older rows ran again with their text moved, SB19 to SB21, and each is
+`CAUGHT`.
+
+`zig build mutations -- lookup` then ran the whole set, 326 rows, after the last edit to the code.
+Each of the 326 was `CAUGHT`, CZ28 too. On 2026-10-13, and in the first whole run of this change,
+the tool said that CZ28 "did not compile". The cache of the tree was cleared before this run, to
+keep space on the disk. The change does not touch `tools/readme_check.zig`.
+
+| # | Mutation | Check it breaks | Caught by | Status |
+| --- | --- | --- | --- | --- |
+| W5 | `skip` ends at a pointer and does not follow it, as before 2026-10-14 | §16 decision 42 | the 14 tests that failed at 05567b7, `test-wire` | CAUGHT |
+| NS1 | `skip` follows each pointer, and counts no label after the first hop | RFC 1035 §3.1, §4.1.4 | the tests of a name through its pointer, of every hop and of the loop through a label of 63; the tests of the SOA's MNAME, of `collect`, of the negative TTL and of `find`; the fuzz gate and the test of the long question's owner, `test-wire` | CAUGHT |
+| NS2 | the walk of `decode` and `skip` allows a seventeenth hop | `compression_hops_max` | the test of a chain longer than the hop bound, by a panic, `test-wire` | CAUGHT |
+| NS3 | a pointer may point at itself, forwards, or past the end of the message | strictly backwards, RFC 1035 §4.1.4 | the forwards-pointer test of `decode`, and the tests of `skip` with a pointer forward and a pointer past the end, `test-wire` | CAUGHT |
+| NS4 | a pointer whose second octet is past the end of the message is read | `read_pointer`'s bound | the truncated-pointer test of `decode`, by a panic, `test-wire` | CAUGHT |
+| NS5 | a name ends after its last pointer, and not after its first | the end of a name, RFC 1035 §4.1.4 | the test of as many pointers as the hop bound allows, the test of every hop and the fuzz gate, `test-wire` | CAUGHT |
+| NS6 | a label may run past the end of the message, in the walk of `decode` and `skip` | `label_at`'s bound | the test of a label past the end of the message, by a panic, `test-wire` | CAUGHT |
