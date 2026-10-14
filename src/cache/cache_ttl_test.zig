@@ -147,3 +147,17 @@ test "a negative answer put over an answered one resets the slot's answers where
     try testing.expectEqual(@as(usize, 0), hit.answers.addresses().len);
     try testing.expectEqual(@as(u32, 30), hit.ttl_seconds);
 }
+
+test "a TTL of 0xFFFFFFFF, the largest, is kept for the longest cap and expires at it" {
+    // RFC 8767 §4 reads all 32 bits of a TTL. The cap of seven days is what the entry keeps.
+    var fixture: fixtures.Fixture(slot_count) = .{};
+    var table = cache_init_capped(&fixture, core.constants.cache_ttl_seconds_max);
+    const largest = fixtures.answers_v4(1, std.math.maxInt(u32));
+    table.put(&ask("a.example"), &largest, null, 0);
+    const hit = table.get(&ask("a.example"), 0).?;
+    try testing.expectEqual(@as(u32, core.constants.cache_ttl_seconds_max), hit.ttl_seconds);
+    try testing.expectEqual(@as(u32, core.constants.cache_ttl_seconds_max), hit.answers.ttl_seconds);
+    const expiry_ns = @as(u64, core.constants.cache_ttl_seconds_max) * second;
+    try testing.expectEqual(@as(u32, 0), table.get(&ask("a.example"), expiry_ns - 1).?.ttl_seconds);
+    try testing.expect(table.get(&ask("a.example"), expiry_ns) == null);
+}

@@ -105,3 +105,16 @@ test "a server cookie of 32 octets, the longest, is learned and goes out in the 
     answer.server_cookie = &longest;
     try testing.expectEqual(Verdict.accepted, harness.respond(answer, servers[0].endpoint));
 }
+
+test "a server cookie of 8 octets, the shortest, is learned and goes out in the next query" {
+    // The option is then 16 octets, the shortest long form (RFC 7873 §4).
+    const shortest: [core.constants.cookie_server_bytes_min]u8 = @splat(0x5c);
+    var harness: fixtures.Harness = .{ .config = .{ .servers = &servers } };
+    try harness.start("example.com.", .a, seed);
+    _ = harness.send();
+    var reply = fixtures.cname_only_cookie;
+    reply.server_cookie = &shortest;
+    try testing.expectEqual(Verdict.accepted, harness.respond(reply, servers[0].endpoint));
+    _ = harness.send();
+    try testing.expectEqualSlices(u8, &shortest, (try sent_cookie(&harness)).?.server);
+}

@@ -1621,6 +1621,17 @@ them. With the name parsed as the name held and a seed the header's octets give,
 must say what `matches` says of the name `mix_case` builds: of the message itself, and of the
 question a query mixed from that seed sends.
 
+Since 2026-10-13 the generator also writes the length fields that the readers of several types
+share, at their most. A record's rdlength, an EDNS option's length and an SVCB parameter's length
+are 0xFFFF or 0xFFFE, and each runs past what holds it. A TXT string, a CAA tag and an alpn-id have
+255 octets, and a name has labels of 63 octets. A COOKIE option has 8, 16, 40 or 41 octets, and its
+data ends at the end of its OPT record. The target reads the OPT record's options as a lookup reads
+them. A long strategy writes messages of up to 65,535 octets. A copy of the question's name is at
+offset 16,383, the farthest offset that a pointer names. A pointer to it is the owner of the last
+answer, which ends the message. Tests pin that the gate's seeds reach each value, and that each
+value reaches its reader (docs/mutations.md, Tests at the named limits). That day the target
+moved to `src/wire/fuzz/`.
+
 A second target, since 2026-09-26, reads what the caller hands in rather than what the network
 sends (`src/config/fuzz/`): an address, a name, a `resolv.conf`, a hosts file and an SPKI pin.
 Each text is written whole from values the generator chose, and must read back as those; or has
@@ -2499,6 +2510,39 @@ API changes. This change does both, and the owner has not ruled on it yet.
     fails, or an answer in memory waits for its deadline (§19 step 13, the stream's rule 11; §21,
     TLS rule 7). The cost is 2,048 octets for each connection in the clear, and 18,688 for each
     connection over TLS.
+
+### Asked on 2026-10-13, for the tests at the named limits
+
+docs/mutations.md, Tests at the named limits, gives the tests behind each question.
+
+39. **The slack of the drive's bound.** `drive_polls_per_lookup_max` is 81. A test gives one
+    lookup the most polls that a run gives it in one drive: 49, at eight servers and five passes.
+    That 49 is the most comes from a read of the drive. Should the bound be
+    `servers_max * (attempts_max + 1) + 1`, 49? Recommended: no. The slack costs no poll that a
+    run makes, and a bound that is exact breaks when the drive changes.
+40. **A datagram longer than the room of a buffer.** A buffer of the datagram group holds 1,856
+    octets. The kernel cuts a longer datagram and marks it as truncated, and the engine reads no
+    such mark. The table reads the cut octets, the message fails a check, and the lookup waits out
+    its try. Should the engine drop the datagram, or take it as truncated and ask over TCP?
+    Recommended: take it as truncated once checks 1 to 5 of §7 pass, since its header and
+    question are whole.
+41. **The bound of a DoH request.** The comment of `doh_request_bytes_max` and §24 give the bound to
+    the HEADERS frame of the GET, with 960 octets for the path. The code gives it to the path
+    alone, 1,536 octets. A test sends the longest GET that the code allows, and colibri sends it
+    over HTTP/2. Which is correct? Recommended: the code; then the comment and §24 change.
+42. **A template's slash.** `doh.template.expand` keeps the first octet of its output for a slash,
+    also for a path that starts with one. So such a template gets one octet less of the buffer,
+    and `start` refuses it at exactly 1,536 octets. Recommended: fix it, with the test that shows
+    it.
+43. **`Options.lookups` over `lookup_slots_max`.** An engine of more lookups than the table holds
+    compiles, then stops at an assertion in `init`. `tcp_connections` has a comptime check of its
+    own. Recommended: give `lookups` one too.
+44. **The codec's fuzz target in the public API.** `cocuyo.wire.fuzz` is public, and grew. Its
+    `Message` is 64 KiB, with `most` and `most_at`, and it has two strategies more and
+    `strategy_of`. The codec's constants gained `fuzz_long_answers`. Recommended: keep it public,
+    as `wire.fixtures` is, since the fuzz tool reads it.
+45. **CLAUDE.md's path to the target.** The target moved to `src/wire/fuzz/` by the layout rule.
+    CLAUDE.md names `src/wire/fuzz.zig` under Commands. Recommended: name `src/wire/fuzz/` there.
 
 ## 18. The cache
 

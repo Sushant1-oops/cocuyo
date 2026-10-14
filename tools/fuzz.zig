@@ -6,7 +6,7 @@
 //!     zig build fuzz -- [--text] --seed <hex>
 //!     zig build fuzz-gate -- [--text] [<count> [<first>]]
 //!
-//! Without `--text` the target is the codec's (`src/wire/fuzz.zig`), and with it the text
+//! Without `--text` the target is the codec's (`src/wire/fuzz/fuzz.zig`), and with it the text
 //! parsers' (`src/config/fuzz/fuzz.zig`). This is developer tooling. It is never linked into the
 //! library.
 const std = @import("std");
@@ -74,6 +74,7 @@ fn one_message(seed: u64) ?[]const u8 {
     var message: wire.fuzz.Message = .{};
     wire.fuzz.generate(seed, &message);
     std.debug.print("seed 0x{x}: {t}, {d} octets{s}\n", .{ seed, message.strategy, message.len, if (message.whole) ", its record whole" else "" });
+    if (message.most) |most| std.debug.print("{t} at its most, at octet {d}\n", .{ most, message.most_at });
     print_bytes(message.slice());
     return wire.fuzz.verdict(&message);
 }

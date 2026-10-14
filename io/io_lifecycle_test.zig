@@ -171,3 +171,31 @@ test "a port that cannot be replaced stays in use until one can be opened" {
     try testing.expect(rig.loop.network().socket(rig.engine.sockets.descriptor_of(0)).local.port != before);
     try rig.deinit();
 }
+
+test "a receive's generation and a socket's epoch wrap at the last of their thirty-two bits" {
+    // The generation tells the receives apart, and the epoch the sockets (docs/design.md §19 step
+    // 13, the datagram's rule 4). Each query here replaces its port. The first replacement arms
+    // the largest generation, which fills the index above the server's octet, at the largest
+    // epoch. The second wraps both to zero.
+    var rig: Rig = .{};
+    try rig.init(26, .{ .{}, .{} }, .{ .servers = &.{}, .udp_queries_per_port = 1 });
+    rig.engine.sockets.next_generation = std.math.maxInt(u32) - 1;
+    rig.engine.sockets.next_epoch = std.math.maxInt(u32) - 1;
+    _ = try rig.engine.start(question("one.example."), rig.loop.now());
+    try testing.expect((try rig.until_result()).outcome == .answer);
+    _ = rig.engine.take(rig.loop.now());
+    try testing.expectEqual(@as(u32, std.math.maxInt(u32)), rig.engine.sockets.items[0].armed_generation);
+    try testing.expectEqual(@as(u32, std.math.maxInt(u32)), rig.engine.sockets.items[0].epoch);
+    // The next query leaves from that socket, and its answer comes back to that receive. A
+    // receive that did not find its socket would drop the answer, and the lookup would wait out
+    // its try and count a failure against the server.
+    const sent_ns = rig.loop.now();
+    _ = try rig.engine.start(question("two.example."), rig.loop.now());
+    try testing.expect((try rig.until_result()).outcome == .answer);
+    try testing.expect(rig.loop.now() - sent_ns < cocuyo.constants.timeout_ns_default);
+    try testing.expectEqual(@as(u8, 0), rig.engine.resolver.servers.failures(0));
+    _ = rig.engine.take(rig.loop.now());
+    try testing.expectEqual(@as(u32, 0), rig.engine.sockets.items[0].armed_generation);
+    try testing.expectEqual(@as(u32, 0), rig.engine.sockets.items[0].epoch);
+    try rig.deinit();
+}

@@ -166,6 +166,35 @@ test "a TTL is read in all 32 bits, the high one as positive" {
     std.mem.writeInt(u32, message[ttl_at..][0..@sizeOf(u32)], 0x8001_5180, .big);
     const record = try first_record(&message, 1);
     try testing.expectEqual(@as(u32, 0x8001_5180), record.ttl_seconds);
+    // The largest TTL the field holds reads back whole.
+    std.mem.writeInt(u32, message[ttl_at..][0..@sizeOf(u32)], std.math.maxInt(u32), .big);
+    try testing.expectEqual(@as(u32, std.math.maxInt(u32)), (try first_record(&message, 1)).ttl_seconds);
+}
+
+/// Where the rdlength of `fixtures.answer_a`'s record sits, after its two-octet owner pointer.
+const answer_a_rdlength_at = fixtures.answer_offset + constants.pointer_bytes + constants.record_rdlength_offset;
+
+test "an rdlength of 0xFFFF or 0xFFFE runs past the message, and the sum with its offset does not wrap" {
+    // The two largest values of the field (RFC 1035 §4.1.3). The rdata starts at octet 41, so
+    // each sum passes sixteen bits.
+    for ([_]u16{ 0xffff, 0xfffe }) |rdlength| {
+        var message = fixtures.answer_a;
+        integer.write_u16(&message, answer_a_rdlength_at, rdlength);
+        var walk = Iterator.init(&message, fixtures.answer_offset, 1);
+        try testing.expectError(Error.TruncatedMessage, walk.next());
+    }
+}
+
+test "a record whose rdata ends at the last octet of a message of 65535 is read" {
+    // The longest message there is (RFC 1035 §4.2.2) and one record in it, whose rdata fills the
+    // rest: 65494 octets after the question and a pointer owner.
+    var message: [core.constants.message_bytes_max]u8 = @splat(0);
+    @memcpy(message[0..fixtures.answer_a.len], &fixtures.answer_a);
+    const rdata_start = answer_a_rdlength_at + constants.u16_bytes;
+    integer.write_u16(&message, answer_a_rdlength_at, @intCast(message.len - rdata_start));
+    const record = try first_record(&message, 1);
+    try testing.expectEqual(message.len, record.end);
+    try testing.expectEqual(message.len - rdata_start, record.rdata.len);
 }
 
 test "the owner name is decoded only when it is asked for, and decompresses" {

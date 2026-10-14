@@ -1757,7 +1757,7 @@
         .id = "QO4",
         .what = "the fuzz generator writes an ordinary question where a long one goes",
         .edits = .{
-            .{ .file = "src/wire/fuzz_generate.zig", .old = "        .long_question => write_long_question(&generator, out),", .new = "        .long_question => write_question(&generator, out)," },
+            .{ .file = "src/wire/fuzz/fuzz_generate.zig", .old = "        .long_question => write_long_question(&generator, out),", .new = "        .long_question => write_question(&generator, out)," },
         },
         .caught_by = .{ .step = "test-wire" },
     },
@@ -1766,7 +1766,7 @@
         .id = "QO5",
         .what = "the fuzz generator's long names stop at 241 octets",
         .edits = .{
-            .{ .file = "src/wire/fuzz_generate.zig", .old = "    const lengths = core.constants.name_bytes_max - constants.fuzz_question_name_bytes_min + 1;", .new = "    const lengths = core.constants.name_bytes_max - constants.fuzz_question_name_bytes_min + 1 - 14;" },
+            .{ .file = "src/wire/fuzz/fuzz_generate.zig", .old = "    const lengths = core.constants.name_bytes_max - constants.fuzz_question_name_bytes_min + 1;", .new = "    const lengths = core.constants.name_bytes_max - constants.fuzz_question_name_bytes_min + 1 - 14;" },
         },
         .caught_by = .{ .step = "test-wire" },
     },
@@ -1775,7 +1775,7 @@
         .id = "QO6",
         .what = "a pointer of a maze keeps the low octet of its target alone, so none aims past offset 255",
         .edits = .{
-            .{ .file = "src/wire/fuzz_generate.zig", .old = "        integer.write_u16(out.bytes[0..out.len], offset, pointer_to(generator.below(out.len)));", .new = "        integer.write_u16(out.bytes[0..out.len], offset, pointer_to(generator.below(out.len) & std.math.maxInt(u8)));" },
+            .{ .file = "src/wire/fuzz/fuzz_generate.zig", .old = "        integer.write_u16(out.bytes[0..out.len], offset, pointer_to(generator.below(out.len)));", .new = "        integer.write_u16(out.bytes[0..out.len], offset, pointer_to(generator.below(out.len) & std.math.maxInt(u8)));" },
         },
         .caught_by = .{ .step = "test-wire" },
     },
@@ -2590,5 +2590,305 @@
             .{ .file = "src/config/constants.zig", .old = "pub const ndots_limit: usize = 15;", .new = "pub const ndots_limit = 15;" },
         },
         .caught_by = .{ .step = "test-config" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM1",
+        .what = "check 1 is gone, so a message of 65536 octets reaches the codec",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response.zig", .old = "    if (message.len > core.constants.message_bytes_max) return null;", .new = "    if (false and message.len > core.constants.message_bytes_max) return null;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM2",
+        .what = "check 1 ignores a message of 65535 octets",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response.zig", .old = "    if (message.len > core.constants.message_bytes_max) return null;", .new = "    if (message.len >= core.constants.message_bytes_max) return null;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM3",
+        .what = "the record walk sums the rdata offset and the rdlength in sixteen bits",
+        .edits = .{
+            .{ .file = "src/wire/record.zig", .old = "        const rdata_start = after_name + core.constants.record_fixed_bytes;", .new = "        const rdata_start: u16 = @intCast(after_name + core.constants.record_fixed_bytes);" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM4",
+        .what = "an EDNS option offset and its length are summed in sixteen bits",
+        .edits = .{
+            .{ .file = "src/wire/rdata/rdata_opt.zig", .old = "        const length: usize = integer.read_u16(self.rdata, self.offset + constants.opt_option_length_offset);\n        const start = self.offset + constants.opt_option_fixed_bytes;", .new = "        const length: u16 = integer.read_u16(self.rdata, self.offset + constants.opt_option_length_offset);\n        const start: u16 = @intCast(self.offset + constants.opt_option_fixed_bytes);" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM5",
+        .what = "an SVCB parameter offset and its length are summed in sixteen bits",
+        .edits = .{
+            .{ .file = "src/wire/rdata/rdata_svcb.zig", .old = "        const length: usize = integer.read_u16(self.bytes, self.offset + constants.svcb_param_length_offset);\n        const start = self.offset + constants.svcb_param_fixed_bytes;", .new = "        const length: u16 = integer.read_u16(self.bytes, self.offset + constants.svcb_param_length_offset);\n        const start: u16 = @intCast(self.offset + constants.svcb_param_fixed_bytes);" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM6",
+        .what = "the text buffer of a name is 1003 octets, one short of the longest text, and the comptime check is gone",
+        .edits = .{
+            .{ .file = "src/core/constants.zig", .old = "pub const name_text_bytes_max: usize = 1020;", .new = "pub const name_text_bytes_max: usize = 1003;" },
+            .{ .file = "src/core/constants.zig", .old = "    if (name_text_bytes_max != name_bytes_max * 4) @compileError(\"the escape bound is wrong\");\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-core" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM7",
+        .what = "the hosts file is read one line past its bound",
+        .edits = .{
+            .{ .file = "src/config/hosts.zig", .old = "    while (read < constants.hosts_lines_max) : (read += 1) {", .new = "    while (read <= constants.hosts_lines_max) : (read += 1) {" },
+        },
+        .caught_by = .{ .step = "test-config" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM8",
+        .what = "the hosts file is read one line short of its bound",
+        .edits = .{
+            .{ .file = "src/config/hosts.zig", .old = "    while (read < constants.hosts_lines_max) : (read += 1) {", .new = "    while (read + 1 < constants.hosts_lines_max) : (read += 1) {" },
+        },
+        .caught_by = .{ .step = "test-config" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM9",
+        .what = "an options line is read one token past its bound",
+        .edits = .{
+            .{ .file = "src/config/resolv_conf.zig", .old = "    while (read < constants.options_max) : (read += 1) {", .new = "    while (read <= constants.options_max) : (read += 1) {" },
+        },
+        .caught_by = .{ .step = "test-config" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM10",
+        .what = "an options line is read one token short of its bound",
+        .edits = .{
+            .{ .file = "src/config/resolv_conf.zig", .old = "    while (read < constants.options_max) : (read += 1) {", .new = "    while (read + 1 < constants.options_max) : (read += 1) {" },
+        },
+        .caught_by = .{ .step = "test-config" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM11",
+        .what = "resolv.conf is read one line short of its bound",
+        .edits = .{
+            .{ .file = "src/config/resolv_conf.zig", .old = "    while (read < constants.lines_max) : (read += 1) {", .new = "    while (read + 1 < constants.lines_max) : (read += 1) {" },
+        },
+        .caught_by = .{ .step = "test-config" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM12",
+        .what = "resolv.conf is read one line past its bound",
+        .edits = .{
+            .{ .file = "src/config/resolv_conf.zig", .old = "    while (read < constants.lines_max) : (read += 1) {", .new = "    while (read <= constants.lines_max) : (read += 1) {" },
+        },
+        .caught_by = .{ .step = "test-config" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM13",
+        .what = "a PTR answer keeps a name past the one its list holds",
+        .edits = .{
+            .{ .file = "src/wire/response_take.zig", .old = "            if (out.count == core.constants.ptr_names_max) return refuse(out);", .new = "            if (false and out.count == core.constants.ptr_names_max) return refuse(out);" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM14",
+        .what = "a copy that fills the rdata buffer to its last octet is refused",
+        .edits = .{
+            .{ .file = "src/wire/record_copy.zig", .old = "    if (count > out.len) return null;", .new = "    if (count >= out.len) return null;" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM15",
+        .what = "the cache keeps a TTL over its cap",
+        .edits = .{
+            .{ .file = "src/cache/cache.zig", .old = "        const ttl = @min(ttl_seconds, self.ttl_seconds_max);", .new = "        const ttl = ttl_seconds;" },
+        },
+        .caught_by = .{ .step = "test-cache" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM16",
+        .what = "a slot generation of 0xFFFF does not wrap at the release",
+        .edits = .{
+            .{ .file = "src/resolver/table_slots.zig", .old = "        slot.generation +%= 1;", .new = "        slot.generation += 1;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM17",
+        .what = "a COOKIE option of 16 octets is refused",
+        .edits = .{
+            .{ .file = "src/wire/edns.zig", .old = "        const long = len >= constants.cookie_option_long_bytes_min and len <= constants.cookie_option_long_bytes_max;", .new = "        const long = len > constants.cookie_option_long_bytes_min and len <= constants.cookie_option_long_bytes_max;" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM18",
+        .what = "a COOKIE option of 16 octets is refused, under a lookup",
+        .edits = .{
+            .{ .file = "src/wire/edns.zig", .old = "        const long = len >= constants.cookie_option_long_bytes_min and len <= constants.cookie_option_long_bytes_max;", .new = "        const long = len > constants.cookie_option_long_bytes_min and len <= constants.cookie_option_long_bytes_max;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM19",
+        .what = "a pointer keeps thirteen bits of its offset",
+        .edits = .{
+            .{ .file = "src/wire/name.zig", .old = "    return integer.read_u16(message, cursor) & constants.pointer_offset_mask;", .new = "    return integer.read_u16(message, cursor) & (constants.pointer_offset_mask >> 1);" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM20",
+        .what = "a string length and its own octet are summed in the octet the length reads as",
+        .edits = .{
+            .{ .file = "src/wire/rdata/rdata_string.zig", .old = "    const length: usize = rdata[offset];", .new = "    const length = rdata[offset];" },
+            .{ .file = "src/wire/rdata/rdata_string.zig", .old = "    if (start + length > rdata.len) return Error.MalformedMessage;", .new = "    if (length + 1 + offset > rdata.len) return Error.MalformedMessage;" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM21",
+        .what = "a CAA tag length and the octets before it are summed in the octet the length reads as",
+        .edits = .{
+            .{ .file = "src/wire/rdata/rdata_caa.zig", .old = "        const tag_length: usize = rdata[constants.caa_tag_length_offset];", .new = "        const tag_length: u8 = rdata[constants.caa_tag_length_offset];" },
+            .{ .file = "src/wire/rdata/rdata_caa.zig", .old = "        const tag_start = constants.caa_fixed_bytes;", .new = "        const tag_start: u8 = constants.caa_fixed_bytes;" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM22",
+        .what = "the port span of the lookup leaves out its last port",
+        .edits = .{
+            .{ .file = "src/resolver/entropy.zig", .old = "const port_span = core.constants.port_ephemeral_max - core.constants.port_ephemeral_min + 1;", .new = "const port_span = core.constants.port_ephemeral_max - core.constants.port_ephemeral_min;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM23",
+        .what = "an octet of a dotted quad is summed whatever its digits",
+        .edits = .{
+            .{ .file = "src/core/address_text.zig", .old = "    if (text.len == 0 or text.len > constants.address_v4_octet_digits_max) return null;", .new = "    if (text.len == 0) return null;" },
+        },
+        .caught_by = .{ .step = "test-core" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM24",
+        .what = "the lengths strategy writes no length field at its most",
+        .edits = .{
+            .{ .file = "src/wire/fuzz/fuzz_generate.zig", .old = "        .lengths_at_most => records.write_lengths_at_most(&generator, out),", .new = "        .lengths_at_most => write_header(&generator, out)," },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM25",
+        .what = "a sixteen-bit length is written at 0xFFFF or 0xFFFD, and never at 0xFFFE",
+        .edits = .{
+            .{ .file = "src/wire/fuzz/fuzz_generate_records.zig", .old = "    writer.short(wide_most - @intFromBool(generator.coin()));", .new = "    writer.short(wide_most - 2 * @as(u16, @intFromBool(generator.coin())));" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM26",
+        .what = "a label of the lengths strategy says 62 octets, and never 63",
+        .edits = .{
+            .{ .file = "src/wire/fuzz/fuzz_generate_records.zig", .old = "        writer.octet(label_most);", .new = "        writer.octet(label_most - 1);" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM27",
+        .what = "a long message is one octet short of the longest, at most",
+        .edits = .{
+            .{ .file = "src/wire/fuzz/fuzz_generate.zig", .old = "    out.len = if (generator.coin()) long_message_bytes_max else long_message_bytes_min + generator.below(lengths);", .new = "    out.len = if (generator.coin()) long_message_bytes_max - 1 else long_message_bytes_min + generator.below(lengths);" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM28",
+        .what = "the last answer of a long message is owned by a pointer to offset 16382",
+        .edits = .{
+            .{ .file = "src/wire/fuzz/fuzz_generate.zig", .old = "    writer.short(pointer_to(long_name_at));", .new = "    writer.short(pointer_to(long_name_at - 1));" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM62",
+        .what = "a CAA tag that ends at the last octet of the rdata is refused",
+        .edits = .{
+            .{ .file = "src/wire/rdata/rdata_caa.zig", .old = "        if (tag_start + tag_length > rdata.len) return Error.MalformedMessage;", .new = "        if (tag_start + tag_length >= rdata.len) return Error.MalformedMessage;" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM63",
+        .what = "the OPT record of the lengths strategy is not counted in the header",
+        .edits = .{
+            .{ .file = "src/wire/fuzz/fuzz_generate_records.zig", .old = "    for ([_]u16{ 1, @intFromBool(!opt), 0, @intFromBool(opt) }) |count| writer.short(count);", .new = "    for ([_]u16{ 1, @intFromBool(!opt), 0, 0 }) |count| writer.short(count);" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM64",
+        .what = "a COOKIE option one octet past the longest is never written",
+        .edits = .{
+            .{ .file = "src/wire/fuzz/fuzz_generate_records.zig", .old = "    constants.cookie_option_long_bytes_max + 1,", .new = "    constants.cookie_option_long_bytes_max," },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM65",
+        .what = "a COOKIE option of 41 octets is read as the long form",
+        .edits = .{
+            .{ .file = "src/wire/edns.zig", .old = "        const long = len >= constants.cookie_option_long_bytes_min and len <= constants.cookie_option_long_bytes_max;", .new = "        const long = len >= constants.cookie_option_long_bytes_min and len <= constants.cookie_option_long_bytes_max + 1;" },
+        },
+        .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM66",
+        .what = "strategy_of draws the strategy of another seed than the one generate builds",
+        .edits = .{
+            .{ .file = "src/wire/fuzz/fuzz_generate.zig", .old = "    var generator = Generator.init(seed);\n    return draw_strategy(&generator);", .new = "    var generator = Generator.init(seed +% 1);\n    return draw_strategy(&generator);" },
+        },
+        .caught_by = .{ .step = "test-wire" },
     },
 }

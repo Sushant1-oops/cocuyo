@@ -333,3 +333,17 @@ test "skip refuses labels that leave a pointer no room for the root its name end
     try testing.expectError(Error.NameTooLong, decode(&one_past, before.len, &name));
     try testing.expectError(Error.NameTooLong, skip(&one_past, before.len));
 }
+
+test "a pointer to offset 16383, the farthest its fourteen bits reach, is followed" {
+    // A pointer's offset is the fourteen bits after its two kind bits (RFC 1035 §4.1.4), so
+    // 0x3FFF is the farthest name it names, and no pointer names an offset past it.
+    const target = constants.pointer_offset_mask;
+    var message: [target + name_example.len + constants.pointer_bytes]u8 = @splat(0);
+    @memcpy(message[target..][0..name_example.len], name_example);
+    const pointer_at = target + name_example.len;
+    integer.write_u16(&message, pointer_at, @as(u16, constants.label_kind_pointer) << constants.octet_bits | target);
+    var name: Name = Name.empty;
+    try testing.expectEqual(message.len, try decode(&message, pointer_at, &name));
+    try testing.expectEqualStrings(name_example, name.wire());
+    try testing.expectEqual(message.len, try skip(&message, pointer_at));
+}

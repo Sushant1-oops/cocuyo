@@ -20,7 +20,7 @@ pub const record_copy = @import("record_copy.zig");
 pub const response = @import("response.zig");
 pub const response_opt = @import("response_opt.zig");
 pub const rdata = @import("rdata/rdata.zig");
-pub const fuzz = @import("fuzz.zig");
+pub const fuzz = @import("fuzz/fuzz.zig");
 /// The hand-written corpus. Tests read it, and so does `bench/`, because a benchmark over a
 /// message the encoder built would measure the encoder's idea of a message rather than a
 /// server's.
@@ -55,6 +55,7 @@ test {
     _ = response_opt;
     _ = rdata;
     _ = fuzz;
-    _ = @import("fuzz_generate.zig");
-    _ = @import("fuzz_check.zig");
+    _ = @import("fuzz/fuzz_generate.zig");
+    _ = @import("fuzz/fuzz_generate_records.zig");
+    _ = @import("fuzz/fuzz_check.zig");
 }

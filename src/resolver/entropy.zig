@@ -126,6 +126,13 @@ test "the port hints spread over the range rather than clustering" {
     for (seen) |reached| try testing.expect(reached);
 }
 
+test "the two ends of the Dynamic range are drawn, and the span wraps after the last" {
+    // 49152 to 65535, both ends included (RFC 6335 §6).
+    try testing.expectEqual(core.constants.port_ephemeral_min, port_from(0));
+    try testing.expectEqual(core.constants.port_ephemeral_max, port_from(port_span - 1));
+    try testing.expectEqual(core.constants.port_ephemeral_min, port_from(port_span));
+}
+
 test "rotation picks a server inside the list" {
     var entropy = Entropy.init(3);
     var draws: usize = 0;

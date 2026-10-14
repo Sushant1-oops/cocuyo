@@ -54,3 +54,22 @@ test "an rdata that ends inside an option is malformed, and no options is no opt
     var none: Options = .{ .rdata = &.{} };
     try testing.expectEqual(@as(?Option, null), try none.next());
 }
+
+test "an option length of 0xFFFF or 0xFFFE is malformed in a short rdata, and its sum does not wrap" {
+    // The two largest values of the field (RFC 6891 §6.1.2). The data starts at octet 4, so each
+    // sum passes sixteen bits.
+    for ([_][constants.opt_option_fixed_bytes]u8{ .{ 0x00, 0x0a, 0xff, 0xff }, .{ 0x00, 0x0a, 0xff, 0xfe } }) |rdata| {
+        var options: Options = .{ .rdata = &rdata };
+        try testing.expectError(Error.MalformedMessage, options.next());
+    }
+}
+
+test "an option that fills the longest rdata is read whole" {
+    // An rdlength holds 65535 at most (RFC 1035 §4.1.3), and one option fills it.
+    var rdata: [core.constants.message_bytes_max]u8 = @splat(0);
+    const data_bytes = rdata.len - constants.opt_option_fixed_bytes;
+    integer.write_u16(&rdata, constants.opt_option_length_offset, @intCast(data_bytes));
+    var options: Options = .{ .rdata = &rdata };
+    try testing.expectEqual(data_bytes, (try options.next()).?.data.len);
+    try testing.expectEqual(@as(?Option, null), try options.next());
+}

@@ -177,3 +177,7 @@ pub const next_message_bytes: u16 = 32;
 /// The seed whose twin hands a message of `tiny_message_bytes`, its prefix and
 /// `next_message_octets` to the tiny engine as one chunk.
 pub const one_chunk_seed: u64 = 36;
+
+/// A wait short enough that seven servers that are down cost the twin's clock little, one try
+/// each (`io_sim_servers_test.zig`).
+pub const down_server_timeout_ns: u64 = 1_000_000_000;

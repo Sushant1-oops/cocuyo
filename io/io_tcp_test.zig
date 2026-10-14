@@ -327,3 +327,37 @@ test "a new opening resets the slot but what outlives it, and writes none of its
     for (slot.frame) |octet| try testing.expectEqual(untouched, octet);
     for (std.mem.asBytes(&slot.address)) |octet| try testing.expectEqual(untouched, octet);
 }
+
+test "a connection's incarnation wraps at the last of its thirty-two bits, and the opening before is nobody's" {
+    // The incarnation tells the events of the slot's current opening from those of the openings
+    // before it (docs/design.md §19 step 13, the stream's rule 2). An opening adds one, so the
+    // first one here runs at the largest incarnation, and the second wraps it to zero.
+    var rig: Rig = .{};
+    try rig.init(13, .{ .{ .truncate_per_256 = fixtures.always }, .{} }, .{ .servers = &.{} });
+    rig.engine.connections[0].incarnation = std.math.maxInt(u32) - 1;
+    _ = try rig.engine.start(question("one.example."), rig.loop.now());
+    try testing.expect((try rig.until_result()).outcome == .answer);
+    _ = rig.engine.take(rig.loop.now());
+    // Its events carried the largest incarnation above the slot, and each was the connection's.
+    try testing.expectEqual(@as(u32, std.math.maxInt(u32)), rig.engine.connections[0].incarnation);
+    try testing.expectEqual(@as(u8, 0), rig.engine.resolver.servers.failures(0));
+    // The connection closes once idle, and the next lookup opens the slot again.
+    _ = try rig.step(fixtures.tcp_idle_jump_ns);
+    _ = try rig.step(fixtures.tcp_idle_jump_ns);
+    rig.engine.drive(rig.loop.now());
+    try testing.expect(rig.engine.connections[0].state == .closed);
+    _ = try rig.engine.start(question("two.example."), rig.loop.now());
+    try testing.expect((try rig.until_result()).outcome == .answer);
+    try testing.expectEqual(@as(u32, 0), rig.engine.connections[0].incarnation);
+    try testing.expectEqual(@as(u8, 0), rig.engine.resolver.servers.failures(0));
+    // An event of the opening before: the largest incarnation above the slot.
+    const before: usize = @as(usize, std.math.maxInt(u32)) << io.constants.tcp_incarnation_shift;
+    const event: rotor.Event = .{ .user_data = 0, .result = 0, .flags = .{} };
+    try testing.expectEqual(@as(?u8, null), tcp.current_of(&rig.engine, before, event));
+    try testing.expectEqual(@as(?u8, 0), tcp.current_of(&rig.engine, 0, event));
+    // That incarnation above the last slot a connection may have is the largest index a
+    // `user_data` holds.
+    try testing.expectEqual(io.constants.index_mask, before | io.constants.tcp_slot_mask);
+    _ = rig.engine.take(rig.loop.now());
+    try rig.deinit();
+}

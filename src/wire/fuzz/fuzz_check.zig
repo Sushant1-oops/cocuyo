@@ -16,13 +16,15 @@
 const std = @import("std");
 const core = @import("core");
 const Name = core.Name;
-const header_codec = @import("header.zig");
-const name_codec = @import("name.zig");
-const question_codec = @import("question.zig");
-const record_codec = @import("record.zig");
-const response_codec = @import("response.zig");
-const record_copy = @import("record_copy.zig");
-const rdata = @import("rdata/rdata.zig");
+const header_codec = @import("../header.zig");
+const name_codec = @import("../name.zig");
+const question_codec = @import("../question.zig");
+const record_codec = @import("../record.zig");
+const response_codec = @import("../response.zig");
+const record_copy = @import("../record_copy.zig");
+const response_opt = @import("../response_opt.zig");
+const edns = @import("../edns.zig");
+const rdata = @import("../rdata/rdata.zig");
 
 /// How many offsets of one message the name decoder is aimed at. Every offset would be thorough
 /// and slow; thirty-two spread across the message reaches every structure the generator builds.
@@ -37,6 +39,7 @@ pub fn check(message: []const u8) ?[]const u8 {
     if (name_sweep(message)) |failure| return failure;
     if (question_check(message)) |failure| return failure;
     if (record_sweep(message)) |failure| return failure;
+    if (opt_check(message)) |failure| return failure;
     return response_check(message);
 }
 
@@ -158,6 +161,27 @@ fn record_sweep(message: []const u8) ?[]const u8 {
         if (walk.walked > core.constants.records_max) return "the walk read more records than the bound";
         previous = record.end;
         if (rdata_check(message, &record)) |failure| return failure;
+    }
+    return null;
+}
+
+/// The OPT record's options, as a lookup reads them (docs/design.md §7 check 6): each option's
+/// data lies inside the rdata, and a COOKIE read is one of the lengths RFC 7873 §4 allows.
+fn opt_check(message: []const u8) ?[]const u8 {
+    const question = Name.from_text(question_text) catch unreachable;
+    const opt = (response_opt.find(message, &question) catch return null) orelse return null;
+    const start = @intFromPtr(opt.rdata.ptr);
+    var options: rdata.Options = .{ .rdata = opt.rdata };
+    // Each option takes its code and its length at least, so the rdata's length bounds them.
+    for (0..opt.rdata.len + 1) |_| {
+        const option = (options.next() catch break) orelse break;
+        const at = @intFromPtr(option.data.ptr);
+        if (at < start or at + option.data.len > start + opt.rdata.len) return "an option's data lies outside its rdata";
+    }
+    const cookie = (edns.find_cookie(opt.rdata) catch return null) orelse return null;
+    const server = cookie.server.len;
+    if (server != 0 and (server < core.constants.cookie_server_bytes_min or server > core.constants.cookie_server_bytes_max)) {
+        return "a server cookie has a length neither form of the option allows";
     }
     return null;
 }

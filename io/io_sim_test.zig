@@ -38,6 +38,11 @@ pub fn tick_for(loop: *rotor.Loop, events: []rotor.Event, wait_ns: u64) !u32 {
 /// cache as large as the engine's table of lookups, which is the cache every rig's engine held
 /// while its options sized both.
 pub fn RigOf(comptime EngineType: type) type {
+    return RigOfServers(EngineType, fixtures.servers);
+}
+
+/// The same rig over `server_count` scripted servers, the twin's first.
+pub fn RigOfServers(comptime EngineType: type, comptime server_count: u8) type {
     return struct {
         const RigType = @This();
         const loop_options: rotor.Loop.Options = .{ .operations = EngineType.loop_operations };
@@ -47,15 +52,12 @@ pub fn RigOf(comptime EngineType: type) type {
         loop: rotor.Loop = undefined,
         memory: [0]u8 align(rotor.memory_alignment) = undefined,
         cache_memory: cocuyo.cache.Storage(cache_slots) = .{},
-        servers: [fixtures.servers]cocuyo.Server = .{
-            .{ .endpoint = endpoint_of(rotor.Network.server_address(0)) },
-            .{ .endpoint = endpoint_of(rotor.Network.server_address(1)) },
-        },
+        servers: [server_count]cocuyo.Server = servers_of(server_count),
         config: cocuyo.Config = undefined,
         engine: EngineType = undefined,
         events: [fixtures.events_max]rotor.Event = undefined,
 
-        pub fn init(rig: *RigType, seed: u64, scripts: [fixtures.servers]rotor.server.Script, config: cocuyo.Config) !void {
+        pub fn init(rig: *RigType, seed: u64, scripts: [server_count]rotor.server.Script, config: cocuyo.Config) !void {
             try rig.init_with(seed, scripts, config, rig.cache_memory.slices());
         }
 
@@ -64,15 +66,14 @@ pub fn RigOf(comptime EngineType: type) type {
         pub fn init_with(
             rig: *RigType,
             seed: u64,
-            scripts: [fixtures.servers]rotor.server.Script,
+            scripts: [server_count]rotor.server.Script,
             config: cocuyo.Config,
             cache_memory: ?cocuyo.cache.Slices,
         ) !void {
             try rig.loop.init(&rig.memory, loop_options);
             rig.loop.seed(seed);
-            rig.loop.network().scripts[0] = scripts[0];
-            rig.loop.network().scripts[1] = scripts[1];
-            rig.loop.network().server_count = fixtures.servers;
+            @memcpy(rig.loop.network().scripts[0..server_count], &scripts);
+            rig.loop.network().server_count = server_count;
             rig.config = config;
             rig.config.servers = &rig.servers;
             try rig.engine.init(&rig.loop, &rig.config, cache_memory, seed, rig.loop.now());
@@ -80,12 +81,11 @@ pub fn RigOf(comptime EngineType: type) type {
 
         /// A rig whose engine holds `config`, which other engines may hold too: a `Config` is read
         /// and never written (docs/design.md §24, a thread per core). Its servers are the twin's.
-        pub fn init_on(rig: *RigType, seed: u64, scripts: [fixtures.servers]rotor.server.Script, config: *const cocuyo.Config) !void {
+        pub fn init_on(rig: *RigType, seed: u64, scripts: [server_count]rotor.server.Script, config: *const cocuyo.Config) !void {
             try rig.loop.init(&rig.memory, loop_options);
             rig.loop.seed(seed);
-            rig.loop.network().scripts[0] = scripts[0];
-            rig.loop.network().scripts[1] = scripts[1];
-            rig.loop.network().server_count = fixtures.servers;
+            @memcpy(rig.loop.network().scripts[0..server_count], &scripts);
+            rig.loop.network().server_count = server_count;
             try rig.engine.init(&rig.loop, config, rig.cache_memory.slices(), seed, rig.loop.now());
         }
 
@@ -140,6 +140,13 @@ fn use_empty_contexts(engine: anytype) void {
 /// the twin's is.
 fn carries_nothing(comptime Transport: type) bool {
     return Transport.enabled and @typeInfo(Transport.Context).@"struct".fields.len == 0;
+}
+
+/// The twin's first `count` servers, as a configuration names them.
+fn servers_of(comptime count: u8) [count]cocuyo.Server {
+    var servers: [count]cocuyo.Server = undefined;
+    for (&servers, 0..) |*server, index| server.* = .{ .endpoint = endpoint_of(rotor.Network.server_address(index)) };
+    return servers;
 }
 
 pub fn endpoint_of(address: rotor.Address) cocuyo.Endpoint {
@@ -284,27 +291,39 @@ test "the timer follows the table's soonest deadline" {
     try rig.deinit();
 }
 
-test "the end of a timer the engine has replaced is not taken for the current one's" {
+test "the end of a timer the engine has replaced is not taken for the current one's, across the wrap" {
     // The table's deadline is a bound that never moves earlier while lookups wait (§11), so the
     // engine replaces a timer rarely; when it does, the old one's canceled end arrives after the
     // new one is armed (rotor decision 5, rule 2). The generation in the `user_data` is what
     // tells them apart, and this hands the engine an end from the timer before the current one.
+    // The generation starts one short of the last of its thirty-two bits. The first timer runs at
+    // the largest generation, and the second wraps it to zero.
     var rig: Rig = .{};
     try rig.init(9, .{ .{ .down = true }, .{ .down = true } }, .{ .servers = &.{}, .timeout_ns = 2_000_000_000, .attempts = 1 });
+    rig.engine.timer_generation = std.math.maxInt(u32) - 1;
     const started = try rig.engine.start(question("first.example."), rig.loop.now());
     _ = try rig.step(0);
+    try testing.expectEqual(@as(?u64, 2_000_000_000), rig.engine.timer_due_ns);
+    try testing.expectEqual(@as(u32, std.math.maxInt(u32)), rig.engine.timer_generation);
+    // That timer ends at the first server's deadline. The next one is armed for the second
+    // server's once the query to it has gone.
+    for (0..fixtures.until_rounds_max) |_| {
+        if (rig.engine.timer_handle != null and rig.loop.now() >= 2_000_000_000) break;
+        _ = try rig.step(2_000_000_000);
+    }
     const armed = rig.engine.timer_handle;
     try testing.expect(armed != null);
-    try testing.expectEqual(@as(?u64, 2_000_000_000), rig.engine.timer_due_ns);
+    try testing.expectEqual(@as(?u64, 4_000_000_000), rig.engine.timer_due_ns);
+    try testing.expectEqual(@as(u32, 0), rig.engine.timer_generation);
 
     const stale: rotor.Event = .{
-        .user_data = Resolver.user_data(.timer, rig.engine.timer_generation - 1),
+        .user_data = Resolver.user_data(.timer, rig.engine.timer_generation -% 1),
         .result = 0,
         .flags = .{},
     };
     try testing.expect(rig.engine.apply(stale, rig.loop.now()));
     try testing.expectEqual(armed, rig.engine.timer_handle);
-    try testing.expectEqual(@as(?u64, 2_000_000_000), rig.engine.timer_due_ns);
+    try testing.expectEqual(@as(?u64, 4_000_000_000), rig.engine.timer_due_ns);
 
     rig.engine.cancel(started, rig.loop.now());
     try testing.expectEqual(cocuyo.Error.Canceled, (try rig.until_result()).outcome.failure.err);

@@ -267,4 +267,19 @@ test "a COOKIE option of a length neither form allows is malformed" {
     try testing.expectError(Error.MalformedMessage, find_cookie(&fixtures.opt_cookie_nine_rdata));
     try testing.expectError(Error.MalformedMessage, find_cookie(&fixtures.opt_cookie_fifteen_rdata));
     try testing.expectError(Error.MalformedMessage, find_cookie(&fixtures.opt_cookie_forty_one_rdata));
+    // An option length of 0xFFFF runs past the rdata, whatever the option's code.
+    try testing.expectError(Error.MalformedMessage, find_cookie(&[_]u8{ 0x00, 0x0a, 0xff, 0xff } ++ fixtures.cookie_client));
+}
+
+test "a server cookie of 8 octets, the shortest, makes the long option of 16, and reads back" {
+    // With a server cookie "the length is variable -- from 16 to 40 bytes" (RFC 7873 §4): a client
+    // cookie of 8, and a server cookie of 8 to 32.
+    var out: [core.constants.opt_record_bytes_max]u8 = @splat(0);
+    const shortest = cookie_with(core.constants.cookie_server_bytes_min);
+    const written = write(core.constants.udp_payload_bytes_default, &shortest, &out);
+    const rdata = out[core.constants.opt_record_bytes..written];
+    try testing.expectEqual(constants.cookie_option_long_bytes_min, integer.read_u16(rdata, constants.opt_option_length_offset));
+    const view = (try find_cookie(rdata)).?;
+    try testing.expectEqualSlices(u8, &fixtures.cookie_client, view.client);
+    try testing.expectEqualSlices(u8, shortest.server[0..shortest.server_len], view.server);
 }

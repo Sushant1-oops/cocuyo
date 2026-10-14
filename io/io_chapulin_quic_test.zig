@@ -129,6 +129,14 @@ test "a server known by a name with no anchor to check it against is refused by 
     try testing.expectError(error.TlsFailed, started(&.{ .name = name }, &context, null));
 }
 
+test "chapulin starts a QUIC session for a server of four pins, the most a configuration names" {
+    // `spki_pins_max` is chapulin's own bound as well (docs/design.md §21), in QUIC as over TCP.
+    // Five pins are no valid configuration's, and the session asserts so before chapulin sees them.
+    var context: Context = .{ .session = test_context(&.{}, 0) };
+    const pins: [cocuyo.constants.spki_pins_max]cocuyo.Pin = @splat(@splat(pin_octet));
+    finish(try started(&.{ .pins = &pins }, &context, null));
+}
+
 /// The Initial CRYPTO data a session over `seed` owes first: its ClientHello.
 const Hello = struct {
     bytes: [hello_bytes_max]u8 = undefined,

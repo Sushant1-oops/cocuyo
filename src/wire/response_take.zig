@@ -183,3 +183,61 @@ test "an A question still keeps addresses, and a record of another type is not a
     try testing.expectEqual(Outcome.no_data, try collect_from(&fixtures.answer_a, .mx, &collected));
     try testing.expectEqual(@as(u8, 0), collected.count);
 }
+
+/// The TTL of every record `answer_of` writes.
+const written_ttl_seconds: u32 = 300;
+
+/// A response to `example.com` of type `kind`, its answers one record of that type for each of
+/// `rdatas`, each owned by a pointer to the question's name. Written into `out`.
+fn answer_of(out: []u8, kind: Kind, rdatas: []const []const u8) []const u8 {
+    const question_end = fixtures.answer_offset;
+    @memcpy(out[0..question_end], fixtures.answer_a[0..question_end]);
+    integer.write_u16(out, constants.header_ancount_offset, @intCast(rdatas.len));
+    integer.write_u16(out, question_end - core.constants.question_fixed_bytes, kind.code());
+    const owner = @as(u16, constants.label_kind_pointer) << constants.octet_bits | core.constants.header_bytes;
+    var at: usize = question_end;
+    for (rdatas) |octets| {
+        integer.write_u16(out, at, owner);
+        at += constants.pointer_bytes;
+        integer.write_u16(out, at + constants.record_kind_offset, kind.code());
+        integer.write_u16(out, at + constants.record_class_offset, core.constants.class_internet);
+        integer.write_u32(out, at + constants.record_ttl_offset, written_ttl_seconds);
+        integer.write_u16(out, at + constants.record_rdlength_offset, @intCast(octets.len));
+        at += core.constants.record_fixed_bytes;
+        @memcpy(out[at..][0..octets.len], octets);
+        at += octets.len;
+    }
+    return out[0..at];
+}
+
+test "a PTR answer keeps its one name, and a second PTR record sets truncated" {
+    // `ptr_names_max` is one, and `truncated` says when more existed (docs/design.md §17.2).
+    var buffer: [core.constants.udp_payload_bytes_default]u8 = undefined;
+    const message = answer_of(&buffer, .ptr, &.{ "\x05first\x07example\x00", "\x06second\x07example\x00" });
+    var collected: Answers = undefined;
+    try testing.expectEqual(Outcome.answered, try collect_from(message, .ptr, &collected));
+    try testing.expectEqual(@as(u8, core.constants.ptr_names_max), collected.count);
+    try testing.expect(collected.truncated);
+    try testing.expect(collected.names()[0].equal(&try Name.from_text("first.example")));
+    // One PTR record alone fills the list, and is not truncated.
+    try testing.expectEqual(Outcome.answered, try collect_from(answer_of(&buffer, .ptr, &.{"\x05first\x07example\x00"}), .ptr, &collected));
+    try testing.expect(!collected.truncated);
+}
+
+test "records that fill the rdata buffer to its last octet are kept, and one octet more sets truncated" {
+    // Two TXT records of 1024 octets each fill `rdata_bytes_max`, 2048, and a third of one octet,
+    // an empty string, does not fit (RFC 1035 §3.3.14).
+    const string = [_]u8{std.math.maxInt(u8)} ++ [_]u8{'x'} ** std.math.maxInt(u8);
+    const half = string ** (core.constants.rdata_bytes_max / 2 / string.len);
+    var buffer: [core.constants.udp_payload_bytes_default * 2]u8 = undefined;
+    var collected: Answers = undefined;
+    const full = answer_of(&buffer, .txt, &.{ &half, &half });
+    try testing.expectEqual(Outcome.answered, try collect_from(full, .txt, &collected));
+    try testing.expectEqual(@as(u8, 2), collected.count);
+    try testing.expect(!collected.truncated);
+    try testing.expectEqual(core.constants.rdata_bytes_max, collected.records().used);
+    const over = answer_of(&buffer, .txt, &.{ &half, &half, &.{0} });
+    try testing.expectEqual(Outcome.answered, try collect_from(over, .txt, &collected));
+    try testing.expectEqual(@as(u8, 2), collected.count);
+    try testing.expect(collected.truncated);
+}

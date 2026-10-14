@@ -1,10 +1,10 @@
 //! The fuzz target for the text parsers: one seed in, one text built by fuzz_generate.zig, its
 //! parser run over it by fuzz_check.zig (docs/design.md §13).
 //!
-//! The codec's target, `src/wire/fuzz.zig`, reads what the network sends. This one reads what the
-//! caller hands in: an address, a name, a `resolv.conf`, a hosts file and an SPKI pin. The caller
-//! is trusted and its files are not proof against a stray byte (SECURITY.md): a file with a
-//! malformed line must still configure a resolver, and nothing in it may trip an assertion.
+//! The codec's target, `src/wire/fuzz/fuzz.zig`, reads what the network sends. This one reads
+//! what the caller hands in: an address, a name, a `resolv.conf`, a hosts file and an SPKI pin.
+//! The caller is trusted and its files are not proof against a stray byte (SECURITY.md): a file
+//! with a malformed line must still configure a resolver, and nothing in it may trip an assertion.
 //!
 //! The gate is a test, so `zig build test` runs it over `seed_count` seeds and prints nothing
 //! unless a seed fails. `zig build fuzz -- --text --seed <hex>` runs one seed and prints the text

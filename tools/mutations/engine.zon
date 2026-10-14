@@ -1800,4 +1800,319 @@
         },
         .caught_by = .{ .step = "test-io" },
     },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM29",
+        .what = "the records buffer refuses a session that asks for all of it",
+        .edits = .{
+            .{ .file = "io/io_tls.zig", .old = "    if (room.len < Session.out_bytes_max) return null;", .new = "    if (room.len <= Session.out_bytes_max) return null;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM30",
+        .what = "the records buffer takes a session that asks for more than it holds",
+        .edits = .{
+            .{ .file = "io/io_tls.zig", .old = "    if (room.len < Session.out_bytes_max) return null;", .new = "    if (false and room.len < Session.out_bytes_max) return null;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM31",
+        .what = "the port span of the engine leaves out its last port",
+        .edits = .{
+            .{ .file = "io/io_udp.zig", .old = "    const span = cocuyo.constants.port_ephemeral_max - cocuyo.constants.port_ephemeral_min + 1;", .new = "    const span = cocuyo.constants.port_ephemeral_max - cocuyo.constants.port_ephemeral_min;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM32",
+        .what = "a TCP connection incarnation does not wrap",
+        .edits = .{
+            .{ .file = "io/io_tcp.zig", .old = "    connection.incarnation +%= 1;", .new = "    connection.incarnation += 1;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM33",
+        .what = "a receive generation does not wrap",
+        .edits = .{
+            .{ .file = "io/io_udp.zig", .old = "        self.next_generation +%= 1;", .new = "        self.next_generation += 1;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM34",
+        .what = "a socket epoch does not wrap",
+        .edits = .{
+            .{ .file = "io/io_udp.zig", .old = "        self.next_epoch +%= 1;", .new = "        self.next_epoch += 1;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM35",
+        .what = "a QUIC connection incarnation does not wrap",
+        .edits = .{
+            .{ .file = "io/io_request_connection.zig", .old = "    connection.incarnation +%= 1;", .new = "    connection.incarnation += 1;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM36",
+        .what = "a channel link incarnation does not wrap",
+        .edits = .{
+            .{ .file = "io/io_channel_link.zig", .old = "    state.incarnation +%= 1;", .new = "    state.incarnation += 1;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM37",
+        .what = "the timer generation does not wrap",
+        .edits = .{
+            .{ .file = "io/io_drive.zig", .old = "    self.timer_generation +%= 1;", .new = "    self.timer_generation += 1;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM38",
+        .what = "the index of a user_data loses its top bit",
+        .edits = .{
+            .{ .file = "io/constants.zig", .old = "pub const index_mask: u64 = (1 << kind_shift) - 1;", .new = "pub const index_mask: u64 = (1 << (kind_shift - 1)) - 1;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM39",
+        .what = "the pins a configuration may name pass chapulin's bound",
+        .edits = .{
+            .{ .file = "src/core/constants.zig", .old = "pub const spki_pins_max: usize = 4;", .new = "pub const spki_pins_max: usize = 5;" },
+        },
+        .caught_by = .{ .step = "test-chapulin" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM40",
+        .what = "the pins a configuration may name pass chapulin's bound, in QUIC",
+        .edits = .{
+            .{ .file = "src/core/constants.zig", .old = "pub const spki_pins_max: usize = 4;", .new = "pub const spki_pins_max: usize = 5;" },
+        },
+        .caught_by = .{ .step = "test-chapulin-quic" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM41",
+        .what = "one read of a QUIC connection takes one event more than its bound",
+        .edits = .{
+            .{ .file = "io/io_request_events.zig", .old = "    const events_max = self.requests.len + constants.quic_connection_events_max;", .new = "    const events_max = self.requests.len + constants.quic_connection_events_max + 1;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM42",
+        .what = "one read of a QUIC connection takes one event fewer than its bound",
+        .edits = .{
+            .{ .file = "io/io_request_events.zig", .old = "    const events_max = self.requests.len + constants.quic_connection_events_max;", .new = "    const events_max = self.requests.len + constants.quic_connection_events_max - 1;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM43",
+        .what = "one read of a channel takes one event more than its bound",
+        .edits = .{
+            .{ .file = "io/io_channel.zig", .old = "    const events_max = self.requests.len + constants.channel_events_max;", .new = "    const events_max = self.requests.len + constants.channel_events_max + 1;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM44",
+        .what = "one read of a channel takes one event fewer than its bound",
+        .edits = .{
+            .{ .file = "io/io_channel.zig", .old = "    const events_max = self.requests.len + constants.channel_events_max;", .new = "    const events_max = self.requests.len + constants.channel_events_max - 1;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM45",
+        .what = "a DoH status of 299 is no answer",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_exchange.zig", .old = "    if (exchange.status < constants.status_success_first or exchange.status > constants.status_success_last) return null;", .new = "    if (exchange.status < constants.status_success_first or exchange.status >= constants.status_success_last) return null;" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM46",
+        .what = "a DoH status of 300 is an answer",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_exchange.zig", .old = "    if (exchange.status < constants.status_success_first or exchange.status > constants.status_success_last) return null;", .new = "    if (exchange.status < constants.status_success_first or exchange.status > constants.status_success_last + 1) return null;" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM47",
+        .what = "the values buffer of a DoH exchange is one octet short",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_exchange.zig", .old = "    values: [constants.values_bytes]u8 = undefined,", .new = "    values: [constants.values_bytes - 1]u8 = undefined," },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM48",
+        .what = "a datagram that fills what the DoH channel keeps is dropped",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_read.zig", .old = "            if (bytes.len > self.inbound.len) return;", .new = "            if (bytes.len >= self.inbound.len) return;" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM49",
+        .what = "stream octets that fill what the DoH channel keeps overrun it",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_read.zig", .old = "            if (self.stream_len + bytes.len > self.stream.len) {", .new = "            if (self.stream_len + bytes.len >= self.stream.len) {" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM50",
+        .what = "the start check expands a template into one octet less than the path buffer",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_exchange.zig", .old = "    var path: [doh.constants.doh_request_bytes_max]u8 = undefined;", .new = "    var path: [doh.constants.doh_request_bytes_max - 1]u8 = undefined;" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM51",
+        .what = "the start check expands a template into one octet more than the path buffer",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_exchange.zig", .old = "    var path: [doh.constants.doh_request_bytes_max]u8 = undefined;", .new = "    var path: [doh.constants.doh_request_bytes_max + 1]u8 = undefined;" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM52",
+        .what = "a TLS connection queue holds one entry fewer than a query for each lookup and two of records",
+        .edits = .{
+            .{ .file = "io/io_tcp.zig", .old = "        queue: queue_module.Queue(lookups + constants.tls_records_entries_max) = .{},", .new = "        queue: queue_module.Queue(lookups + constants.tls_records_entries_max - 1) = .{}," },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM53",
+        .what = "records made behind an entry of records that has not started do not join it",
+        .edits = .{
+            .{ .file = "io/io_tls.zig", .old = "    if (queue.sealed > 1 and !queue.at(queue.sealed - 1).is_query()) {", .new = "    if (false and queue.sealed > 1 and !queue.at(queue.sealed - 1).is_query()) {" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM54",
+        .what = "the server index of a receive keeps two bits",
+        .edits = .{
+            .{ .file = "io/constants.zig", .old = "pub const receive_index_mask: usize = (1 << receive_generation_shift) - 1;", .new = "pub const receive_index_mask: usize = (1 << (receive_generation_shift - 6)) - 1;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM55",
+        .what = "the twin opens one socket fewer than its bound",
+        .edits = .{
+            .{ .file = "src/sim/sim_network.zig", .old = "        for (&self.sockets, 0..) |*entry, index| {", .new = "        for (self.sockets[0 .. constants.sockets_max - 1], 0..) |*entry, index| {" },
+        },
+        .caught_by = .{ .step = "test-sim" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM56",
+        .what = "the twin holds one datagram fewer than its bound",
+        .edits = .{
+            .{ .file = "src/sim/sim_network.zig", .old = "        for (&self.datagrams) |*entry| {\n            if (!entry.live) {", .new = "        for (self.datagrams[0 .. constants.datagrams_pending_max - 1]) |*entry| {\n            if (!entry.live) {" },
+        },
+        .caught_by = .{ .step = "test-sim" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM57",
+        .what = "the twin opens one connection fewer than its bound",
+        .edits = .{
+            .{ .file = "src/sim/sim_network.zig", .old = "        for (&self.connections, 0..) |*entry, index| {", .new = "        for (self.connections[0 .. constants.connections_max - 1], 0..) |*entry, index| {" },
+        },
+        .caught_by = .{ .step = "test-sim" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM58",
+        .what = "the twin opens one QUIC peer fewer than its bound",
+        .edits = .{
+            .{ .file = "src/sim/sim_network.zig", .old = "        for (&self.quic_peers) |*entry| {\n            if (entry.open) continue;", .new = "        for (self.quic_peers[0 .. constants.connections_max - 1]) |*entry| {\n            if (entry.open) continue;" },
+        },
+        .caught_by = .{ .step = "test-sim" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM59",
+        .what = "a stream of the twin refuses octets that fill it",
+        .edits = .{
+            .{ .file = "src/sim/sim_network.zig", .old = "        if (!stream.open or stream.inbound.len - stream.inbound_len < bytes.len) return false;", .new = "        if (!stream.open or stream.inbound.len - stream.inbound_len <= bytes.len) return false;" },
+        },
+        .caught_by = .{ .step = "test-sim" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM60",
+        .what = "the engine keeps a UDP socket for seven servers",
+        .edits = .{
+            .{ .file = "io/io_udp.zig", .old = "    items: [cocuyo.constants.servers_max]Socket,", .new = "    items: [cocuyo.constants.servers_max - 1]Socket," },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM61",
+        .what = "the engine keeps a TLS ticket for seven servers",
+        .edits = .{
+            .{ .file = "io/io.zig", .old = "        tls_tickets: [cocuyo.constants.servers_max]?tls.Kept(options.tls),", .new = "        tls_tickets: [cocuyo.constants.servers_max - 1]?tls.Kept(options.tls)," },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM67",
+        .what = "one drive polls a lookup 48 times at most, one under the most a run reaches",
+        .edits = .{
+            .{ .file = "io/constants.zig", .old = "pub const drive_polls_per_lookup_max: usize = 2 * core.constants.servers_max * core.constants.attempts_max + 1;", .new = "pub const drive_polls_per_lookup_max: usize = core.constants.servers_max * (core.constants.attempts_max + 1);" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "Tests at the named limits",
+        .id = "LM68",
+        .what = "the buffers of the datagram group are 1536 octets",
+        .edits = .{
+            .{ .file = "io/constants.zig", .old = "pub const buffer_bytes: usize = 2048;", .new = "pub const buffer_bytes: usize = 1536;" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
 }

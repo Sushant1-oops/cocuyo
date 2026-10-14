@@ -184,3 +184,33 @@ test "the channel is read when a link's socket ends, and tells then what it held
     _ = rig.engine.take(rig.loop.now());
     try rig.deinit();
 }
+
+test "a link's incarnation wraps at the last of its thirty-two bits, and each opening connects" {
+    // The incarnation tells the events of the link's current opening from those of the openings
+    // before it, as the stream's rule 2 has it for a TCP connection (docs/design.md §19 step 13).
+    // An opening adds one, so the first one here runs at the largest incarnation, and the second
+    // wraps it to zero.
+    var rig: Rig = .{};
+    try start(&rig, 109, .{ slow, .{} });
+    const handle = try rig.engine.start(question("example.com."), rig.loop.now());
+    const link = &rig.engine.doh.slots[0].links[1];
+    link.incarnation = std.math.maxInt(u32) - 1;
+    try tell(&rig, 0, .{ .open = .tcp });
+    try testing.expectEqual(@as(u32, std.math.maxInt(u32)), link.incarnation);
+    _ = try rig.step(fixtures.slow_connect_ns);
+    try testing.expect(link.state == .running);
+    try tell(&rig, 0, .{ .close = .tcp });
+    for (0..fixtures.until_rounds_max) |_| {
+        if (link.state == .down) break;
+        _ = try rig.step(fixtures.channel_read_ns);
+    }
+    try testing.expect(link.state == .down);
+    try tell(&rig, 0, .{ .open = .tcp });
+    try testing.expectEqual(@as(u32, 0), link.incarnation);
+    _ = try rig.step(fixtures.slow_connect_ns);
+    try testing.expect(link.state == .running);
+    rig.engine.cancel(handle, rig.loop.now());
+    _ = try rig.until_result();
+    _ = rig.engine.take(rig.loop.now());
+    try rig.deinit();
+}

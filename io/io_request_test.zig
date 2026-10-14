@@ -213,3 +213,111 @@ test "a receive that runs out of buffers is armed again, and fails nothing" {
     _ = rig.engine.take(rig.loop.now());
     try rig.deinit();
 }
+
+test "a QUIC connection's incarnation wraps at the last of its thirty-two bits, and each opening answers" {
+    // The incarnation tells the events of the current opening from those of the openings before
+    // it, as the stream's rule 2 has it for a TCP connection (docs/design.md §19 step 13). An
+    // opening adds one, so the first one here runs at the largest incarnation, and the second
+    // wraps it to zero.
+    var rig: Rig = .{};
+    try start(&rig, 69, .{ .{}, .{} });
+    rig.engine.quic.connections[0].incarnation = std.math.maxInt(u32) - 1;
+    try answer(&rig, "one.example.");
+    try testing.expectEqual(@as(u32, std.math.maxInt(u32)), rig.engine.quic.connections[0].incarnation);
+    try testing.expectEqual(@as(u8, 0), rig.engine.resolver.servers.failures(0));
+    try idle(&rig);
+    _ = try rig.step(fixtures.wait_ns);
+    try testing.expect(rig.engine.quic.connections[0].state == .closed);
+    try answer(&rig, "two.example.");
+    try testing.expectEqual(@as(u32, 0), rig.engine.quic.connections[0].incarnation);
+    try testing.expectEqual(@as(u8, 0), rig.engine.resolver.servers.failures(0));
+    try rig.deinit();
+}
+
+/// The twin's connection, which says `flood` tickets of its own before anything the twin says, as
+/// a connection whose server sends a flood of them would. Its timer is due while it has any left.
+const Flooding = struct {
+    const Twin = rotor.quic.Connection;
+    pub const enabled = true;
+    pub const output_bytes_max = Twin.output_bytes_max;
+    pub const request_bytes_max = Twin.request_bytes_max;
+    pub const Error = Twin.Error;
+    pub const Context = Twin.Context;
+    pub const Ticket = Twin.Ticket;
+    pub const Answered = Twin.Answered;
+    pub const Next = Twin.Next;
+
+    twin: Twin = .{},
+    flood: usize = 0,
+    said: usize = 0,
+
+    pub fn start(self: *Flooding, context: anytype) Error!void {
+        return self.twin.start(context);
+    }
+    pub fn lifetime_ns(ticket: *const Ticket) u64 {
+        return Twin.lifetime_ns(ticket);
+    }
+    pub fn receive(self: *Flooding, bytes: []const u8, now_ns: u64) Error!void {
+        return self.twin.receive(bytes, now_ns);
+    }
+    pub fn next(self: *Flooding, out: []u8) ?Next {
+        if (self.flood == 0) return self.twin.next(out);
+        self.flood -= 1;
+        self.said += 1;
+        return .{ .ticket = .{} };
+    }
+    pub fn request(self: *Flooding, bytes: []u8, len: usize) Error!?u64 {
+        return self.twin.request(bytes, len);
+    }
+    pub fn cancel(self: *Flooding, stream: u64) void {
+        self.twin.cancel(stream);
+    }
+    pub fn output(self: *Flooding, out: []u8, now_ns: u64) usize {
+        return self.twin.output(out, now_ns);
+    }
+    pub fn deadline(self: *const Flooding) ?u64 {
+        return if (self.flood > 0) 0 else self.twin.deadline();
+    }
+    pub fn expire(self: *Flooding, now_ns: u64) void {
+        if (self.flood == 0) self.twin.expire(now_ns);
+    }
+    pub fn idle_left_ns(self: *const Flooding, now_ns: u64) u64 {
+        return self.twin.idle_left_ns(now_ns);
+    }
+    pub fn close(self: *Flooding) void {
+        self.twin.close();
+    }
+    pub fn wipe(self: *Flooding) void {
+        self.twin.wipe();
+    }
+};
+
+const FloodingRig = sim_test.RigOf(io.Resolver(.{
+    .lookups = fixtures.small_lookups,
+    .group_buffers = fixtures.group_buffers,
+    .tcp_connections = 0,
+    .quic = Flooding,
+}));
+
+test "one read of a connection takes an end for each request and 16 of its own, and the rest at the next" {
+    // `quic_connection_events_max`: what a flood leaves is read with the next datagram or expiry
+    // (docs/design.md §24, New limits). Here the connection says one ticket more than one read
+    // takes.
+    const request_events = @import("io_request_events.zig");
+    var rig: FloodingRig = .{};
+    const quic: cocuyo.Tls = .{ .name = try cocuyo.Name.from_text("dns.example.") };
+    for (&rig.servers) |*server| server.quic = quic;
+    try rig.init(70, .{ .{}, .{} }, .{ .servers = &.{}, .timeout_ns = fixtures.stream_timeout_ns, .timeout_ns_max = fixtures.stream_timeout_ns, .failover_retry_chance = 0 });
+    rig.use_test_contexts();
+    _ = try rig.engine.start(question("example.com."), rig.loop.now());
+    try testing.expect((try rig.until_result()).outcome == .answer);
+    _ = rig.engine.take(rig.loop.now());
+    const transport = &rig.engine.quic.connections[0].transport;
+    const per_read = rig.engine.requests.len + io.constants.quic_connection_events_max;
+    transport.flood = per_read + 1;
+    request_events.expire_due(&rig.engine, rig.loop.now());
+    try testing.expectEqual(per_read, transport.said);
+    request_events.expire_due(&rig.engine, rig.loop.now());
+    try testing.expectEqual(per_read + 1, transport.said);
+    try rig.deinit();
+}

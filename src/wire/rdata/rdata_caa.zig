@@ -64,3 +64,18 @@ test "RFC 8659 §4.2's CAAs read back as their flags, tag and value, the one tha
     try testing.expectEqualStrings("issue", none.tag);
     try testing.expectEqualStrings(";", none.value);
 }
+
+test "a tag of 255 octets, the longest its length octet says, reads back, and one octet short is malformed" {
+    // The tag length is "A single octet" (RFC 8659 §4.1), so 255 is the longest. The tag ends at
+    // octet 257, after the flags and the length.
+    const longest = std.math.maxInt(u8);
+    const rdata = [_]u8{ 0, longest } ++ [_]u8{'a'} ** longest ++ "v".*;
+    const caa = try Caa.parse(&rdata);
+    try testing.expectEqual(@as(usize, longest), caa.tag.len);
+    try testing.expectEqualStrings("v", caa.value);
+    // A tag that ends at the last octet of the rdata leaves an empty value, and reads back too.
+    const bare = try Caa.parse(rdata[0 .. rdata.len - 1]);
+    try testing.expectEqual(@as(usize, longest), bare.tag.len);
+    try testing.expectEqual(@as(usize, 0), bare.value.len);
+    try testing.expectError(Error.MalformedMessage, Caa.parse(rdata[0 .. rdata.len - 2]));
+}

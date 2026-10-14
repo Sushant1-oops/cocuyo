@@ -384,3 +384,35 @@ test "the scripted servers sit at the documentation range, in order" {
     try testing.expectEqual(@as(?u8, 0), network.server_of(&Address.ipv4(.{ 192, 0, 2, 53 }, constants.server_tcp_port)));
     try testing.expectEqual(@as(?u8, null), network.server_of(&Address.ipv4(.{ 192, 0, 2, 53 }, 1053)));
 }
+
+test "the twin opens 64 sockets, and refuses the 65th" {
+    network.reset();
+    for (0..constants.sockets_max) |_| _ = try open_socket(.ipv4);
+    try testing.expectError(error.DescriptorLimit, open_socket(.ipv4));
+}
+
+test "the twin holds 256 datagrams on their way, and drops the 257th" {
+    network.reset();
+    for (0..constants.datagrams_pending_max) |_| try testing.expect(network.reply(0, 0, "x", 0));
+    try testing.expect(!network.reply(0, 0, "x", 0));
+}
+
+test "the twin holds 16 connections and 16 QUIC peers, and refuses the 17th of each" {
+    network.reset();
+    for (0..constants.connections_max) |index| {
+        try testing.expect(network.open_connection(@intCast(index), 0, .plain) != null);
+        try testing.expect(network.quic_peer(@intCast(index), 0) != null);
+    }
+    try testing.expectEqual(@as(?u8, null), network.open_connection(constants.connections_max, 0, .plain));
+    try testing.expectEqual(@as(?*QuicPeer, null), network.quic_peer(constants.connections_max, 0));
+}
+
+test "a stream holds 16384 octets the client has not read, and refuses one more" {
+    network.reset();
+    const descriptor = try open_socket(.ipv4);
+    defer close_now(descriptor);
+    network.socket(descriptor).connection = network.open_connection(descriptor, 0, .plain);
+    const octets: [constants.stream_bytes_max]u8 = @splat(0);
+    try testing.expect(network.write_stream(descriptor, &octets, 0));
+    try testing.expect(!network.write_stream(descriptor, octets[0..1], 0));
+}

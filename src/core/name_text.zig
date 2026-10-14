@@ -134,3 +134,20 @@ test "write escapes a dot, a backslash and a byte outside printable ASCII" {
     const high = "\x02\xff\x01\x00";
     try testing.expectEqualStrings("\\255\\001.", out[0..write(high, &out)]);
 }
+
+test "the longest text a name gives, 1004 octets, fits the buffer" {
+    // A name holds 255 octets at most (RFC 1035 §2.3.4). Four labels of 63, 63, 63 and 61 octets
+    // carry 250 octets, the most a name carries. Each octet 0xff is written as `\255`, so the text
+    // is 1000 octets and four dots. More labels carry fewer octets, so no name gives a longer text.
+    // `name_text_bytes_max` keeps 16 octets to spare.
+    const longest = constants.label_bytes_max;
+    const last = constants.name_bytes_max - 1 - 3 * (1 + longest) - 1;
+    const label = [_]u8{longest} ++ [_]u8{0xff} ** longest;
+    const wire = label ** 3 ++ [_]u8{last} ++ [_]u8{0xff} ** last ++ [_]u8{0};
+    comptime std.debug.assert(wire.len == constants.name_bytes_max);
+    var out: [constants.name_text_bytes_max]u8 = undefined;
+    const written = write(&wire, &out);
+    try testing.expectEqual(@as(usize, 1004), written);
+    try testing.expectEqualStrings("\\255", out[0 .. 1 + escape_digits]);
+    try testing.expectEqual(@as(u8, separator), out[written - 1]);
+}

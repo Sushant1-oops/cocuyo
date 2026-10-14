@@ -380,6 +380,28 @@ test "a file longer than the line bound stops there" {
     try testing.expectEqualSlices(u8, &.{ 127, 0, 0, 1 }, config.servers[0].endpoint.address.slice());
 }
 
+test "the line at the bound is read, and the line after it is not" {
+    // `lines_max` lines are read. Here the last of them names one server and the next line another.
+    var storage: Storage = .{};
+    const text = "#\n" ** (constants.lines_max - 1) ++ "nameserver 192.0.2.53\nnameserver 192.0.2.54\n";
+    const config = parse_text(text, &storage);
+    try testing.expectEqual(@as(usize, 1), config.servers.len);
+    try testing.expectEqualSlices(u8, &.{ 192, 0, 2, 53 }, config.servers[0].endpoint.address.slice());
+}
+
+test "the option at the bound is read, and the option after it is not, on a line and in RES_OPTIONS" {
+    // `options_max` tokens are read: here the last of them is `ndots:3`, and `attempts:4` the next.
+    const tokens = " x" ** (constants.options_max - 1) ++ " ndots:3 attempts:4";
+    var storage: Storage = .{};
+    const config = parse_text("options" ++ tokens ++ "\n", &storage);
+    try testing.expectEqual(@as(u8, 3), config.ndots);
+    try testing.expectEqual(core.constants.attempts_default, config.attempts);
+    var applied = parse_text("", &storage);
+    apply_options(tokens, &applied);
+    try testing.expectEqual(@as(u8, 3), applied.ndots);
+    try testing.expectEqual(core.constants.attempts_default, applied.attempts);
+}
+
 test "the configuration a parse returns is one the state machine accepts" {
     var storage: Storage = .{};
     const config = parse_text(

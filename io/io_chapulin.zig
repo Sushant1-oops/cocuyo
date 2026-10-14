@@ -446,3 +446,13 @@ test "the ticket a session would resume with is zeroed when its start fails" {
     try testing.expect(std.mem.allEqual(u8, std.mem.asBytes(&session.resuming), 0));
     try testing.expect(!session.started);
 }
+
+test "chapulin starts a session for a server of four pins, the most a configuration names, and refuses five" {
+    // `spki_pins_max` is chapulin's own bound as well (docs/design.md §21). A server of four pins
+    // starts. Five pins, which no valid configuration names, are refused at the start.
+    var context = test_context(&.{}, test_seed_octet);
+    const pins: [cocuyo.constants.spki_pins_max + 1]cocuyo.Pin = @splat(@splat(pin_octet));
+    const most = try started(&.{ .pins = pins[0..cocuyo.constants.spki_pins_max] }, &context);
+    finish(most);
+    try testing.expectError(Session.Error.Failed, started(&.{ .pins = &pins }, &context));
+}

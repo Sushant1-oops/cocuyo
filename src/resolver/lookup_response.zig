@@ -461,3 +461,19 @@ test "a truncated response over TCP is read, marked truncated, and not a reason 
     // missing from it all the same, so it is marked, and no cache keeps it (RFC 1035 §7.4).
     try testing.expect(harness.poll().done.truncated);
 }
+
+test "a message of 65535 octets is read, and one of 65536 is ignored at check 1" {
+    // The longest message a length prefix describes (RFC 1035 §4.2.2). The answer sits at the
+    // front, and the codec reads nothing after the last record the counts name.
+    var harness: fixtures.Harness = .{ .config = .{ .servers = &servers } };
+    try harness.start("example.com.", .a, seed);
+    _ = harness.send();
+    var message: [core.constants.message_bytes_max + 1]u8 = @splat(0);
+    const reply = harness.build(fixtures.answer_a);
+    @memcpy(message[0..reply.len], reply);
+    try testing.expectEqual(Verdict.ignored, harness.lookup.on_response(&message, servers[0].endpoint, harness.now_ns));
+    try testing.expect(harness.poll() == .wait);
+    const longest = message[0..core.constants.message_bytes_max];
+    try testing.expectEqual(Verdict.accepted, harness.lookup.on_response(longest, servers[0].endpoint, harness.now_ns));
+    try testing.expect(harness.poll() == .done);
+}

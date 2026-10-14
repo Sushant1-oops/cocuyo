@@ -172,3 +172,16 @@ test "the size of a slot is pinned" {
     try testing.expectEqual(@as(usize, 3088), @sizeOf(Slot));
     try testing.expectEqual(@as(usize, 4), @sizeOf(Handle));
 }
+
+test "a generation of 0xFFFF wraps to zero at the release, and the slot is handed out again" {
+    // The generation has sixteen bits. So a handle kept across exactly 65536 releases of its slot
+    // names the slot again.
+    var items: [1]Slot = @splat(.{});
+    var slots = Slots.init(&items);
+    const index = slots.acquire().?;
+    items[index].generation = std.math.maxInt(u16);
+    slots.release(index);
+    try testing.expectEqual(@as(u16, 0), items[index].generation);
+    try testing.expectEqual(@as(?u16, index), slots.acquire());
+    try testing.expectEqual(@as(u16, 0), slots.handle_of(index).generation);
+}

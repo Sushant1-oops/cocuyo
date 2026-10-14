@@ -289,7 +289,7 @@ The architecture depends on every rule in this section.
   `coverage` job runs it and pushes the badge to the `badges` branch.
   `zig build coverage-binaries -Dtarget=<arch>-linux-gnu` installs the test binaries alone, for
   kcov in a Linux container on another host.
-- Fuzz: `zig build test` runs both fuzz targets' gates, the codec's (`src/wire/fuzz.zig`) and
+- Fuzz: `zig build test` runs both fuzz targets' gates, the codec's (`src/wire/fuzz/`) and
   the text parsers' (`src/config/fuzz/`). `zig build fuzz -- [--text] --seed <hex>` runs one
   seed and prints what it built; `zig build fuzz-gate -- [--text] [<count> [<first>]]` runs a
   range, ReleaseSafe.

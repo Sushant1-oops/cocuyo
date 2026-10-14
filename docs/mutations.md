@@ -5210,3 +5210,294 @@ to ET18, and each is `CAUGHT`.
 | SB26 | the length of a whole message is read from a prefix before both its octets have come | the stream's rule 11 | the whole-frame test and the test of a frame over TLS of empty messages, each by a slice past its end, `test-io` | CAUGHT |
 | SB27 | a prefix too long over TLS closes the connection at once, its `close_notify` unsaid | §21, TLS rule 5; RFC 9846 §6.1 | the test of a long prefix over TLS, `test-io` | CAUGHT |
 | SB28 | a connection that quits stages no `close_notify`, and closes at once | TLS rule 5; RFC 9846 §6.1 | the test of a long prefix over TLS, `test-io` | CAUGHT |
+
+## Tests at the named limits
+
+2026-10-13. A survey of that day listed each named limit that no test reached at its value. The
+survey is not in the repository, so this section names each limit in words. This change adds a
+test at each limit on that list. Each test is at the limit, and one past it when one past exists.
+Each test is in the file that holds the check. The tests of an engine check are in the test file
+of its part, as before. No check changed, and no limit changed. The codec's fuzz target has two
+more strategies, and a check of the OPT record.
+
+This change read each claim of the survey again against 356eeb7, which fixed the faults of the
+section above:
+
+- The survey named `tcp_messages_per_chunk_max` and `tls_records_per_chunk_max`. 356eeb7 removed
+  both. `tcp_messages_per_frame_max` and `tls_records_per_buffer_max` replace them, and the tests
+  of SB9 and SB12 reach those.
+- The back-to-back records test of 356eeb7 takes a whole record of 16,640 octets, the most that
+  `tls_record_body_bytes_max` allows. It fills the record buffer too (SB1).
+- `labels_max` in `skip` is out of reach. Since 356eeb7, `skip` counts octets. A name of 128 labels
+  and a root has more than 255 octets, so the octet check refuses it first. The skip tests of
+  356eeb7 reach the octet bound (SB19 to SB21).
+- `doh_stream_bytes` changed in 356eeb7, to a record at its longest and one chunk. The new test
+  fills that size.
+- A test reaches `hosts_names_bytes_max` already, as the survey says.
+- One octet past `tls_records_out_bytes` fails each server, and not the first server alone, as the
+  survey says. The session asks for its room each time that a connection opens, and the buffer
+  has less room than that for each server.
+
+Left out:
+
+- A table at `lookup_slots_max`. The bench test holds it, as the survey says.
+- A cache at `slots_max`. Its slots take 49 MB.
+- An answer of 65,535 octets through colibri, and a QUIC datagram of 1,500 octets. Their cost is
+  moderate, and their value is low.
+- `sweep_steps_max`. The survey gives it for information only.
+
+One past does not exist for these limits:
+
+- `name_text_bytes_max`: no name gives more than 1,004 octets of text, 16 under the bound.
+- `pointer_offset_mask`: fourteen bits name no offset past 16,383.
+- A TTL of 0xFFFFFFFF, `Slot.generation` and the engine's counters: each value fills its type. A
+  TTL of 0xFFFFFFFF is the largest, and each counter's test is at its wrap.
+- `spki_pins_max` over QUIC: five pins are not a valid configuration, and the QUIC session asserts
+  that. Over TCP the session gives the pins to chapulin, and chapulin refuses five.
+- `values_bytes` of `cocuyo_doh`: one past is colibri's check. The test of 283 octets reached it
+  before, and the new test of 257 octets reaches it too.
+- `tls_records_entries_max`: one past is a third entry of records. The join rule prevents it, and
+  LM53 breaks that rule.
+- The twin's `sockets_max`, `datagrams_pending_max` and `connections_max`: one past each array is
+  not a slot.
+- `drive_polls_per_lookup_max`: no run gives one lookup more than 49 polls in one drive, as the
+  next part shows.
+
+### The wrap of the engine's counters
+
+The wrap tests of the TCP connection, the QUIC connection, the channel link and the timer start
+each counter at 0xFFFFFFFE. So a real connection, link or timer runs at 0xFFFFFFFF, and the next
+one wraps the counter to zero. Before, each test started at 0xFFFFFFFF. The first connection
+wrapped the counter before any event carried it, and the test made the event at 0xFFFFFFFF itself.
+
+The test of the receive's generation now requires its second lookup to end before its deadline,
+with no failure against the server. Before, a receive that did not find its socket lost the
+answer. The lookup then asked again, and the test passed all the same.
+
+So LM38 is caught on the path of each event now. The receive test fails, and the TCP, QUIC and
+link tests stop at the assertion in `user_data`. The timer's index has no bits above the
+thirty-two of its generation, so LM38 cannot reach it.
+
+### The drive's bound
+
+`drive_polls_per_lookup_max` is 81: two polls for each server and pass, and one more. A new test
+in `io_sim_servers_test.zig` finds the most polls that one drive gives one lookup. Eight
+servers each have a connection that is up, and the loop refuses each send:
+
+- The first try at a server costs two polls: one for the connection, and one for the send.
+- The refused send fails the connection.
+- Each later try at that server costs one poll, because no slot is free for a new connection.
+
+So the drive gives the lookup 8 × 2 + 8 × 4 + 1 = 49 polls, and the lookup ends in that drive. A
+bound of 48 leaves the lookup on the ready list, and the test fails (LM67). With a bound of 49 or
+more, every test passes. A drive with output added by hand printed 49 polls of 81 for this case.
+That 49 is the most comes from a read of the drive, and not from a measurement of each case. So
+32 polls of the bound are slack. Whether to lower it to 49 is a question for the owner, because it
+changes a named limit (CLAUDE.md, Ask before; docs/design.md §17 question 39).
+
+### A datagram at the room of a buffer
+
+The engine's datagram group has buffers of `buffer_bytes`, 2,048 octets. After rotor's prefix of
+192 octets, a datagram has 1,856. The twin carries 1,232 octets at most, so two new tests write
+the completion of a receive themselves. They write it into a buffer of the group, as the kernel
+does (`io_sim_datagram_test.zig`):
+
+- A datagram of 1,856 octets is read whole, and answers its lookup. A group of buffers of 1,536
+  octets fails this test (LM68).
+- A datagram of 1,857 octets keeps 1,856, and the kernel marks it as truncated. The engine reads no
+  such mark. It gives the cut octets to the table, as the datagram's rule 3 says: "whatever its
+  length". The cut OPT record fails check 6, so the lookup ignores the message and waits.
+
+The second test holds what the engine does today. A question for the owner: must the engine drop
+a cut datagram, or take it as truncated and ask again over TCP? The query advertises a payload of
+1,232 octets. RFC 6891 §6.2.3 calls that "the largest UDP payload" that the requestor can take. A
+server that sends more gets its answer cut, and today its lookup waits out its try.
+
+### The DoH request's bound
+
+The test at `doh_request_bytes_max` now writes the longest GET:
+
+- Its path is 1,536 octets, with a `dns` value of 512 octets.
+- Its authority is a name of 253 octets and a port.
+- Its query has 384 octets, which base64url writes in 512 (RFC 4648 §5).
+
+colibri sends the GET over HTTP/2, and the server answers it. This change did not try HTTP/3 at
+that length.
+
+The comment of the constant and §24 give the bound to the HEADERS frame of the GET. That frame has
+317 octets of colibri's fields, 259 for the authority and 960 for the path. The code gives the
+bound to the path alone: `fits`, and the path buffer of an exchange. So the check takes a path of
+1,536 octets, where the comment allows 960. The test holds what the code does. The owner decides
+whether the comment or the check is correct.
+
+### The codec's fuzz target
+
+The target moved to `src/wire/fuzz/`, because it has four files now (CLAUDE.md, Layout). The text
+target is in `src/config/fuzz/` already. CLAUDE.md still names `src/wire/fuzz.zig` under Commands,
+and only the owner edits CLAUDE.md.
+
+The generator has two more strategies, ten in all, and the 4,096 seeds of the gate spread over
+them:
+
+- `lengths_at_most` writes a response whose one record holds a length field at its most:
+  - an rdlength, an EDNS option's length or an SVCB parameter's length of 0xFFFF or 0xFFFE, which
+    runs past what holds it;
+  - a TXT string, a CAA tag or an alpn-id of 255 octets, or a name of labels of 63 octets, in a
+    record that is whole or has one octet changed;
+  - a COOKIE option of 8, 16, 40 or 41 octets, the last option of its OPT record. Its data ends at
+    the end of the rdata, and a Padding option comes before it half the time.
+- `long_message` writes a message of up to 65,535 octets, the longest half the time. A copy of the
+  question's name is at offset 16,383 in the rdata of the first answer. That offset is the
+  farthest that a pointer names. The last answer ends the message, and its owner is a pointer to
+  that name.
+
+The check reads the OPT record's options as a lookup reads them. Each option's data must be inside
+the rdata, and a COOKIE must have a length that RFC 7873 §4 allows. The COOKIE options of the
+lengths strategy make the gate run both of these checks. Before, the gate read no option whole, and
+it read no COOKIE. The gate now catches LM65, a COOKIE of 41 octets read as the long form.
+
+A test of `fuzz.zig` pins what the readers meet in the seeds of the gate. Each value must reach the
+reader that shares it, and must give what a lookup gets from it:
+
+| Field | Value | What its reader does | Messages |
+| --- | --- | --- | --- |
+| rdlength | 0xFFFF, 0xFFFE | the record walk refuses it | 24, 25 |
+| an option's length | 0xFFFF, 0xFFFE | `response_opt.find` finds the OPT, and the option walk and `find_cookie` refuse it | 30, 28 |
+| an SVCB parameter's length | 0xFFFF, 0xFFFE | after the copy, the parameter walk refuses it | 26, 31 |
+| a TXT string | 255 | `Txt.strings` reads it whole | 32 |
+| a CAA tag | 255 | `Caa.parse` reads it whole | 25 |
+| an alpn-id | 255 | the parameter walk reads and checks it | 18 |
+| a label | 63 | the name decoder reads it | 19 |
+| a COOKIE | 8, 16, 40, 41 | `find_cookie` gives a server cookie of 0, 8 or 32 octets, and refuses 41 | 11, 15, 14, 18 |
+
+The test requires each sixteen-bit length to be refused in each message. It counts a one-octet
+field only in a record written whole, and requires its reader to read it in each one. The table
+gives those counts. A record with one octet changed can read or not, so the test does not count
+it. The test reads what each reader returns, and not only what the generator wrote. So a value
+that no reader finds fails it (LM63). Another test pins that the seeds reach a message of 65,535
+octets, 193 times. The walk reads its last answer through the pointer to offset 16,383.
+
+`strategy_of` gives the strategy of a seed, from the first word of its stream. A test that reads
+one strategy skips the other seeds with it, and so builds no long message that it does not read.
+A test pins that `strategy_of` agrees with `generate` (LM66). `zig build fuzz -- --seed` prints the
+field at its most and its offset now.
+
+A message is 64 KiB now. `generate` sets the first 1,232 octets of it to zero for each seed, and
+not all of it. The long strategy draws its noise eight octets to a word of the stream. These are
+the times on an Apple M1 Pro with macOS 26.6.2, before (356eeb7) and after. The host had a load
+average of about 45. So the table also gives the instructions retired, which `/usr/bin/time -l`
+reports, and which the load does not change.
+
+| Command | Before | After |
+| --- | --- | --- |
+| `zig build fuzz-gate -- 4096`, median of 11 runs | 251 ms | 257 ms |
+| the gate's program, 4,096 seeds, median of 11 runs | 25 ms, 95 M instructions | 37 ms, 131 M instructions |
+| the gate's program, 65,536 seeds, median of 11 runs | 427 ms, 1.24 G instructions | 800 ms, 1.86 G instructions |
+| `zig build fuzz-gate -- --text 4096`, median of 11 runs | 242 ms | 240 ms |
+| the `test-wire` program in Debug, median of 7 runs | 213 ms, 2.28 G instructions | 199 ms, 2.11 G instructions |
+
+The gate stays within twice its earlier time, so the long strategy stays in. The `test-wire`
+program takes less than before, because its pins skip the seeds of the other strategies.
+
+The gate catches seven rows of this section on its own: LM3, LM4, LM5, LM20, LM21, LM26 and LM65.
+Each ran in a copy of the tree, with the gate as the one test compiled. The gate failed under each,
+by a panic for the first five. Under the generator of 356eeb7, it failed under LM3 alone of the
+first five. The rows of earlier sections that name the gate still fail it alone: QO1, QO2, QO23,
+CP8, CP14, CP15, CP17, SB19 and SB20.
+
+### What the tests found
+
+One probable fault, which this change does not fix. `doh.template.expand` in
+`io/io_doh_template.zig` keeps the first octet of its output for a slash. A template whose path
+starts with a slash gets 1,535 octets of the 1,536 of the path buffer. So `start` refuses such a
+template when its GET path at its longest has exactly 1,536 octets. §24 refuses only a GET longer
+than `doh_request_bytes_max`. The test that shows it is not in the tree. It starts a channel on the
+path `/`, 1,018 octets of `p`, then `{?dns}`. The test at the limit in the tree uses a path that
+starts with `?`.
+
+docs/design.md §17 asks the owner questions 39 to 45. Six come from this change: the slack of
+`drive_polls_per_lookup_max`, a datagram longer than the room of a buffer, the bound of a DoH
+request, the slash above, `cocuyo.wire.fuzz` in the public API and the path in CLAUDE.md. The
+seventh comes from the survey: `Options.lookups` over `lookup_slots_max` compiles, then stops at
+an assertion in `init`. This change does not touch it.
+
+### The rows
+
+`zig build mutations` ran the 68 rows below, each against its step. The Test column names the tests
+that catch each row. A run by hand of each row, in the tree or in a copy of it, found them. A test
+at a limit catches a row that moves the bound by one. It also catches a row that sums a length in a
+narrower type, the fault of "Sums at the most their operands reach". Some rows are caught by older
+tests too, and the table names those.
+
+Sixty-eight new mutations, sixty-eight `CAUGHT`.
+
+| # | Limit | Test | Mutation | Status |
+| --- | --- | --- | --- | --- |
+| LM1 | `message_bytes_max`, 65,535, at check 1 of §7 | the test of messages of 65,535 and 65,536 octets in `lookup_response.zig`, by a panic in the name codec, `test-resolver` | check 1 is gone | CAUGHT |
+| LM2 | the same, at the limit | the same test, `test-resolver` | check 1 ignores a message of 65,535 octets | CAUGHT |
+| LM3 | an rdlength of 0xFFFF and 0xFFFE | the rdlength test of `record.zig` and the fuzz gate, each by a panic, `test-wire` | the record walk sums the rdata's offset and the rdlength in sixteen bits | CAUGHT |
+| LM4 | an EDNS option's length of 0xFFFF and 0xFFFE | the option-length test of `rdata_opt.zig`, the COOKIE test of `edns.zig` and the fuzz gate, each by a panic, `test-wire` | an option's offset and its length are summed in sixteen bits | CAUGHT |
+| LM5 | an SVCB parameter's length of 0xFFFF and 0xFFFE | the parameter-length test of `rdata_svcb.zig` and the fuzz gate, each by a panic, `test-wire` | a parameter's offset and its length are summed in sixteen bits | CAUGHT |
+| LM6 | `name_text_bytes_max`, 1,020, and the longest text, 1,004 | the longest-text test of `name_text.zig`, by a panic, `test-core` | the text buffer is 1,003 octets, and the comptime check that pins it is gone | CAUGHT |
+| LM7 | `hosts_lines_max`, 4,096 | the test of the line at the bound in `hosts.zig`, `test-config` | the hosts file is read one line past its bound | CAUGHT |
+| LM8 | the same | the same test, `test-config` | the hosts file is read one line short of its bound | CAUGHT |
+| LM9 | `options_max`, 16 | the test of the option at the bound in `resolv_conf.zig`, by a panic, `test-config` | an options line is read one token past its bound | CAUGHT |
+| LM10 | the same | the same test, `test-config` | an options line is read one token short of its bound | CAUGHT |
+| LM11 | `lines_max`, 256 | the test of the line at the bound in `resolv_conf.zig`, `test-config` | `resolv.conf` is read one line short of its bound | CAUGHT |
+| LM12 | the same | the same test and the older test of 267 lines, each by a panic, `test-config` | `resolv.conf` is read one line past its bound | CAUGHT |
+| LM13 | `ptr_names_max`, 1 | the PTR test of `response_take.zig`, by a panic, `test-wire` | a PTR answer keeps a name past the one its list holds | CAUGHT |
+| LM14 | `rdata_bytes_max`, 2,048, filled | the test of records that fill the rdata buffer in `response_take.zig`, `test-wire` | a copy that fills the buffer to its last octet is refused | CAUGHT |
+| LM15 | a TTL of 0xFFFFFFFF through the cache | the largest-TTL test of `cache_ttl_test.zig` and four older tests of that file, each by a panic, `test-cache` | the cache keeps a TTL over its cap | CAUGHT |
+| LM16 | `Slot.generation` at 0xFFFF | the wrap test of `table_slots.zig`, by a panic, `test-resolver` | a slot's generation does not wrap at the release | CAUGHT |
+| LM17 | `cookie_option_long_bytes_min`, 16 | the test of a server cookie of 8 octets in `edns.zig`, `test-wire` | a COOKIE option of 16 octets is refused | CAUGHT |
+| LM18 | the same, under a lookup | the test of a server cookie of 8 octets in `lookup_cookie_test.zig`, `test-resolver` | a COOKIE option of 16 octets is refused | CAUGHT |
+| LM19 | `pointer_offset_mask`, a pointer to 16,383 | the farthest-pointer test of `name.zig` and the long-message test of `fuzz.zig`, `test-wire` | a pointer keeps thirteen bits of its offset | CAUGHT |
+| LM20 | `character_string_bytes_max`, 255 | the 255-octet string test of `rdata_string.zig` and the fuzz gate, each by a panic, `test-wire` | a string's length and its own octet are summed in the octet the length reads as | CAUGHT |
+| LM21 | a CAA tag of 255 octets | the 255-octet tag test of `rdata_caa.zig` and the fuzz gate, each by a panic, `test-wire` | a tag's length and the octets before it are summed in the octet the length reads as | CAUGHT |
+| LM22 | `port_ephemeral_max`, 65,535, in the lookup | the test of the range's ends in `entropy.zig`, `test-resolver` | the lookup's port span leaves out its last port | CAUGHT |
+| LM23 | `address_v4_octet_digits_max`, 3 | the test of octets of four and five digits in `address_text.zig`, by a panic, `test-core` | an octet of a dotted quad is summed whatever its digits | CAUGHT |
+| LM24 | each length field at its most | the test of what the readers meet in `fuzz.zig`, `test-wire` | the lengths strategy writes no length field at its most | CAUGHT |
+| LM25 | 0xFFFE of a sixteen-bit length | the same test, `test-wire` | a sixteen-bit length is written at 0xFFFF or 0xFFFD, and never at 0xFFFE | CAUGHT |
+| LM26 | a label of 63 octets | the same test and the fuzz gate, `test-wire` | a label of the lengths strategy says 62 octets | CAUGHT |
+| LM27 | a message of 65,535 octets | the long-message test of `fuzz.zig`, `test-wire` | a long message is one octet short of the longest, at most | CAUGHT |
+| LM28 | a pointer to offset 16,383 in a long message | the same test, `test-wire` | the last answer of a long message is owned by a pointer to offset 16,382 | CAUGHT |
+| LM29 | `tls_records_out_bytes`, 4,096 | the test of sessions that ask for all of the records buffer, and for more, in `io_tls_failing_test.zig`, `test-io` | the records buffer refuses a session that asks for all of it | CAUGHT |
+| LM30 | the same | the same test, `test-io` | the records buffer takes a session that asks for more than it holds | CAUGHT |
+| LM31 | `port_ephemeral_max`, 65,535, in the engine | the test of the range's ends in `io_udp.zig`, `test-io` | the engine's port span leaves out its last port | CAUGHT |
+| LM32 | a TCP connection's incarnation at its wrap | the incarnation test of `io_tcp_test.zig`, by a panic, `test-io` | the incarnation does not wrap | CAUGHT |
+| LM33 | a receive's generation at its wrap | the test of the generation and the epoch in `io_lifecycle_test.zig`, by a panic, `test-io` | the generation does not wrap | CAUGHT |
+| LM34 | a socket's epoch at its wrap | the same test, by a panic, `test-io` | the epoch does not wrap | CAUGHT |
+| LM35 | a QUIC connection's incarnation at its wrap | the incarnation test of `io_request_test.zig`, by a panic, `test-io` | the incarnation does not wrap | CAUGHT |
+| LM36 | a channel link's incarnation at its wrap | the incarnation test of `io_channel_link_test.zig`, by a panic, `test-io` | the incarnation does not wrap | CAUGHT |
+| LM37 | the timer's generation at its wrap | the test of a replaced timer in `io_sim_test.zig`, by a panic, `test-io` | the generation does not wrap | CAUGHT |
+| LM38 | `index_mask`: the largest counter above the last slot | the wrap tests of `io_lifecycle_test.zig`, `io_tcp_test.zig`, `io_request_test.zig` and `io_channel_link_test.zig`, the last three by a panic, `test-io` | the index of a `user_data` loses its top bit | CAUGHT |
+| LM39 | `spki_pins_max`, 4, through chapulin | the four-pin test of `io_chapulin.zig`, `test-chapulin` | the pins a configuration may name pass chapulin's bound | CAUGHT |
+| LM40 | the same, over QUIC | the four-pin test of `io_chapulin_quic_test.zig`, `test-chapulin-quic` | the pins a configuration may name pass chapulin's bound | CAUGHT |
+| LM41 | `quic_connection_events_max`, 16 | the test of a flood of tickets in `io_request_test.zig`, `test-io` | one read of a connection takes one event more than its bound | CAUGHT |
+| LM42 | the same | the same test, `test-io` | one read of a connection takes one event fewer than its bound | CAUGHT |
+| LM43 | `channel_events_max`, 16 | the test of a flood of tickets in `io_channel_test.zig`, `test-io` | one read of a channel takes one event more than its bound | CAUGHT |
+| LM44 | the same | the same test, `test-io` | one read of a channel takes one event fewer than its bound | CAUGHT |
+| LM45 | `status_success_last`, 299 | the test of statuses 299 and 300 in `io_doh_channel_test.zig`, `test-cocuyo_doh` | a status of 299 is no answer | CAUGHT |
+| LM46 | the same | the same test, `test-cocuyo_doh` | a status of 300 is an answer | CAUGHT |
+| LM47 | `values_bytes`, 256 | the test of values that fill the buffer in `io_doh_channel_test.zig`, `test-cocuyo_doh` | the values buffer of an exchange is one octet short | CAUGHT |
+| LM48 | `datagram_bytes`, 2,048 | the test of a datagram and stream octets that fill what the type keeps, in `io_doh_channel_test.zig`, `test-cocuyo_doh` | a datagram that fills what the channel keeps is dropped | CAUGHT |
+| LM49 | `stream_bytes`, a record and a chunk | the same test, `test-cocuyo_doh` | stream octets that fill what the channel keeps overrun it | CAUGHT |
+| LM50 | `doh_request_bytes_max`, 1,536 | the test of a template that fills the path buffer, and its longest GET, in `io_doh_channel_test.zig`, `test-cocuyo_doh` | the start check expands a template into one octet less than the buffer | CAUGHT |
+| LM51 | the same | the same test, `test-cocuyo_doh` | the start check expands a template into one octet more than the buffer | CAUGHT |
+| LM52 | `tls_records_entries_max`, 2 | the queue test of `io_tls_failing_test.zig`, by a panic, `test-io` | a connection's queue holds one entry fewer than a query for each lookup and two of records | CAUGHT |
+| LM53 | the same | the same test, by a panic, `test-io` | records made behind an entry of records that has not started do not join it | CAUGHT |
+| LM54 | `servers_max`, 8, in the engine | the test of eight servers over UDP in `io_sim_servers_test.zig`, `test-io` | the server index of a receive keeps two bits | CAUGHT |
+| LM55 | `sockets_max`, 64, of the twin | the socket test of `sim_network.zig`, `test-sim` | the twin opens one socket fewer than its bound | CAUGHT |
+| LM56 | `datagrams_pending_max`, 256, of the twin | the datagram test of `sim_network.zig`, `test-sim` | the twin holds one datagram fewer than its bound | CAUGHT |
+| LM57 | `connections_max`, 16, of the twin | the test of connections and QUIC peers in `sim_network.zig`, `test-sim` | the twin opens one connection fewer than its bound | CAUGHT |
+| LM58 | the same, for QUIC peers | the same test, `test-sim` | the twin opens one QUIC peer fewer than its bound | CAUGHT |
+| LM59 | `stream_bytes_max`, 16,384, of the twin | the stream test of `sim_network.zig`, `test-sim` | a stream of the twin refuses octets that fill it | CAUGHT |
+| LM60 | `servers_max`, 8, in the engine | the tests of eight servers over UDP and over TCP in `io_sim_servers_test.zig`, each by a panic, `test-io` | the engine keeps a UDP socket for seven servers | CAUGHT |
+| LM61 | the same, over TLS | the test of eight servers over TLS in `io_sim_servers_test.zig`, by a panic, `test-io` | the engine keeps a TLS ticket for seven servers | CAUGHT |
+| LM62 | a CAA tag that ends at the last octet of the rdata | the 255-octet tag test and the older test of a flag, a tag and a value in `rdata_caa.zig`, `test-wire` | a tag that ends at the last octet of the rdata is refused | CAUGHT |
+| LM63 | the readers of the lengths strategy | the test of what the readers meet in `fuzz.zig`, `test-wire` | the header of the lengths strategy counts no OPT record | CAUGHT |
+| LM64 | a COOKIE one octet past the longest, in the fuzz target | the same test, `test-wire` | a COOKIE of 41 octets is never written | CAUGHT |
+| LM65 | `cookie_option_long_bytes_max`, 40 | the COOKIE test of `edns.zig`, the fuzz gate, and the test of what the readers meet in `fuzz.zig`, `test-wire` | a COOKIE option of 41 octets is read as the long form | CAUGHT |
+| LM66 | the strategy of a seed | the test of `strategy_of` in `fuzz_generate.zig`, the test of each type in `fuzz_generate_records.zig`, by a panic, and four tests of `fuzz.zig` that read one strategy, `test-wire` | `strategy_of` draws from the seed after the one that `generate` reads | CAUGHT |
+| LM67 | `drive_polls_per_lookup_max`, 81, at the most a run reaches, 49 | the test of one drive through each try at eight servers in `io_sim_servers_test.zig`, `test-io` | one drive polls a lookup 48 times at most | CAUGHT |
+| LM68 | `buffer_bytes`, 2,048, of the datagram group | the test of a datagram that fills a buffer of the group in `io_sim_datagram_test.zig`, `test-io` | the buffers of the datagram group are 1,536 octets | CAUGHT |

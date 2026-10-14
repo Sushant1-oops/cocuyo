@@ -12,6 +12,7 @@ const cocuyo_doh = @import("io_doh_channel.zig");
 const identity = @import("io_doh_channel_identity.zig");
 const server_module = @import("io_doh_channel_server.zig");
 const constants = cocuyo_doh.constants;
+const doh_constants = @import("doh").constants;
 
 /// Two answer buffers: a test's second request fits beside its first, and a third waits.
 const test_answers = 2;
@@ -217,6 +218,20 @@ test "a datagram longer than the type keeps is dropped, and one the channel has 
     try testing.expectEqualStrings("second", pair.doh.inbound[0..pair.doh.inbound_len]);
 }
 
+test "a datagram of exactly what the type keeps is kept, and stream octets of exactly what it keeps are kept" {
+    // doh_datagram_bytes and doh_stream_bytes, each at its value: one octet more of either is the
+    // test above and the overrun test below.
+    const pair = try Pair.create(.{});
+    defer pair.free();
+    const datagram: [constants.datagram_bytes]u8 = @splat(1);
+    pair.doh.receive(.{ .datagram = &datagram }, pair.now_ns);
+    try testing.expectEqual(datagram.len, pair.doh.inbound_len);
+    const stream: [constants.stream_bytes]u8 = @splat(0);
+    pair.doh.receive(.{ .stream = &stream }, pair.now_ns);
+    try testing.expectEqual(stream.len, pair.doh.stream_len);
+    try testing.expect(!pair.doh.stream_overrun);
+}
+
 test "a server that selects HTTP/1.1, or selects no protocol, answers over HTTP/1.1" {
     const selections = [_][]const []const u8{ &.{"http/1.1"}, &.{} };
     for (selections) |alpn| {
@@ -250,6 +265,31 @@ test "a response that is not a 2xx, not a DNS message, or coded fails its reques
     defer pair.free();
     try testing.expect(pair.doh.request(0, &query, pair.now_ns));
     try testing.expect((try pair.run(.finished)).finished.answer != null);
+}
+
+test "a status of 299, the last 2xx, is an answer, and 300 is none" {
+    // "A successful HTTP response with a 2xx status code" carries the answer (RFC 8484 §4.2.1).
+    for ([_]u16{ constants.status_success_last, constants.status_success_last + 1 }) |status| {
+        const pair = try Pair.create(.{ .status = status });
+        defer pair.free();
+        try testing.expect(pair.doh.request(0, &query, pair.now_ns));
+        const finished = (try pair.run(.finished)).finished;
+        try testing.expectEqual(status == constants.status_success_last, finished.answer != null);
+    }
+}
+
+test "field values that fill the buffer to its last octet are read, and one octet more is too large" {
+    // The server sends one field the type wants, `content-type`, so its value alone fills the
+    // buffer (doh_values_bytes, rule 22).
+    const media = "application/dns-message; x=";
+    const filled = media ++ "y" ** (constants.values_bytes - media.len);
+    for ([_][]const u8{ filled, filled ++ "y" }) |content_type| {
+        const pair = try Pair.create(.{ .content_type = content_type });
+        defer pair.free();
+        try testing.expect(pair.doh.request(0, &query, pair.now_ns));
+        const finished = (try pair.run(.finished)).finished;
+        try testing.expectEqual(content_type.len == constants.values_bytes, finished.answer != null);
+    }
 }
 
 test "a 2xx response whose field values do not fit fails its request as too large" {
@@ -372,4 +412,32 @@ test "a template whose GET would not fit is refused when the channel starts" {
         .context = &pair.context,
         .now_ns = pair.now_ns,
     }));
+}
+
+test "a template whose GET path at its longest fills the path buffer starts, and its longest GET is answered; one octet more is refused" {
+    // At `start` the template is expanded with a `dns` value `dns_variable_bytes_max` long, and a
+    // path past `doh_request_bytes_max` is refused (docs/design.md §24). Here the path at its
+    // longest is a slash, `?x=`, the filler, `&dns=` and the value: 1536 octets. The authority is
+    // the longest, a name of 253 octets and a port, and the query is the longest a `dns` value of
+    // 512 octets carries, 384 octets in base64url (RFC 4648 §5).
+    const query_part = "?x=";
+    const value_part = "&dns=";
+    const filler = doh_constants.doh_request_bytes_max - 1 - query_part.len - value_part.len - cocuyo.wire.constants.dns_variable_bytes_max;
+    const longest = query_part ++ "p" ** filler ++ "{&dns}";
+    const host = ("h" ** 63 ++ ".") ** 3 ++ "h" ** 61;
+    const pair = try testing.allocator.create(Pair);
+    defer testing.allocator.destroy(pair);
+    pair.* = .{ .endpoint = endpoint };
+    try pair.server.init(.{}, identity.unix_seconds);
+    const named: cocuyo.Tls = .{ .name = try cocuyo.Name.from_text(identity.server_name) };
+    const fits_slot = .{ .authority = host ++ ":8443", .host = host, .port = port, .path = longest };
+    try pair.doh.start(.{ .server = 0, .endpoint = pair.endpoint, .tls = &named, .https = fits_slot, .alternative = null, .context = &pair.context, .now_ns = pair.now_ns });
+    var longest_query: [cocuyo.wire.constants.dns_variable_bytes_max / 4 * 3]u8 = @splat(0);
+    @memcpy(longest_query[0..query.len], &query);
+    try testing.expect(pair.doh.request(0, &longest_query, pair.now_ns));
+    const answer = (try pair.run(.finished)).finished.answer orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(longest_query.len, answer.message.len);
+    pair.doh.wipe();
+    const over = .{ .authority = "dns.example:8443", .host = "dns.example", .port = port, .path = query_part ++ "p" ** (filler + 1) ++ "{&dns}" };
+    try testing.expectError(error.Failed, pair.doh.start(.{ .server = 0, .endpoint = pair.endpoint, .tls = &named, .https = over, .alternative = null, .context = &pair.context, .now_ns = pair.now_ns }));
 }

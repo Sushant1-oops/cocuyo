@@ -144,3 +144,15 @@ test "a name that does not fit the arena is dropped, and the line with it when i
     const short = builder.intern("a").?;
     try testing.expectEqual(@as(u8, 3), short.len);
 }
+
+test "the line at the bound is read, and the line after it is not" {
+    // `hosts_lines_max` lines are read. Here the last of them names one host and the next line
+    // another.
+    const text = "#\n" ** (constants.hosts_lines_max - 1) ++ "192.0.2.1 at.limit\n192.0.2.2 past.limit\n";
+    var storage: Storage = .{};
+    const hosts = parse_text(text, &storage);
+    try testing.expectEqual(@as(usize, 1), hosts.entries.len);
+    var out: [1]Address = undefined;
+    try testing.expectEqual(@as(usize, 1), hosts.find(&try Name.from_text("at.limit"), null, &out));
+    try testing.expectEqual(@as(usize, 0), hosts.find(&try Name.from_text("past.limit"), null, &out));
+}

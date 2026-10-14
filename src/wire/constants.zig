@@ -94,11 +94,11 @@ pub const caa_flag_critical: u8 = 0x80;
 /// A `<character-string>`: one length octet, then at most that many octets (RFC 1035 §3.3).
 pub const character_string_bytes_max: usize = 255;
 
-/// The shape of a record the fuzz generator writes whole (`fuzz_generate.zig`, docs/design.md
-/// §19, step 9's gate): names of up to three labels of up to twelve letters, character-strings of
-/// up to twenty octets and up to four of them in a TXT or an ALPN list, opaque fields of up to
-/// thirty-two octets, and up to three addresses in an SVCB hint. A record of every type then fits
-/// a message several times over. Chosen, not measured.
+/// The shape of a record the fuzz generator writes whole (`fuzz/fuzz_generate_records.zig`,
+/// docs/design.md §19, step 9's gate): names of up to three labels of up to twelve letters,
+/// character-strings of up to twenty octets and up to four of them in a TXT or an ALPN list,
+/// opaque fields of up to thirty-two octets, and up to three addresses in an SVCB hint. A record
+/// of every type then fits a message several times over. Chosen, not measured.
 pub const fuzz_labels_max: usize = 3;
 pub const fuzz_label_bytes_max: usize = 12;
 pub const fuzz_string_bytes_max: usize = 20;
@@ -108,12 +108,16 @@ pub const fuzz_hints_max: usize = 3;
 /// An SVCB key with no format of its own, which a client keeps as it is: RFC 9460 Appendix D's
 /// `key667`.
 pub const fuzz_svcb_key_generic: u16 = 667;
-/// The shortest name of the long questions the fuzz generator writes (`fuzz_generate.zig`): 64
-/// lengths, from here to the longest name, 255 octets. They hold the fourteen whose question's
-/// class lies past octet 255 of the message, from 242 octets on, and fifty shorter. The gate's 4096
-/// seeds over eight strategies give each length about eight seeds, by arithmetic, and a test of
-/// `fuzz.zig` pins that each is reached. Chosen, not measured.
+/// The shortest name of the long questions the fuzz generator writes (`fuzz/fuzz_generate.zig`):
+/// 64 lengths, from here to the longest name, 255 octets. They hold the fourteen whose question's
+/// class lies past octet 255 of the message, from 242 octets on, and fifty shorter. The gate's
+/// 4096 seeds over ten strategies give each length about six seeds, by arithmetic, and a test of
+/// `fuzz/fuzz.zig` pins that each is reached. Chosen, not measured.
 pub const fuzz_question_name_bytes_min: usize = 192;
+/// The answers a long message of the fuzz generator holds (`fuzz/fuzz_generate.zig`): one whose
+/// rdata runs past the name at the farthest offset a pointer names, and one at the end of the
+/// message owned by a pointer to that name.
+pub const fuzz_long_answers: u16 = 2;
 /// The fewest octets a label other than the root takes in a name: its length octet and one octet
 /// (RFC 1035 §3.1). A long question's labels never leave fewer for the next.
 pub const label_wire_bytes_min: usize = 2;

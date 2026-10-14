@@ -185,6 +185,14 @@ test "a malformed quad is refused rather than guessed at" {
     try testing.expectEqual(@as(?Address, null), parse(""));
 }
 
+test "an octet of four digits or five is refused at its length, before its value is summed" {
+    // An octet takes three decimal digits at most. "70000" would pass the sixteen bits the value is
+    // summed in, and "1000" is refused by the value as well.
+    try testing.expectEqual(@as(?Address, null), parse("1.2.3.1000"));
+    try testing.expectEqual(@as(?Address, null), parse("1.2.3.70000"));
+    try testing.expectEqual(@as(?Address, null), parse("::ffff:1.2.3.70000"));
+}
+
 test "a full IPv6 address parses" {
     try expect_v6(
         "2001:0db8:0000:0000:0000:0000:0000:0001",

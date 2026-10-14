@@ -214,3 +214,105 @@ test "an idle channel shuts down, a request taken meanwhile waits, and the next 
     _ = rig.engine.take(rig.loop.now());
     try rig.deinit();
 }
+
+/// The twin's channel, which says `flood` tickets of its own before anything the twin says, as a
+/// channel whose server sends a flood of them would.
+const Flooding = struct {
+    const Twin = rotor.channel.Channel;
+    pub const enabled = true;
+    pub const output_bytes_max = Twin.output_bytes_max;
+    pub const Error = Twin.Error;
+    pub const Context = Twin.Context;
+    pub const Ticket = Twin.Ticket;
+    pub const Alternative = Twin.Alternative;
+    pub const Link = Twin.Link;
+    pub const Answer = Twin.Answer;
+    pub const Finished = Twin.Finished;
+    pub const Open = Twin.Open;
+    pub const Event = Twin.Event;
+    pub const Input = Twin.Input;
+
+    twin: Twin = .{},
+    flood: usize = 0,
+    said: usize = 0,
+
+    pub fn start(self: *Flooding, context: anytype) Error!void {
+        return self.twin.start(context);
+    }
+    pub fn lifetime_ns(ticket: *const Ticket) u64 {
+        return Twin.lifetime_ns(ticket);
+    }
+    pub fn request(self: *Flooding, index: u16, message: []const u8, now_ns: u64) bool {
+        return self.twin.request(index, message, now_ns);
+    }
+    pub fn cancel(self: *Flooding, index: u16) void {
+        self.twin.cancel(index);
+    }
+    pub fn shutdown(self: *Flooding) void {
+        self.twin.shutdown();
+    }
+    pub fn receive(self: *Flooding, input: Input, now_ns: u64) void {
+        self.twin.receive(input, now_ns);
+    }
+    pub fn next(self: *Flooding, now_ns: u64) ?Event {
+        if (self.flood == 0) return self.twin.next(now_ns);
+        self.flood -= 1;
+        self.said += 1;
+        return .{ .ticket = .quic };
+    }
+    pub fn datagram(self: *Flooding, out: []u8, now_ns: u64) usize {
+        return self.twin.datagram(out, now_ns);
+    }
+    pub fn output(self: *Flooding, out: []u8, now_ns: u64) usize {
+        return self.twin.output(out, now_ns);
+    }
+    pub fn deadline(self: *const Flooding) ?u64 {
+        return self.twin.deadline();
+    }
+    pub fn expire(self: *Flooding, now_ns: u64) void {
+        self.twin.expire(now_ns);
+    }
+    pub fn start_link(self: *Flooding, link: Link, ticket: ?*const Ticket, ticket_age_ns: u64, now_ns: u64) Error!void {
+        return self.twin.start_link(link, ticket, ticket_age_ns, now_ns);
+    }
+    pub fn link_ended(self: *Flooding, link: Link) void {
+        self.twin.link_ended(link);
+    }
+    pub fn take_ticket(self: *Flooding, link: Link) ?Ticket {
+        return self.twin.take_ticket(link);
+    }
+    pub fn alternative(self: *const Flooding) ?Alternative {
+        return self.twin.alternative();
+    }
+    pub fn wipe(self: *Flooding) void {
+        self.twin.wipe();
+    }
+};
+
+const FloodingRig = sim_test.RigOf(io.Resolver(.{
+    .lookups = fixtures.small_lookups,
+    .group_buffers = fixtures.group_buffers,
+    .tcp_connections = 0,
+    .doh = Flooding,
+}));
+
+test "one read of a channel takes an end for each request and 16 of its own, and the rest at the next" {
+    // `channel_events_max`: what a flood leaves is read at the next read (docs/design.md §24, New
+    // limits). Here the channel says one ticket more than one read takes.
+    var rig: FloodingRig = .{};
+    for (&rig.servers) |*server| server.https = .{ .template = template };
+    try rig.init(98, .{ .{}, .{} }, .{ .servers = &.{}, .timeout_ns = fixtures.stream_timeout_ns, .timeout_ns_max = fixtures.stream_timeout_ns, .failover_retry_chance = 0 });
+    rig.use_test_contexts();
+    const handle = try rig.engine.start(question("example.com."), rig.loop.now());
+    const channel = &rig.engine.doh.slots[0].channel;
+    const per_read = rig.engine.requests.len + io.constants.channel_events_max;
+    channel.flood = per_read + 1;
+    io.channel.hear(&rig.engine, 0, rig.loop.now());
+    try testing.expectEqual(per_read, channel.said);
+    io.channel.hear(&rig.engine, 0, rig.loop.now());
+    try testing.expectEqual(per_read + 1, channel.said);
+    rig.engine.cancel(handle, rig.loop.now());
+    _ = try rig.until_result();
+    _ = rig.engine.take(rig.loop.now());
+    try rig.deinit();
+}

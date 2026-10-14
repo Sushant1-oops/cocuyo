@@ -189,6 +189,16 @@ test "keys out of order, a duplicate key, and an rdata that ends inside a parame
     try testing.expectError(Error.MalformedMessage, Svcb.parse(&fixtures.svcb_short));
 }
 
+test "a parameter length of 0xFFFF or 0xFFFE is malformed in a short rdata, and its sum does not wrap" {
+    // The two largest values of the field (RFC 9460 §2.2). The value starts at octet 4 of the
+    // parameters, so each sum passes sixteen bits.
+    for ([_]u8{ 0xff, 0xfe }) |low| {
+        const bytes = [_]u8{ 0x00, 0x01, 0xff, low, 'h', '2' };
+        var params: Params = .{ .bytes = &bytes };
+        try testing.expectError(Error.MalformedMessage, params.next());
+    }
+}
+
 test "a value without its key's format is malformed: port, alpn, no-default-alpn, the hints, mandatory" {
     const malformed = [_][]const u8{
         &fixtures.svcb_port_three_octets,

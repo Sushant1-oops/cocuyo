@@ -351,6 +351,14 @@ pub fn endpoint_of(address: rotor.Address) cocuyo.Endpoint {
 
 const testing = std.testing;
 
+test "the two ends of the Dynamic range are drawn, and the span wraps after the last" {
+    // 49152 to 65535, both ends included (RFC 6335 §6).
+    const ports: u64 = @as(u64, cocuyo.constants.port_ephemeral_max) - cocuyo.constants.port_ephemeral_min + 1;
+    try testing.expectEqual(cocuyo.constants.port_ephemeral_min, port_from(0));
+    try testing.expectEqual(cocuyo.constants.port_ephemeral_max, port_from(ports - 1));
+    try testing.expectEqual(cocuyo.constants.port_ephemeral_min, port_from(ports));
+}
+
 test "a port from a word is in the Dynamic range, and an endpoint round-trips through rotor's address" {
     var word: u64 = 0;
     while (word < 64) : (word += 1) {
