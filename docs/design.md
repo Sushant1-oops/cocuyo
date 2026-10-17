@@ -2591,7 +2591,8 @@ step until `zig build test` passes.
 ### Still open
 
 4. **`addresses_max = 16`.** Unanswered, so it stands. Some large round-robin names return more,
-   and `Answer.truncated` says so when they do. I have not measured it.
+   and `Answer.truncated` says so when they do. I have not measured it. Answered on 2026-10-17: it
+   stands.
 5. **TCP reuse.** Answered on 2026-09-22 by §19: the engine keeps one pipelined connection per
    server, and `connect_tcp` is unchanged.
 6. **`/etc/hosts`.** Answered on 2026-09-22 by §19: a parser beside `resolv_conf.zig` in
@@ -2614,9 +2615,11 @@ step until `zig build test` passes.
    §18 keeps and drops of it, is recorded there.
 10. **The limits §19 proposes.** `rdata_bytes_max` at 2048 and `tcp_idle_ns_default` at ten
     seconds are chosen, not measured, and stand unless overruled; the table in §19 says why each.
+    Answered on 2026-10-17: both stand.
 11. **Service names.** §19 leaves `/etc/services` to the consumer, so `AddressLookup` takes no
     port and the reverse recipe returns no service. If a consumer needs `getservbyname`, a
-    parser in `config` is the place.
+    parser in `config` is the place. Answered on 2026-10-17: as written. The consumer keeps
+    `/etc/services`.
 12. **Does `name_info` need an entry point?** Answered on 2026-09-22: yes. `NameLookup` sits
     beside `AddressLookup`, because the recipe left the `lookups` order to every consumer that
     wrote it out, and that order is configuration the library already holds.
@@ -2648,7 +2651,8 @@ recommends, and none is taken until the owner answers.
 16. **Does DNSSEC come into scope, and how far?** §1 says no validation, and CLAUDE.md lists it
     under "Ask before". §25 has two stages: A relies on the server's AD bit over a channel that
     authenticates the server, and B validates in cocuyo. Recommended: A, then B, each off by
-    default.
+    default. Answered on 2026-10-17: not now. DNSSEC stays out of scope, and §25 stays a plan.
+    Questions 17 to 20, 22 and 23 wait for a later answer to this one.
 17. **Stage A's public API.** `Config.authenticated_data`, the type `Security`, a `security`
     field on `Answer` and on `Failure`, and `options trust-ad` read from a `resolv.conf`.
     Recommended as §25 writes them, with one type for both stages.
@@ -2680,10 +2684,11 @@ recommends, and none is taken until the owner answers.
     under a signed zone when a message holds more records than that.
 24. **More sources.** May RFC 1982, RFC 3110, RFC 8017, RFC 8032, RFC 4470 and RFC 2181 be
     downloaded into `docs/rfcs/`? §25 step 1 names them, and `docs/rfcs/README.md` says what
-    each is for.
+    each is for. Answered on 2026-10-17: yes, all six. `docs/rfcs/` holds them, with their sums.
 25. **What the reading found.** §25 ends with five things in the code as it stands that are not
     DNSSEC's: a citation, RCODE 6, `attempts_max` against RFC 9520 §3.1, no cache of failures
     against RFC 9520 §3.2, and compact denial without validation. Should each become an issue?
+    Answered on 2026-10-17: yes, one issue each: c4milo/cocuyo#48 to c4milo/cocuyo#52.
 
 ### Asked on 2026-10-09, for the measured wait
 
@@ -2705,6 +2710,7 @@ recommends, and none is taken until the owner answers.
     yes. The reply that marks it shows the server answered in time, so the try's wait says
     nothing of its latency. A server that changes the case another way is not marked, and stays
     sampled as one that never answers, which is what it is to every lookup that mixes the case.
+    Answered on 2026-10-17: yes, no sample.
 28. **A DoH or DoQ server that never completes the handshake.** The engine says a DoH or DoQ
     request went out before its connection's handshake ends (§24, request rule 3), so a try at
     a server that never answers the handshake runs out as a sent one and is a sample as long as
@@ -2714,7 +2720,7 @@ recommends, and none is taken until the owner answers.
     the handshake ended, a change to the request interface of §24. Recommended: no change. Each
     DoH and DoQ sample already carries the handshake of a connection the request opened,
     failover asks a server that does not answer last, and its wait rises to the cap as a silent
-    server's does over UDP.
+    server's does over UDP. Answered on 2026-10-17: no change.
 
 ### Asked on 2026-10-11, for the cache's memory
 
@@ -2725,7 +2731,7 @@ about.
 29. **The sizing in the library.** `cocuyo.cache` gains `Slices`, `Storage`, `keys_for` and
     `slot_count_valid`, and the engine's `init` and `reinit` take a `?cocuyo.cache.Slices`.
     Should the names, or their place, be other than these? Recommended: as built. The rule is
-    the cache's, and a caller of the library alone needs it too.
+    the cache's, and a caller of the library alone needs it too. Answered on 2026-10-17: as built.
 30. **No upper bound on `Config.cache_ttl_seconds_max`.** Answered on 2026-10-11: follow the
     RFC. A cap is at most seven days, the cap RFC 8767 §4 recommends, under the named limit
     `cache_ttl_seconds_max`. `assert_valid` and `Cache.init` hold it (§16 decision 37).
@@ -2735,11 +2741,12 @@ about.
     that costs a consumer: a zero read from its own configuration file is input, and it reaches
     `assert_valid` and stops the program unless the consumer turns it into no memory first. A
     slot count has `slot_count_valid` for that, and since the answer to question 30 the cap has
-    `ttl_seconds_max_valid`, which refuses a zero and a cap past seven days.
+    `ttl_seconds_max_valid`, which refuses a zero and a cap past seven days. Answered on 2026-10-17:
+    no. The assertion stays.
 32. **`engine_cache_slots_default`.** It stays at 1,024, named, as the size the README and the
     examples hand an engine. Should it go, or move to the `cache` module's constants, where a
     caller of the library alone would find it? Recommended: as built, since the name and the
-    place are the ones consumers already read.
+    place are the ones consumers already read. Answered on 2026-10-17: as built.
 33. **What a `reinit` that fails at its sockets holds.** It holds the memory that call handed
     it, with that call's configuration and seed, until a later `reinit` or `close` (§19 step
     13, rule 5). So a caller that got memory for the call must not free it on the error. Should
@@ -2747,7 +2754,7 @@ about.
     memory nor the new? Recommended: as built. The engine has taken the new configuration by
     then. A cache that follows the table is one rule, where a cache dropped on one path is
     two. Since 2026-10-14 a `reinit` refused with `UdpPayloadTooLarge` holds what it held before
-    (§16 decision 44, question 49).
+    (§16 decision 44, question 49). Answered on 2026-10-17: as built.
 
 ### Asked on 2026-10-11, for the session a connection names
 
@@ -2762,7 +2769,7 @@ about.
     `tls` are? Recommended: yes, since it is the session every consumer on a network names.
     Not built: it adds a name to the public surface, which is the owner's to rule. Until then
     no check of the gate builds a consumer that makes the module, since `test/consumer/` binds
-    no colibri.
+    no colibri. Answered on 2026-10-17: yes, register it.
 
 ### Asked on 2026-10-11, for the context a session starts from
 
@@ -2778,7 +2785,8 @@ about.
     assertion need the predicate either way and only its being public is in question. If the
     answer is no, the method, the README's sentence and the doc comments' mentions of it go,
     `start` asserts `held` of `io/io_context.zig`, and the tests ask `held`: the mutation rows
-    stand, since each edits `held` or what it reads.
+    stand, since each edits `held` or what it reads. Answered on 2026-10-17: as built. It stays
+    public under this name.
 
 ### Asked on 2026-10-13, for the constants with a type
 
@@ -2788,21 +2796,25 @@ about.
     constant of the constants files of `src/` and `io/`, and a lint rule holds it. Should the
     extension stand? Recommended: yes. The twin's two header constants had the fault the four
     had, and a list of four leaves the next such constant with no type. If the answer is no,
-    the rule and its rows go, and each constant but the four loses its type again.
+    the rule and its rows go, and each constant but the four loses its type again. Answered on
+    2026-10-17: yes, the extension stands.
 37. **The constants outside the constants files.** The lint rule, with its scope widened to every
     Zig file of `src/` and `io/`, reports 210 integer constants of the other files, test files
     apart. It reads their shape, so some of them have a type already, from a typed constant in
     their value. One of them, `frame_bytes` of `io/io_quic_plain.zig`, has no type and is in a
     sum that overflowed until 2026-10-10. Some are limits, which CLAUDE.md's non-negotiable 5
     puts in a constants file: `ndots_limit` of `src/config/resolv_conf_options.zig`, the bounds
-    of `src/core/name_text.zig` and the code-point bounds of `io/io_doh_template.zig`. Should the rule read
-    every Zig file of `src/` and `io/`, or should those constants move into the constants
+    of `src/core/name_text.zig` and the code-point bounds of `io/io_doh_template.zig`. Should the
+    rule read every Zig file of `src/` and `io/`, or should those constants move into the constants
     files? Recommended: move each limit into its module's constants file, as CLAUDE.md's
     non-negotiable 5 asks. Give the rest a type where they are. The 32 of
     `bench/end_to_end/constants.zig` are a third choice, since nothing of `bench/` is linked
     into the library. On 2026-10-13 two of the limits took that path: `ndots_limit` and
     `timeout_seconds_limit` moved into `src/config/constants.zig`, each with a type (§12). The
-    rest of the question stays open.
+    rest of the question stays open. Answered on 2026-10-17: every limit moves into a `limits.zig`
+    of its module, the limits of each `constants.zig` too. Each `constants.zig` keeps the protocol
+    sizes and the defaults. Each constant that is not a limit gets a type where it is. CLAUDE.md's
+    non-negotiable 5 and the lint rules change with it.
 
 ### Asked on 2026-10-13, for the stream's buffers
 
@@ -2839,8 +2851,8 @@ docs/mutations.md, Tests at the named limits, gives the tests behind each questi
     ignored, as each such datagram is. §7 (A datagram that the buffer cut), §16 decision 43 and
     §19 step 13 (the datagram's rule 6) hold the rule. The review of the change added check 6, on
     a message with no COOKIE option, as RFC 7873 §5.3 asks (decision 43).
-41. **The bound of a DoH request.** The comment of `doh_request_bytes_max` and §24 give the bound to
-    the HEADERS frame of the GET, with 960 octets for the path. The code gives it to the path
+41. **The bound of a DoH request.** The comment of `doh_request_bytes_max` and §24 give the bound
+    to the HEADERS frame of the GET, with 960 octets for the path. The code gives it to the path
     alone, 1,536 octets. A test sends the longest GET that the code allows, and colibri sends it
     over HTTP/2. Which is correct? Recommended: the code; then the comment and §24 change.
     Answered on 2026-10-14: the code. The bound is on the path, 1,536 octets. The comment of the
@@ -2862,6 +2874,7 @@ docs/mutations.md, Tests at the named limits, gives the tests behind each questi
     as `wire.fixtures` is.
 45. **CLAUDE.md's path to the target.** The target moved to `src/wire/fuzz/` by the layout rule.
     CLAUDE.md names `src/wire/fuzz.zig` under Commands. Recommended: name `src/wire/fuzz/` there.
+    Answered on 2026-10-17: as recommended. CLAUDE.md names `src/wire/fuzz/`.
 
 ### Asked on 2026-10-14, for a datagram that the buffer cut
 
@@ -7070,7 +7083,7 @@ Each step lands with its checks, each check broken on purpose and recorded in
 `docs/mutations.md`. Steps 1 to 3 are Stage A, and the rest is Stage B.
 
 1. The sources the plan lacks, into `docs/rfcs/` (question 24): RFC 1982, RFC 3110, RFC 8017,
-   RFC 8032, RFC 4470 and RFC 2181.
+   RFC 8032, RFC 4470 and RFC 2181. Done on 2026-10-17.
 2. The ruling written down: §1, a decision in §16, CLAUDE.md's "Ask before" list, and the
    README's known limits.
 3. Stage A whole, with its checks above.
@@ -7170,8 +7183,8 @@ in a slot it keeps for them, and the lookup asks its question again. Rejected:
 
 ### What reading the RFCs found in the code as it stands
 
-None of these is DNSSEC's, and none is acted on here. Question 25 asks whether each becomes an
-issue.
+None of these is DNSSEC's, and none is acted on here. On 2026-10-17 the owner asked for an issue
+for each (question 25). They are c4milo/cocuyo#48 to c4milo/cocuyo#52, in the order below.
 
 - `src/wire/edns.zig` cites RFC 6891 §6.1.4 for the DO bit. RFC 3225 §3 states it
   (non-negotiable 7).
