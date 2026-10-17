@@ -47,6 +47,10 @@ Out of scope, so triage stays fast:
   that ran out as a latency sample.
 - Attacks that need a malicious `Config`, a caller that breaks the documented contract, or a
   compromised host.
+- The test exports of `cocuyo_quic`: `plain`, `Plain` and `server`. They encrypt nothing and
+  authenticate nobody, as the README and their doc comments say, and are never for a network. A
+  program that puts them on a network breaks the contract. A bug in them is a bug, not a
+  vulnerability.
 - Resource limits the caller chose. cocuyo's memory is sized at init, and a lookup that runs out of
   room says so.
 - Bugs in [chapulin](https://github.com/c4milo/chapulin), which carries the TLS, or in
