@@ -28,8 +28,8 @@ Added on 2026-09-24: RFC 8767, whose §4 amends the TTL of RFC 1035 §3.2.1 and 
 should be capped, at seven days by recommendation. §4 is the only part cocuyo reads it for: the
 rest, serve-stale (§5 and §6), is a recursive resolver's way to answer from expired data, and
 cocuyo's cache counts an expired entry as a miss. Checked against
-`rfc-editor.org/rfc/rfc8767.json` that day: not obsoleted, not updated. RFC 2181 itself is not
-here: nothing cocuyo does rests on what RFC 8767 left of its §8.
+`rfc-editor.org/rfc/rfc8767.json` that day: not obsoleted, not updated. Nothing cocuyo does rests
+on what RFC 8767 left of RFC 2181 §8. RFC 2181 came on 2026-10-17 for other sections (below).
 
 Added on 2026-09-25 for DoH over HTTP/3, where the engine is the driver §22 left the template
 to: RFC 3986 for the URI a template expands to, RFC 6570 for the expansion, and RFC 9111 for the
@@ -47,17 +47,25 @@ the list that names the set. Each was checked against `rfc-editor.org/rfc/rfcNNN
 9520 on 2026-10-03 and the rest on 2026-10-01: none is obsoleted. RFC 9904 obsoletes RFC 8624,
 and RFC 9718 obsoletes RFC 7958, which is why neither of those is here. Four documents update
 members of the set and are not here. RFC 4470, on minimally covering NSEC records, updates RFC
-4034 and RFC 4035, and §25 asks for it. RFC 6014 is an IANA procedure, itself updated by RFC
-9157. RFC 6944 is obsoleted through RFC 8624 by RFC 9904. RFC 8749 moves DNSSEC Lookaside
-Validation to Historic. The last three were not read.
+4034 and RFC 4035, and §25 asks for it. It came on 2026-10-17 (below). RFC 6014 is an IANA
+procedure, itself updated by RFC 9157. RFC 6944 is obsoleted through RFC 8624 by RFC 9904. RFC
+8749 moves DNSSEC Lookaside Validation to Historic. The last three were not read.
 
 §25 names five more it cannot be built without, each checked the same way on 2026-10-03 and
 none obsoleted: RFC 1982 for the serial number arithmetic RFC 4034 §3.1.5 requires of every
 comparison of a signature's times; RFC 3110, which RFC 5702 §2 points to for RSA keys and
-which, as recalled and not yet read, holds the layout of an RSA key in a DNSKEY; RFC 8017 for
+which holds the layout of an RSA key in a DNSKEY (its §2, read on 2026-10-17); RFC 8017 for
 RSASSA-PKCS1-v1_5, which RFC 5702 §3 cites through RFC 3447, which RFC 8017 obsoletes; RFC 8032
 for the verification RFC 8080 §4 cites; and RFC 2181 for what an RRset is, which RFC 4034 §6.3
-and RFC 4035 §2.2 cite. They come when the owner says so.
+and RFC 4035 §2.2 cite. They came on 2026-10-17 (below).
+
+Added on 2026-10-17, when the owner answered design §17 question 24: RFC 1982, RFC 2181, RFC
+3110, RFC 4470, RFC 8017 and RFC 8032, the six that §25 names. The owner also kept DNSSEC out of
+scope that day (§17 question 16), so nothing in `src/` reads five of them. RFC 2181 §9 says when
+a server sets TC, which the probe of 2026-10-14 needed (§16 decision 43). Each was checked
+against `rfc-editor.org/rfc/rfcNNNN.json` that day: none is obsoleted. RFC 3110 is updated by
+RFC 6944, which RFC 9904 obsoletes through RFC 8624. RFC 2181 is updated by RFC 4343, RFC 5452
+and RFC 8767, which are here, and by the DNSSEC set.
 
 Read these, never a summary and never another implementation's source. Cite the RFC that *states*
 a rule, not one that inherits it, and cite it by section on the line that does the checking
@@ -171,6 +179,12 @@ updates worth knowing about, none of which version one implements:
 | 9824 | Compact Denial of Existence in DNSSEC | §2 and §3 NXNAME and the responses that carry it, §5 the response code, §7 its changes to RFC 4034 and RFC 4035, §8 the header is not signed (design §25) |
 | 9904 | DNSSEC Cryptographic Algorithm Recommendation Update Process | §3 the algorithm table and §4 the digest table: what a validator implements (design §25) |
 | 9905 | Deprecating the Use of SHA-1 in DNSSEC Signature Algorithms | §2, algorithms 5 and 7 still implemented, and treated as unsupported (design §25) |
+| 1982 | Serial Number Arithmetic | §3 the comparison of two serial numbers, which RFC 4034 §3.1.5 requires of a signature's times (design §25) |
+| 2181 | Clarifications to the DNS Specification | §5 what an RRset is, which RFC 4034 §6.3 and RFC 4035 §2.2 cite; §9 when a server sets TC (design §25, §16 decision 43) |
+| 3110 | RSA/SHA-1 SIGs and RSA KEYs in the Domain Name System (DNS) | §2 the layout of an RSA key in a DNSKEY, which RFC 5702 §2 points to (design §25) |
+| 4470 | Minimally Covering NSEC Records and DNSSEC On-line Signing | §3 the NSEC records that an on-line signer makes, which a validator reads as any other (design §25) |
+| 8017 | PKCS #1: RSA Cryptography Specifications Version 2.2 | §8.2 RSASSA-PKCS1-v1_5, which RFC 5702 §3 cites through RFC 3447 (design §25) |
+| 8032 | Edwards-Curve Digital Signature Algorithm (EdDSA) | §5.1.7 the verification of an Ed25519 signature, which RFC 8080 §4 cites (design §25) |
 
 Two things cocuyo implements are not RFCs and are cited as what they are:
 
