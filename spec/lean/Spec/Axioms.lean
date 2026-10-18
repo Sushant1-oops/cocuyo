@@ -1,5 +1,6 @@
 import Spec.LookupProofs.Measure
 import Spec.LookupProofs.Timeout
+import Spec.LookupProofs.Cause
 
 /-!
 # What the proofs rest on
@@ -43,5 +44,8 @@ namespace Spec.Lookup
 
 /-- info: 'Spec.Lookup.refused_never_timeout' depends on axioms: [propext] -/
 #guard_msgs in #print axioms refused_never_timeout
+
+/-- info: 'Spec.Lookup.failure_cause' depends on axioms: [propext] -/
+#guard_msgs in #print axioms failure_cause
 
 end Spec.Lookup

@@ -123,24 +123,19 @@ theorem onReply_le (c : Config) (s : State) (stream : Bool) (r : Reply) (g : s.r
     · simp [measure, LexLe]; omega
   | nxdomain => exact nextCandidate_le c s false
   | nodata => exact nextCandidate_le c s true
-  | servfail =>
-    simp only [onReply]
-    have h := advanceServer_lt c { s with serverFailed := true } g
-    have e : measure c { s with serverFailed := true } = measure c s := rfl
-    rw [e] at h
-    exact lexLt_le _ _ h
+  | servfail => exact lexLt_le _ _ (advanceServer_lt c _ g)
   | formerr =>
     simp only [onReply]
     split
     · rename_i he
       simp only [measure, LexLe, phase, he, fresh]
       cases s.cookieRetried <;> cases c.useTcp <;> cases s.stage <;> simp [stagePhase]
-    · exact lexLt_le _ _ (advanceServer_lt c { s with serverFailed := true } g)
+    · exact lexLt_le _ _ (advanceServer_lt c _ g)
   | badcookie =>
     simp only [onReply]
     split
     · split
-      · exact lexLt_le _ _ (advanceServer_lt c { s with serverFailed := true } g)
+      · exact lexLt_le _ _ (advanceServer_lt c _ g)
       · -- The retry over the stream spends the server's one retry for the stream's send.
         rename_i hr
         have hk : s.cookieRetried = false := by

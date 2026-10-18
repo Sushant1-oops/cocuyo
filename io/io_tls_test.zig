@@ -101,6 +101,26 @@ test "a lookup every server refused over TLS ends in AllServersFailed, not Timeo
     try rig.deinit();
 }
 
+test "a refused handshake is the connect's cause, since the lookup hears the connection was never up" {
+    // The lookup hears that a TLS connection is up only at the handshake's end (TLS rule 1), so a
+    // refusal is the connect's (docs/design.md §5, The cause of a failure). One pass, so the last
+    // failure is the second server's own refusal, on a connection slot of its own.
+    var rig: Rig = .{};
+    try encrypt(&rig);
+    const refusing: rotor.server.Script = .{ .tls = .{ .refuse = true } };
+    try rig.init(119, .{ refusing, refusing }, .{ .servers = &.{}, .attempts = 1, .timeout_ns = fixtures.stream_timeout_ns, .timeout_ns_max = fixtures.stream_timeout_ns, .failover_retry_chance = 0 });
+    rig.use_test_contexts();
+    _ = try rig.engine.start(question("example.com."), rig.loop.now());
+    const result = try rig.until_result();
+    try testing.expectEqual(cocuyo.Error.AllServersFailed, result.outcome.failure.err);
+    try testing.expectEqual(@as(?cocuyo.Cause, .connect), result.outcome.failure.cause);
+    // Both servers heard the session's fatal alert, so each refused a handshake of its own.
+    try testing.expectEqual(@as(u32, 1), rig.loop.network().alerts_heard[0]);
+    try testing.expectEqual(@as(u32, 1), rig.loop.network().alerts_heard[1]);
+    _ = rig.engine.take(rig.loop.now());
+    try rig.deinit();
+}
+
 /// Whether a connection to `server` is up, in whichever slot.
 fn up_to(rig: *const Rig, server: u8) bool {
     for (rig.engine.connections) |connection| {

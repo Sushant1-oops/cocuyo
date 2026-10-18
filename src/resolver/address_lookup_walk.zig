@@ -143,7 +143,7 @@ pub fn take_answer(self: *AddressLookup, pending: *Pending, answer: *const Answe
 }
 
 pub fn take_failure(self: *AddressLookup, pending: *Pending, failure: Failure) void {
-    pending.err = failure.err;
+    pending.failure = failure;
     // A cancel is nobody's failure: the walk's own, or the consumer's, which ends the walk as
     // `Canceled` whatever else was seen.
     if (failure.err != core.Error.Canceled) self.last_failure = failure;
@@ -182,31 +182,32 @@ pub fn cancel_pending(self: *AddressLookup, pending: *Pending) void {
 
 /// Both lookups of the candidate ended: an answer ends the walk, a name that does not exist
 /// moves to the next candidate, and so does nothing but NODATA; any other failure ends the walk
-/// with it. The order matters: the `Canceled` of a lookup the walk cancelled itself is only ever
-/// beside a `NameNotFound`, which decides first.
+/// with it, that lookup's `Failure` whole, its cause included (docs/design.md §19 step 14). The
+/// order matters: the `Canceled` of a lookup the walk cancelled itself is only ever beside a
+/// `NameNotFound`, which decides first.
 pub fn end_candidate(self: *AddressLookup) void {
     assert(self.a.ended and self.aaaa.ended);
     if (self.cancelled) return end_failed(self, core.Error.Canceled);
     if (self.a.answered or self.aaaa.answered) return finish_answered(self);
     if (said_not_found(&self.a) or said_not_found(&self.aaaa)) return next_candidate(self);
-    if (hard_error(self)) |err| return end_failed(self, err);
+    if (hard_failure(self)) |failure| return end_failed_with(self, failure);
     next_candidate(self);
 }
 
 fn said_not_found(pending: *const Pending) bool {
-    const err = pending.err orelse return false;
-    return err == core.Error.NameNotFound;
+    const failure = pending.failure orelse return false;
+    return failure.err == core.Error.NameNotFound;
 }
 
-/// A failure that is not negative, from either lookup.
-fn hard_error(self: *const AddressLookup) ?core.Error {
-    return hard_error_of(&self.a) orelse hard_error_of(&self.aaaa);
+/// A failure that is not negative, from either lookup: the A lookup's first.
+fn hard_failure(self: *const AddressLookup) ?Failure {
+    return hard_failure_of(&self.a) orelse hard_failure_of(&self.aaaa);
 }
 
-fn hard_error_of(pending: *const Pending) ?core.Error {
-    const err = pending.err orelse return null;
-    if (err == core.Error.NameNotFound or err == core.Error.NoData) return null;
-    return err;
+fn hard_failure_of(pending: *const Pending) ?Failure {
+    const failure = pending.failure orelse return null;
+    if (failure.err == core.Error.NameNotFound or failure.err == core.Error.NoData) return null;
+    return failure;
 }
 
 fn next_candidate(self: *AddressLookup) void {
@@ -219,7 +220,7 @@ fn next_candidate(self: *AddressLookup) void {
 }
 
 fn finish_answered(self: *AddressLookup) void {
-    self.partial = hard_error(self);
+    self.partial = if (hard_failure(self)) |failure| failure.err else null;
     select_families(self);
     order_kept(self);
     if (self.flags.canonical_name and !self.has_canonical) set_canonical(self, &candidate_name(self));
@@ -234,8 +235,15 @@ fn end_negative(self: *AddressLookup) void {
 }
 
 pub fn end_failed(self: *AddressLookup, err: core.Error) void {
-    var failure: Failure = self.last_failure orelse .{ .err = err, .server_index = 0, .attempts_made = 0, .negative_ttl_seconds = 0 };
+    var failure: Failure = self.last_failure orelse .{ .err = err, .server_index = 0, .attempts_made = 0, .negative_ttl_seconds = 0, .cause = null };
     failure.err = err;
+    end_failed_with(self, failure);
+}
+
+/// The walk ends with `failure`, a lookup's own, or one an end of the walk built.
+fn end_failed_with(self: *AddressLookup, failure: Failure) void {
+    // `AllServersFailed` rests on a server that failed a lookup (docs/design.md §5).
+    assert(failure.err != core.Error.AllServersFailed or failure.cause != null);
     self.ended = .{ .failed = failure };
 }
 
@@ -330,4 +338,25 @@ test "a lookup that kept part of its answer makes the walk's answer say so too" 
     const info = rig.lookup.outcome().?.answered;
     try testing.expectEqual(@as(usize, core.constants.addresses_max), info.addresses.len);
     try testing.expect(info.truncated);
+}
+
+test "a walk that ends on a hard failure carries that lookup's failure whole, its cause included" {
+    // The A lookup's servers fail it, and the AAAA lookup's end comes after: NODATA, or silence.
+    // The walk ends with the A lookup's failure (rule 5), not with the fields of the last lookup
+    // that failed (docs/design.md §19 step 14, §5 The cause of a failure).
+    const config: core.Config = .{ .servers = &fixtures.servers_one, .search = &.{}, .attempts = 1 };
+    for ([_]bool{ false, true }) |silent| {
+        var rig: lookup_test.Rig = .{ .table = .{ .config = config } };
+        try rig.open();
+        try rig.start(null, "host.example.", null, .{});
+        try rig.drive();
+        try rig.reply(rig.lookup.a.handle, fixtures.server_failure);
+        try rig.drive();
+        if (silent) rig.table.now_ns += fixtures.address_timeout_jump_ns else try rig.reply(rig.lookup.aaaa.handle, fixtures.no_data);
+        try rig.drive();
+        const failure = rig.lookup.outcome().?.failed;
+        try testing.expectEqual(core.Error.AllServersFailed, failure.err);
+        try testing.expectEqual(@as(?lookup_module.Cause, .{ .rcode = .server_failure }), failure.cause);
+        try testing.expectEqual(@as(u32, 0), failure.negative_ttl_seconds);
+    }
 }

@@ -8,6 +8,7 @@ const wire = @import("wire");
 const lookup_module = @import("lookup.zig");
 const Action = lookup_module.Action;
 const Verdict = lookup_module.Verdict;
+const Cause = lookup_module.Cause;
 const fixtures = @import("fixtures.zig");
 
 const https: core.Https = .{ .template = "https://dns.example/dns-query{?dns}" };
@@ -181,7 +182,11 @@ test "a lookup whose every request failed ends in AllServersFailed" {
             const transaction = (try send(&harness)).send_request.transaction;
             harness.lookup.on_request_failed(transaction, harness.now_ns);
         }
-        try testing.expectEqual(core.Error.AllServersFailed, harness.poll().failed.err);
+        const failure = harness.poll().failed;
+        try testing.expectEqual(core.Error.AllServersFailed, failure.err);
+        // Over DoH and DoQ each failure of a server is the request's: an HTTP status, a stream
+        // the server reset, or a connection or a handshake under it (docs/design.md §5).
+        try testing.expectEqual(@as(?Cause, .request), failure.cause);
     }
 }
 
@@ -202,7 +207,7 @@ test "over DoH or DoQ a truncated answer is read as it stands, marked, and BADCO
         transaction = (try send(&harness)).send_request.transaction;
         try testing.expectEqual(Verdict.accepted, answer(&harness, bad_cookie, transaction, 0));
         try testing.expectEqual(@as(u8, 1), harness.lookup.server_index);
-        try testing.expect(harness.lookup.flags.had_server_failure);
+        try testing.expectEqual(@as(?Cause, .{ .rcode = .bad_cookie }), harness.lookup.cause);
         // The server failed the lookup, so it counts against it (§19 step 12).
         try testing.expectEqual(@as(u8, 1), harness.servers.failures(0));
     }

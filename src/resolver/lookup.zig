@@ -34,6 +34,7 @@ const init_module = @import("lookup_init.zig");
 const response_module = @import("lookup_response.zig");
 const cut_module = @import("lookup_response_cut.zig");
 const request_module = @import("lookup_request.zig");
+const failure_module = @import("lookup_failure.zig");
 
 pub const State = enum {
     /// A query is ready to be sent to the current server over UDP, or over DoH or DoQ as one
@@ -110,27 +111,13 @@ pub const Answer = struct {
     truncated: bool,
 };
 
-pub const Failure = struct {
-    err: core.Error,
-    server_index: u8,
-    /// The passes over the server list the lookup completed before it ended: `Config.attempts`
-    /// when it ran out of them, as `Timeout` and `AllServersFailed` do, and zero when it ended in
-    /// its first pass, as a name that does not exist usually does.
-    attempts_made: u8,
-    /// For `NameNotFound` and `NoData`, the TTL a cache may keep the negative answer for. Each
-    /// negative response carries the SOA minimum it held (RFC 2308 §5), or zero when it held no
-    /// SOA. A lookup that `Resolver.start` runs walks its search list itself, and reports the
-    /// smallest of its candidates' negative TTLs, not the last one's alone: the end is kept under
-    /// the name as asked, and it rests on every candidate's negative (docs/design.md §5).
-    /// `AddressLookup` walks the search list with one absolute lookup per candidate, and its
-    /// failure carries its last lookup's negative TTL alone, which the candidates before that one
-    /// do not bound (docs/design.md §19 step 14). Zero for every other failure, and zero is never
-    /// cached (docs/design.md §18).
-    negative_ttl_seconds: u32,
-};
+pub const Failure = failure_module.Failure;
+pub const Cause = failure_module.Cause;
 
 /// The flags one lookup carries, packed into an octet so the hot block stays inside a cache line.
-pub const Flags = packed struct(u8) {
+/// Whether a server failed the lookup is not one of them: the lookup's `cause` says it
+/// (docs/design.md §5, The cause of a failure).
+pub const Flags = packed struct(u7) {
     /// Whether the query carries an OPT record. Cleared for one server that answers FORMERR, and
     /// set again when the lookup moves to another server or another name: that a server does
     /// not speak EDNS0 is a fact about that server (RFC 6891 §6.2.2).
@@ -140,10 +127,6 @@ pub const Flags = packed struct(u8) {
     mix_case: bool,
     /// Whether any candidate answered NOERROR with no record of this type.
     had_no_data: bool,
-    /// Whether any server failed the lookup: answered SERVFAIL, REFUSED or NOTIMP, FORMERR
-    /// without EDNS0, or BADCOOKIE over a stream after its retry or over DoH or DoQ, or refused
-    /// it, a connection, a handshake or a request failing (docs/design.md §5, retry policy).
-    had_server_failure: bool,
     /// Whether a CNAME was followed, which makes the current name the canonical one.
     aliased: bool,
     /// Whether a BADCOOKIE was already answered with a retry on this server (RFC 7873 §5.3),
@@ -184,6 +167,11 @@ pub const Lookup = struct {
     now_ns_seen: u64,
     entropy: entropy_module.Entropy,
     failure: core.Error,
+    /// The cause of the last server failure, which `Failure.cause` reports. It is null until a
+    /// server fails the lookup, and nothing clears it after. `Cause` lists each way a server
+    /// fails it: an rcode, or a connection, a handshake or a request that failed. Whether there
+    /// is one decides `AllServersFailed` against `Timeout` (docs/design.md §5).
+    cause: ?Cause,
     /// The smallest negative TTL of the candidates the search walk moved past: what
     /// `Failure.negative_ttl_seconds` reports, and what bounds `Answer.ttl_seconds`
     /// (docs/design.md §5). The largest TTL there is until a candidate answers NXDOMAIN or
@@ -290,13 +278,14 @@ pub const Lookup = struct {
     }
 
     /// The connection failed: refused, reset, or its handshake failed. The server refused the
-    /// lookup, which counts as SERVFAIL does (docs/design.md §16 decision 25).
+    /// lookup, which counts as SERVFAIL does (docs/design.md §16 decision 25). The cause is the
+    /// connect's before `on_tcp_connected`, and the stream's after it (§5, The cause of a failure).
     pub fn on_tcp_failed(self: *Lookup, now_ns: u64) void {
         self.see(now_ns);
         assert(self.state == .connecting_tcp or self.state == .tcp_ready or
             self.state == .awaiting_tcp);
         self.servers.record_failure(self.server_slot(), now_ns);
-        self.flags.had_server_failure = true;
+        self.cause = failure_module.stream_cause(self.state);
         self.next_server(now_ns);
     }
 
@@ -398,7 +387,8 @@ pub const Lookup = struct {
             self.round += 1;
         }
         if (self.round == self.config.attempts) {
-            self.fail(if (self.flags.had_server_failure)
+            // A server that failed the lookup left a cause; silence leaves none (§16 decision 25).
+            self.fail(if (self.cause != null)
                 core.Error.AllServersFailed
             else
                 core.Error.Timeout);
@@ -485,14 +475,6 @@ pub const Lookup = struct {
     }
 
     pub fn failure_of(self: *const Lookup) Failure {
-        assert(self.state == .failed);
-        const negative = self.failure == core.Error.NameNotFound or self.failure == core.Error.NoData;
-        return .{
-            .err = self.failure,
-            // A lookup with no server to have been on reports the first.
-            .server_index = if (self.config.server_count() == 0) 0 else self.server_slot(),
-            .attempts_made = self.round,
-            .negative_ttl_seconds = if (negative) self.negative_ttl_seconds else 0,
-        };
+        return failure_module.failure_of(self);
     }
 };

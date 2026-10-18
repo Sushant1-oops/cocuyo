@@ -113,6 +113,23 @@ while (true) {
 }
 ```
 
+When a lookup fails, `failure.err` says how it ended, and `failure.cause` says why a server failed
+it. The cause is the last such failure the lookup met:
+
+- `.rcode`, a response's code: SERVFAIL, REFUSED, NOTIMP or BADVERS, FORMERR to a query without
+  EDNS0, or a BADCOOKIE that moves the lookup to the next server.
+- `.connect`, a connection that did not come up: its connect failed, or over TLS its handshake did.
+  The engine gives `.connect` for three local failures too: no socket, no free connection slot,
+  and an engine that keeps no TCP connection. No server took part in them, and one of them on a
+  later pass replaces the cause that a server gave before it.
+- `.stream`, a connection that came up and then failed before the answer.
+- `.request`, a request over DoH or DoQ that ended without an answer.
+
+It is null when no server failed the lookup. So `AllServersFailed` always has a cause, and
+`Timeout`, where every try went unanswered, never has one. Another error can carry a cause too: a
+name that does not exist after one server answered SERVFAIL. The examples print it after the
+error, as `example.com: AllServersFailed (connect)` (docs/design.md §5, The cause of a failure).
+
 For many lookups at once, `Resolver` does the same with one `poll` for the whole table, one
 deadline to arm one timer, and one `on_datagram` call per datagram received. A datagram longer
 than the receive buffer arrives cut, and the kernel marks it as truncated. Hand that one to

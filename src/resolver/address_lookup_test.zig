@@ -361,8 +361,9 @@ test "a table that fills the room is an answer marked truncated, since more may 
 }
 
 test "the size of an address lookup is pinned" {
-    // docs/design.md §9: the number there is this one.
-    try testing.expectEqual(@as(usize, 1152), @sizeOf(AddressLookup));
+    // docs/design.md §9: the number there is this one. 1152 until 2026-10-17, when `Failure`
+    // gained its cause and each pending lookup kept its whole failure (§16 decision 45).
+    try testing.expectEqual(@as(usize, 1184), @sizeOf(AddressLookup));
 }
 
 test "a table with one slot short of the pair refuses the start and leaves nothing behind" {

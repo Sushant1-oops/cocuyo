@@ -126,6 +126,33 @@ test "a session that cannot start, seal or open, or whose peer closes, fails ove
     try expect_fails_over(51, .closed);
 }
 
+test "a session that fails at each server ends in AllServersFailed, its cause where it failed" {
+    // A session that cannot start fails its connection before the lookup hears that it is up, so
+    // the cause is the connect's. One that cannot seal, or opens a record it refuses or a
+    // `close_notify`, fails it once up, and the cause is the stream's (docs/design.md §5, The
+    // cause of a failure).
+    const cases = [_]struct { at: Failure, cause: cocuyo.Cause }{
+        .{ .at = .start, .cause = .connect },
+        .{ .at = .seal, .cause = .stream },
+        .{ .at = .open, .cause = .stream },
+        .{ .at = .closed, .cause = .stream },
+    };
+    for (cases) |case| {
+        failing = .{ .at = case.at, .left = std.math.maxInt(u8) };
+        defer failing = .{};
+        var rig: FailingRig = .{};
+        try tls_test.encrypt(&rig);
+        try rig.init(117, .{ .{}, .{} }, .{ .servers = &.{}, .timeout_ns = fixtures.stream_timeout_ns, .timeout_ns_max = fixtures.stream_timeout_ns, .failover_retry_chance = 0 });
+        rig.use_test_contexts();
+        _ = try rig.engine.start(question("example.com."), rig.loop.now());
+        const result = try rig.until_result();
+        try testing.expectEqual(cocuyo.Error.AllServersFailed, result.outcome.failure.err);
+        try testing.expectEqual(@as(?cocuyo.Cause, case.cause), result.outcome.failure.cause);
+        _ = rig.engine.take(rig.loop.now());
+        try rig.deinit();
+    }
+}
+
 /// What one lookup came to: its error, null for an answer, the first server's failures, and
 /// whether it ended before its wait ran out.
 const Seen = struct { failure: ?cocuyo.Error, failures: u8, at_once: bool };

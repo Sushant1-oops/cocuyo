@@ -35,6 +35,9 @@ fn fails_all(seed: u64, first: rotor.server.Script, second: rotor.server.Script)
     _ = try rig.engine.start(question("example.com."), rig.loop.now());
     const result = try rig.until_result();
     try testing.expectEqual(cocuyo.Error.AllServersFailed, result.outcome.failure.err);
+    // Over DoQ each failure of a server is the request's (docs/design.md §5, The cause of a
+    // failure).
+    try testing.expectEqual(@as(?cocuyo.Cause, .request), result.outcome.failure.cause);
     _ = rig.engine.take(rig.loop.now());
     try rig.deinit();
 }
@@ -70,6 +73,7 @@ test "a socket the system refuses fails the request, on every server" {
     _ = try rig.engine.start(question("example.com."), rig.loop.now());
     const result = try rig.until_result();
     try testing.expectEqual(cocuyo.Error.AllServersFailed, result.outcome.failure.err);
+    try testing.expectEqual(@as(?cocuyo.Cause, .request), result.outcome.failure.cause);
     try testing.expect(rig.engine.quic.connections[0].state == .closed);
     rig.loop.network().refuse_open = false;
     _ = rig.engine.take(rig.loop.now());

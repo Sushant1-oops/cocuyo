@@ -473,6 +473,7 @@ test {
         _ = @import("io_sim_servers_test.zig");
         _ = @import("io_sim_datagram_test.zig");
         _ = @import("io_tcp_test.zig");
+        _ = @import("io_tcp_cause_test.zig");
         _ = @import("io_tcp_frame_test.zig");
         _ = @import("io_lifecycle_test.zig");
         _ = @import("io_lifecycle_cache_test.zig");

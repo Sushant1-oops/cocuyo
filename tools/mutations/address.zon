@@ -34,7 +34,7 @@
         .id = "A4",
         .what = "a hard failure on one family is dropped",
         .edits = .{
-            .{ .file = "src/resolver/address_lookup_walk.zig", .old = "    if (hard_error(self)) |err| return end_failed(self, err);\n", .new = "" },
+            .{ .file = "src/resolver/address_lookup_walk.zig", .old = "    if (hard_failure(self)) |failure| return end_failed_with(self, failure);\n", .new = "" },
         },
         .caught_by = .{ .step = "test-resolver" },
     },
@@ -43,7 +43,7 @@
         .id = "A5",
         .what = "the half that failed is not reported",
         .edits = .{
-            .{ .file = "src/resolver/address_lookup_walk.zig", .old = "    self.partial = hard_error(self);", .new = "    self.partial = null;" },
+            .{ .file = "src/resolver/address_lookup_walk.zig", .old = "    self.partial = if (hard_failure(self)) |failure| failure.err else null;", .new = "    self.partial = null;" },
         },
         .caught_by = .{ .step = "test-resolver" },
     },

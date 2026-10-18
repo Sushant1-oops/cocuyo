@@ -1,0 +1,126 @@
+//! The cause that each failure of a stream gives a lookup, on the twin (docs/design.md §5, The
+//! cause of a failure). A failure before the lookup hears that its connection is up is
+//! `connect`. These are a connect refused, no free slot, and an engine with no TCP connection.
+//! After it, a failure is `stream`: a reset, or a send that fails. Split from
+//! `io_tcp_test.zig` by the file-length rule. The rig is the one `io_sim_test.zig` builds.
+const std = @import("std");
+const testing = std.testing;
+const cocuyo = @import("cocuyo");
+const rotor = @import("rotor");
+const tcp = @import("io_tcp.zig");
+
+const fixtures = @import("fixtures.zig");
+const sim_test = @import("io_sim_test.zig");
+const Rig = sim_test.Rig;
+const question = sim_test.question;
+const Streamless = @import("io_tcp_test.zig").Streamless;
+
+/// The rig's engine over one scripted server, so that the first failure is the last one.
+const OneServer = sim_test.RigOfServers(@FieldType(Rig, "engine"), 1);
+
+/// Requires the next result to be `AllServersFailed`, its cause `cause`, and takes it.
+fn expect_all_failed(rig: anytype, cause: cocuyo.Cause) !void {
+    const result = try rig.until_result();
+    try testing.expectEqual(cocuyo.Error.AllServersFailed, result.outcome.failure.err);
+    try testing.expectEqual(@as(?cocuyo.Cause, cause), result.outcome.failure.cause);
+    _ = rig.engine.take(rig.loop.now());
+}
+
+test "a lookup every server refused a connection ends in AllServersFailed, its cause the connect" {
+    var rig: Rig = .{};
+    try rig.init(116, .{ .{ .tcp = false }, .{ .tcp = false } }, .{ .servers = &.{}, .use_tcp = true, .failover_retry_chance = 0 });
+    _ = try rig.engine.start(question("example.com."), rig.loop.now());
+    // The connection never came up.
+    try expect_all_failed(&rig, .connect);
+    try rig.deinit();
+}
+
+test "a lookup whose every stream failed once up ends in AllServersFailed, its cause the stream" {
+    var rig: Rig = .{};
+    try rig.init(118, .{ .{}, .{} }, .{ .servers = &.{}, .use_tcp = true, .attempts = 1, .failover_retry_chance = 0 });
+    _ = try rig.engine.start(question("example.com."), rig.loop.now());
+    for (0..fixtures.servers) |server| {
+        // The query is on its way out on the server's connection, which is up, and the peer
+        // resets it.
+        const at = try until_up(&rig, @intCast(server));
+        const receive = tcp.user_data_of(&rig.engine, .tcp_receive, at);
+        _ = rig.engine.apply(rotor.Event.failure(receive, .connection_reset), rig.loop.now());
+    }
+    try expect_all_failed(&rig, .stream);
+    try rig.deinit();
+}
+
+/// Steps the loop until a connection to `server` is up, and returns its slot.
+fn until_up(rig: *Rig, server: u8) !u8 {
+    for (0..fixtures.until_rounds_max) |_| {
+        if (up_to(rig, server)) |at| return at;
+        _ = try rig.step(fixtures.wait_ns);
+    }
+    return error.TestUnexpectedResult;
+}
+
+/// The slot of the connection to `server` that is up, if one is.
+fn up_to(rig: *const Rig, server: u8) ?u8 {
+    for (rig.engine.connections, 0..) |connection, at| {
+        if (connection.server == server and connection.state == .up) return @intCast(at);
+    }
+    return null;
+}
+
+test "a query send that fails on a connection that is up gives the stream as the cause" {
+    // The engine fails the connection, and does not report a failed send. A failed send is
+    // silence, and this server took the connection (docs/design.md §5, The cause of a failure).
+    var rig: OneServer = .{};
+    try rig.init(117, .{.{}}, .{ .servers = &.{}, .use_tcp = true, .attempts = 1 });
+    const handle = try rig.engine.start(question("example.com."), rig.loop.now());
+    // The connect ends, the lookup hears that the connection is up, and its query goes out.
+    _ = try rig.step(fixtures.wait_ns);
+    try testing.expect(rig.engine.connections[0].sending);
+    // The twin's sends do not fail, so the query's is made to.
+    const count = try sim_test.tick_for(&rig.loop, &rig.events, fixtures.wait_ns);
+    const sent = @TypeOf(rig.engine).user_data(.tcp_send, handle.index);
+    var failed = false;
+    for (rig.events[0..count]) |*event| {
+        if (event.user_data != sent) continue;
+        event.* = rotor.Event.failure(sent, .connection_reset);
+        failed = true;
+    }
+    try testing.expect(failed);
+    for (rig.events[0..count]) |event| _ = rig.engine.apply(event, rig.loop.now());
+    try expect_all_failed(&rig, .stream);
+    try rig.deinit();
+}
+
+test "a lookup that finds no free connection slot fails over, its cause the connect" {
+    // The engine has one slot. The first server's connect outlasts the lookup's wait, so the
+    // lookup moves on while the loop still holds that slot's connect. The second server gets no
+    // slot, and nothing reaches it.
+    var rig: Rig = .{};
+    const slow: rotor.server.Script = .{ .connect_delay_ns = fixtures.slow_connect_ns };
+    try rig.init(119, .{ slow, .{} }, .{
+        .servers = &.{},
+        .use_tcp = true,
+        .timeout_ns = fixtures.slow_connect_timeout_ns,
+        .attempts = 1,
+        .failover_retry_chance = 0,
+    });
+    try testing.expectEqual(@as(usize, 1), rig.engine.connections.len);
+    _ = try rig.engine.start(question("example.com."), rig.loop.now());
+    try expect_all_failed(&rig, .connect);
+    try testing.expectEqual(@as(u8, 0), rig.engine.connections[0].server);
+    // The connect lands after the end, on a connection that nobody is on.
+    _ = try rig.step(fixtures.slow_connect_ns);
+    try rig.deinit();
+}
+
+test "an engine with no TCP connection fails each stream that a lookup asks for, its cause the connect" {
+    // Each server truncates, and so each asks the lookup to ask again over a stream that an
+    // engine of none cannot give.
+    var rig: sim_test.RigOf(Streamless) = .{};
+    const truncating: rotor.server.Script = .{ .truncate_per_256 = fixtures.always };
+    try rig.init(120, .{ truncating, truncating }, .{ .servers = &.{}, .attempts = 1, .failover_retry_chance = 0 });
+    _ = try rig.engine.start(question("example.com."), rig.loop.now());
+    try expect_all_failed(&rig, .connect);
+    try testing.expectEqual(@as(u8, 1), rig.engine.resolver.servers.failures(1));
+    try rig.deinit();
+}

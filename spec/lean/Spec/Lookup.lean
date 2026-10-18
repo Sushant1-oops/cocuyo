@@ -19,6 +19,24 @@ inductive Err where
   | nameNotFound | noData | timeout | allServersFailed | chainTooLong | canceled | noServers
   deriving DecidableEq, Repr, Inhabited, Hashable
 
+/-- What made a server fail the lookup: the cause it keeps, of the last such failure (docs/design.md
+§5, The cause of a failure; §16 decision 45). A reply's rcode, as the model's replies name it, or
+the event that said a transport failed. -/
+inductive Cause where
+  /-- SERVFAIL, REFUSED or NOTIMP. -/
+  | servfail
+  /-- FORMERR to a query without EDNS0. -/
+  | formerr
+  /-- BADCOOKIE that advances the server: over a stream after its retry, or over DoH or DoQ. -/
+  | badcookie
+  /-- `on_tcp_failed` while the lookup connects: the connect, or over TLS the handshake. -/
+  | connect
+  /-- `on_tcp_failed` once the connection is up. -/
+  | stream
+  /-- `on_request_failed`: a request over DoH or DoQ ended without an answer. -/
+  | request
+  deriving DecidableEq, Repr, Inhabited, Hashable
+
 /-- What a datagram or a stream message is, once §7's checks and §5's rcode policy have read it. -/
 inductive Reply where
   /-- It fails a check of §7: it is not this lookup's response, and the wait stands. -/
@@ -94,11 +112,12 @@ structure State where
   hops : Nat
   edns : Bool
   hadNoData : Bool
-  /-- Whether a server failed the lookup, which decides the failure when the attempts run out (§5,
-  retry policy): it answered SERVFAIL, REFUSED or NOTIMP, FORMERR without EDNS0, or BADCOOKIE over
-  a stream after its retry or over DoH or DoQ, or it refused the lookup, a connection, a handshake
-  or a request failing (§16 decision 25). -/
-  serverFailed : Bool
+  /-- The cause of the last server failure, or none while no server failed the lookup. Whether
+  there is one decides the failure when the attempts run out (§5, retry policy): a server answered
+  SERVFAIL, REFUSED or NOTIMP, FORMERR without EDNS0, or BADCOOKIE over a stream after its retry or
+  over DoH or DoQ, or it refused the lookup: a connection, a handshake or a request failed (§16
+  decision 25). Each such failure replaces it, and nothing clears it (§16 decision 45). -/
+  cause : Option Cause
   /-- Whether this server already answered BADCOOKIE once and was asked again (RFC 7873 §5.3),
   over a datagram or over a stream. -/
   cookieRetried : Bool
@@ -115,9 +134,13 @@ def fail (s : State) (e : Err) : State := { s with stage := .failed, err := e, o
 
 def init (c : Config) : State :=
   let s : State := { stage := fresh c, server := 0, round := 0, candidate := 0, hops := 0,
-                     edns := true, hadNoData := false, serverFailed := false,
+                     edns := true, hadNoData := false, cause := none,
                      cookieRetried := false, offered := false, err := .timeout }
   if c.servers = 0 then fail s .noServers else s
+
+/-- A server failed the lookup with cause `k`: the cause replaces the one the lookup held, and
+nothing else changes (§5, The cause of a failure). -/
+def keep (s : State) (k : Cause) : State := { s with cause := some k }
 
 /-- The next server, then the next pass, then failure (§5, retry policy). EDNS0 is back on: that a
 server does not speak it is a fact about that server (RFC 6891 §6.2.2). -/
@@ -129,7 +152,7 @@ def advanceServer (c : Config) (s : State) : State :=
     { s with server := 0, round := s.round + 1, stage := fresh c, edns := true,
              cookieRetried := false, offered := false }
   else
-    fail { s with round := s.round + 1 } (if s.serverFailed then .allServersFailed else .timeout)
+    fail { s with round := s.round + 1 } (if s.cause.isSome then .allServersFailed else .timeout)
 
 /-- The next search candidate, which starts the walk over the servers again, then failure
 (§5, search list policy). -/
@@ -155,18 +178,18 @@ def onReply (c : Config) (s : State) (stream : Bool) : Reply → State × Out
     else ({ s with hops := s.hops + 1, stage := fresh c }, .accepted)
   | .nxdomain => (nextCandidate c s false, .accepted)
   | .nodata => (nextCandidate c s true, .accepted)
-  | .servfail => (advanceServer c { s with serverFailed := true }, .accepted)
+  | .servfail => (advanceServer c (keep s .servfail), .accepted)
   -- FORMERR to a query without EDNS0 is the server failing, as SERVFAIL is.
   | .formerr =>
     if s.edns then ({ s with edns := false, stage := fresh c }, .accepted)
-    else (advanceServer c { s with serverFailed := true }, .accepted)
+    else (advanceServer c (keep s .formerr), .accepted)
   -- Once more with the cookie just learned (RFC 7873 §5.3), over the transport the lookup is on:
   -- the server's one retry, whichever transport takes it. Again over UDP, then over TCP; again
   -- over a stream, the server has failed. A query over DoH or DoQ carries no cookie, so there is
   -- none to retry with, and the server has failed at once (docs/design.md §19 step 10).
   | .badcookie =>
     if stream then
-      if c.request || s.cookieRetried then (advanceServer c { s with serverFailed := true }, .accepted)
+      if c.request || s.cookieRetried then (advanceServer c (keep s .badcookie), .accepted)
       else ({ s with cookieRetried := true, stage := .tcpNeeded }, .accepted)
     else if s.cookieRetried then ({ s with stage := .tcpNeeded }, .accepted)
     else ({ s with cookieRetried := true, stage := fresh c }, .accepted)
@@ -199,6 +222,11 @@ def onStream (s : Stage) : Bool :=
   | .connectingTcp | .tcpReady | .awaitingTcp => true
   | _ => false
 
+/-- The cause a failed stream keeps: the connect's while the lookup connects, which over TLS is the
+handshake's too, and the stream's once the lookup was told the connection is up (§5, The cause of
+a failure). -/
+def streamCause (s : Stage) : Cause := if s = .connectingTcp then .connect else .stream
+
 /-- One event, and what the lookup answers. -/
 def step (c : Config) (s : State) : Event → State × Out
   | .poll => poll c s
@@ -217,13 +245,15 @@ def step (c : Config) (s : State) : Event → State × Out
     | .connectingTcp => ({ s with stage := .tcpReady }, .none)
     | _ => (s, .none)
   -- A connection or a handshake that failed is the server refusing the lookup, which counts as
-  -- SERVFAIL does (§16 decision 25).
+  -- SERVFAIL does (§16 decision 25). The lookup is told that a connection is up only after its
+  -- handshake (§21, TLS rule 1), so a failure before that is the connect's (§16 decision 45).
   | .tcpFailed =>
-    if onStream s.stage then (advanceServer c { s with serverFailed := true }, .none) else (s, .none)
+    if onStream s.stage then (advanceServer c (keep s (streamCause s.stage)), .none)
+    else (s, .none)
   -- An HTTP or a QUIC failure is the server's: the next one (docs/design.md §22, §23), counted as
   -- the stream's is.
   | .requestFailed =>
-    if c.request ∧ s.stage = .awaitingUdp then (advanceServer c { s with serverFailed := true }, .none)
+    if c.request ∧ s.stage = .awaitingUdp then (advanceServer c (keep s .request), .none)
     else (s, .none)
   | .reply r =>
     match s.stage with

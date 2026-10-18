@@ -234,7 +234,7 @@
         .id = "G1",
         .what = "the committed slice edited by hand",
         .edits = .{
-            .{ .file = "tools/spec_replay/lookup_gate.txt", .old = "\n30 reply_truncated accepted tcp_needed 0/0/0/8 ----\n", .new = "\n30 reply_truncated ignored tcp_needed 0/0/0/8 ----\n" },
+            .{ .file = "tools/spec_replay/lookup_gate.txt", .old = "\n30 reply_truncated accepted tcp_needed 0/0/0/8 ---- -\n", .new = "\n30 reply_truncated ignored tcp_needed 0/0/0/8 ---- -\n" },
         },
         .caught_by = .{ .step = "test-tools" },
     },
@@ -586,7 +586,7 @@
         .id = "RF3",
         .what = "a failed connection is counted as silence",
         .edits = .{
-            .{ .file = "src/resolver/lookup.zig", .old = "        self.servers.record_failure(self.server_slot(), now_ns);\n        self.flags.had_server_failure = true;\n        self.next_server(now_ns);\n    }\n\n    /// Gives up", .new = "        self.servers.record_failure(self.server_slot(), now_ns);\n        self.next_server(now_ns);\n    }\n\n    /// Gives up" },
+            .{ .file = "src/resolver/lookup.zig", .old = "        self.servers.record_failure(self.server_slot(), now_ns);\n        self.cause = failure_module.stream_cause(self.state);\n        self.next_server(now_ns);\n    }\n\n    /// Gives up", .new = "        self.servers.record_failure(self.server_slot(), now_ns);\n        self.next_server(now_ns);\n    }\n\n    /// Gives up" },
         },
         .caught_by = .{ .step = "test-resolver" },
     },
@@ -595,7 +595,7 @@
         .id = "RF4",
         .what = "a failed request is counted as silence",
         .edits = .{
-            .{ .file = "src/resolver/lookup_request.zig", .old = "    self.servers.record_failure(self.server_slot(), now_ns);\n    self.flags.had_server_failure = true;\n", .new = "    self.servers.record_failure(self.server_slot(), now_ns);\n" },
+            .{ .file = "src/resolver/lookup_request.zig", .old = "    self.servers.record_failure(self.server_slot(), now_ns);\n    self.cause = .request;\n", .new = "    self.servers.record_failure(self.server_slot(), now_ns);\n" },
         },
         .caught_by = .{ .step = "test-resolver" },
     },
@@ -785,7 +785,7 @@
         .id = "FR2",
         .what = "an answer that marks the server's failure records a success, and marks the lookup's failure still",
         .edits = .{
-            .{ .file = "src/resolver/lookup_response.zig", .old = "        self.servers.record_failure(slot, now_ns);\n        self.flags.had_server_failure = true;", .new = "        self.servers.record_success(slot);\n        self.flags.had_server_failure = true;" },
+            .{ .file = "src/resolver/lookup_response.zig", .old = "        self.servers.record_failure(slot, now_ns);\n        self.cause = failed;", .new = "        self.servers.record_success(slot);\n        self.cause = failed;" },
         },
         .caught_by = .{ .step = "test-resolver" },
     },
@@ -794,7 +794,7 @@
         .id = "FR3",
         .what = "an answer's failure is recorded at instant zero, not the instant it came",
         .edits = .{
-            .{ .file = "src/resolver/lookup_response.zig", .old = "        self.servers.record_failure(slot, now_ns);\n        self.flags.had_server_failure = true;", .new = "        self.servers.record_failure(slot, 0);\n        self.flags.had_server_failure = true;" },
+            .{ .file = "src/resolver/lookup_response.zig", .old = "        self.servers.record_failure(slot, now_ns);\n        self.cause = failed;", .new = "        self.servers.record_failure(slot, 0);\n        self.cause = failed;" },
         },
         .caught_by = .{ .step = "test-resolver" },
     },
@@ -839,7 +839,7 @@
         .id = "FR8",
         .what = "a response ignored for an rcode cocuyo does not know resets the count, and without a COOKIE option starts the silence",
         .edits = .{
-            .{ .file = "src/resolver/lookup_response.zig", .old = "    const rcode = wire.Rcode.from_bits(bits) orelse return .ignored;", .new = "    const rcode = wire.Rcode.from_bits(bits) orelse {\n        heard(self, accepted.cookie, false, now_ns);\n        return .ignored;\n    };" },
+            .{ .file = "src/resolver/lookup_response.zig", .old = "    const rcode = wire.Rcode.from_bits(bits) orelse return .ignored;", .new = "    const rcode = wire.Rcode.from_bits(bits) orelse {\n        heard(self, accepted.cookie, null, now_ns);\n        return .ignored;\n    };" },
         },
         .caught_by = .{ .step = "test-resolver" },
     },
@@ -848,7 +848,7 @@
         .id = "FR9",
         .what = "a response ignored for a malformed answer section resets the count, and without a COOKIE option starts the silence",
         .edits = .{
-            .{ .file = "src/resolver/lookup_response.zig", .old = "            return .accepted;\n        }\n        return .ignored;\n    };", .new = "            return .accepted;\n        }\n        heard(self, accepted.cookie, false, now_ns);\n        return .ignored;\n    };" },
+            .{ .file = "src/resolver/lookup_response.zig", .old = "            return .accepted;\n        }\n        return .ignored;\n    };", .new = "            return .accepted;\n        }\n        heard(self, accepted.cookie, null, now_ns);\n        return .ignored;\n    };" },
         },
         .caught_by = .{ .step = "test-resolver" },
     },
@@ -857,7 +857,7 @@
         .id = "FR10",
         .what = "the server's state hears the answer after the lookup moves on, so another server is charged",
         .edits = .{
-            .{ .file = "src/resolver/lookup_response.zig", .old = "    heard(self, accepted.cookie, fails_server(self, action), now_ns);\n    switch (action) {", .new = "    const failed = fails_server(self, action);\n    defer heard(self, accepted.cookie, failed, now_ns);\n    switch (action) {" },
+            .{ .file = "src/resolver/lookup_response.zig", .old = "    heard(self, accepted.cookie, cause_of(self, action, rcode), now_ns);\n    switch (action) {", .new = "    const cause = cause_of(self, action, rcode);\n    defer heard(self, accepted.cookie, cause, now_ns);\n    switch (action) {" },
         },
         .caught_by = .{ .step = "test-resolver" },
     },
@@ -866,7 +866,7 @@
         .id = "FR11",
         .what = "a CNAME chain too long, the server's answer, leaves the count as it stood",
         .edits = .{
-            .{ .file = "src/resolver/lookup_response.zig", .old = "            heard(self, accepted.cookie, false, now_ns);\n            self.fail(core.Error.ChainTooLong);", .new = "            self.fail(core.Error.ChainTooLong);" },
+            .{ .file = "src/resolver/lookup_response.zig", .old = "            heard(self, accepted.cookie, null, now_ns);\n            self.fail(core.Error.ChainTooLong);", .new = "            self.fail(core.Error.ChainTooLong);" },
         },
         .caught_by = .{ .step = "test-resolver" },
     },
@@ -875,7 +875,7 @@
         .id = "FR12",
         .what = "a truncated answer over UDP leaves the count as it stood",
         .edits = .{
-            .{ .file = "src/resolver/lookup_response.zig", .old = "        heard(self, accepted.cookie, false, now_ns);\n        self.state = .tcp_needed;", .new = "        self.state = .tcp_needed;" },
+            .{ .file = "src/resolver/lookup_response.zig", .old = "        heard(self, accepted.cookie, null, now_ns);\n        self.state = .tcp_needed;", .new = "        self.state = .tcp_needed;" },
         },
         .caught_by = .{ .step = "test-resolver" },
     },
@@ -1120,11 +1120,11 @@
         .what = "a response ignored for a malformed answer section teaches no server cookie: the cookie of an answer to collect waits for its answer section",
         .edits = .{
             .{ .file = "src/resolver/lookup_response.zig", .old = "    cookies.learn(self, accepted.cookie);\n    // Truncation over UDP", .new = "    // Truncation over UDP" },
-            .{ .file = "src/resolver/lookup_response.zig", .old = "        heard(self, accepted.cookie, false, now_ns);\n        self.state = .tcp_needed;", .new = "        cookies.learn(self, accepted.cookie);\n        heard(self, accepted.cookie, false, now_ns);\n        self.state = .tcp_needed;" },
+            .{ .file = "src/resolver/lookup_response.zig", .old = "        heard(self, accepted.cookie, null, now_ns);\n        self.state = .tcp_needed;", .new = "        cookies.learn(self, accepted.cookie);\n        heard(self, accepted.cookie, null, now_ns);\n        self.state = .tcp_needed;" },
             .{ .file = "src/resolver/lookup_response.zig", .old = "    const rcode = wire.Rcode.from_bits(bits) orelse return .ignored;", .new = "    const rcode = wire.Rcode.from_bits(bits) orelse {\n        cookies.learn(self, accepted.cookie);\n        return .ignored;\n    };" },
-            .{ .file = "src/resolver/lookup_response.zig", .old = "    heard(self, accepted.cookie, fails_server(self, action), now_ns);", .new = "    cookies.learn(self, accepted.cookie);\n    heard(self, accepted.cookie, fails_server(self, action), now_ns);" },
-            .{ .file = "src/resolver/lookup_response.zig", .old = "            heard(self, accepted.cookie, false, now_ns);\n            self.fail(core.Error.ChainTooLong);", .new = "            cookies.learn(self, accepted.cookie);\n            heard(self, accepted.cookie, false, now_ns);\n            self.fail(core.Error.ChainTooLong);" },
-            .{ .file = "src/resolver/lookup_response.zig", .old = "    heard(self, accepted.cookie, false, now_ns);\n    // A name the chain moved to", .new = "    cookies.learn(self, accepted.cookie);\n    heard(self, accepted.cookie, false, now_ns);\n    // A name the chain moved to" },
+            .{ .file = "src/resolver/lookup_response.zig", .old = "    heard(self, accepted.cookie, cause_of(self, action, rcode), now_ns);", .new = "    cookies.learn(self, accepted.cookie);\n    heard(self, accepted.cookie, cause_of(self, action, rcode), now_ns);" },
+            .{ .file = "src/resolver/lookup_response.zig", .old = "            heard(self, accepted.cookie, null, now_ns);\n            self.fail(core.Error.ChainTooLong);", .new = "            cookies.learn(self, accepted.cookie);\n            heard(self, accepted.cookie, null, now_ns);\n            self.fail(core.Error.ChainTooLong);" },
+            .{ .file = "src/resolver/lookup_response.zig", .old = "    heard(self, accepted.cookie, null, now_ns);\n    // A name the chain moved to", .new = "    cookies.learn(self, accepted.cookie);\n    heard(self, accepted.cookie, null, now_ns);\n    // A name the chain moved to" },
         },
         .caught_by = .{ .step = "test-resolver" },
     },
@@ -1709,7 +1709,7 @@
         .id = "DT38",
         .what = "a connection or a handshake that failed takes a sample",
         .edits = .{
-            .{ .file = "src/resolver/lookup.zig", .old = "        self.servers.record_failure(self.server_slot(), now_ns);\n        self.flags.had_server_failure = true;\n", .new = "        self.servers.record_latency(self.server_slot(), now_ns - self.sent_at_ns, now_ns);\n        self.servers.record_failure(self.server_slot(), now_ns);\n        self.flags.had_server_failure = true;\n" },
+            .{ .file = "src/resolver/lookup.zig", .old = "        self.servers.record_failure(self.server_slot(), now_ns);\n        self.cause = failure_module.stream_cause(self.state);\n", .new = "        self.servers.record_latency(self.server_slot(), now_ns - self.sent_at_ns, now_ns);\n        self.servers.record_failure(self.server_slot(), now_ns);\n        self.cause = failure_module.stream_cause(self.state);\n" },
         },
         .caught_by = .{ .step = "test-resolver" },
     },
@@ -2953,5 +2953,203 @@
             .{ .file = "src/wire/name.zig", .old = "    if (start + length > message.len) return Error.MalformedMessage;", .new = "    if (false and start + length > message.len) return Error.MalformedMessage;" },
         },
         .caught_by = .{ .step = "test-wire" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC1",
+        .what = "the cause of a failed stream is the connect's in every state",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_failure.zig", .old = "    const cause: Cause = if (state == .connecting_tcp) .connect else .stream;", .new = "    const cause: Cause = .connect;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC2",
+        .what = "the cause of a failed stream is the stream's in every state",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_failure.zig", .old = "    const cause: Cause = if (state == .connecting_tcp) .connect else .stream;", .new = "    const cause: Cause = .stream;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC3",
+        .what = "a failed request keeps the stream's cause",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_request.zig", .old = "    self.cause = .request;", .new = "    self.cause = .stream;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC4",
+        .what = "a response that fails its server keeps no cause",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response.zig", .old = "        self.cause = failed;", .new = "        _ = failed;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC5",
+        .what = "each rcode that fails a server keeps SERVFAIL as its cause",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response.zig", .old = "    return .{ .rcode = rcode };", .new = "    return .{ .rcode = .server_failure };" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC6",
+        .what = "FORMERR to a query with EDNS0, a retry, keeps a cause",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response.zig", .old = "    if (!fails_server(self, action)) return null;", .new = "    if (!fails_server(self, action) and action != .retry_without_edns) return null;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC7",
+        .what = "a first BADCOOKIE, a retry, keeps a cause",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response.zig", .old = "    if (!fails_server(self, action)) return null;", .new = "    if (!fails_server(self, action) and action != .retry_with_cookie) return null;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC8",
+        .what = "a server error taken as the answer under check_response off keeps a cause",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response.zig", .old = "    if (!fails_server(self, action)) return null;", .new = "    if (!fails_server(self, action) and action != .fail) return null;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC9",
+        .what = "the next candidate clears the cause",
+        .edits = .{
+            .{ .file = "src/resolver/lookup.zig", .old = "        self.cname_hops = 0;\n        self.flags.aliased = false;\n        self.take_candidate(self.candidate_index + 1);", .new = "        self.cname_hops = 0;\n        self.flags.aliased = false;\n        self.cause = null;\n        self.take_candidate(self.candidate_index + 1);" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC10",
+        .what = "a try that ran out clears the cause",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_poll.zig", .old = "    self.servers.record_failure(slot, now_ns);\n    self.next_server(now_ns);", .new = "    self.servers.record_failure(slot, now_ns);\n    self.cause = null;\n    self.next_server(now_ns);" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC11",
+        .what = "the first rcode stays the cause, and a later one does not replace it",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response.zig", .old = "        self.cause = failed;", .new = "        if (self.cause == null) self.cause = failed;" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC12",
+        .what = "the first cause stays, and a failed stream after it does not replace it",
+        .edits = .{
+            .{ .file = "src/resolver/lookup.zig", .old = "        self.cause = failure_module.stream_cause(self.state);", .new = "        if (self.cause == null) self.cause = failure_module.stream_cause(self.state);" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC13",
+        .what = "the failure reports no cause",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_failure.zig", .old = "        .cause = self.cause,", .new = "        .cause = null," },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC14",
+        .what = "a failed send keeps a cause",
+        .edits = .{
+            .{ .file = "src/resolver/lookup.zig", .old = "        assert(self.state == .query_ready or self.state == .tcp_ready);\n        self.servers.record_failure(self.server_slot(), now_ns);\n        self.next_server(now_ns);", .new = "        assert(self.state == .query_ready or self.state == .tcp_ready);\n        self.servers.record_failure(self.server_slot(), now_ns);\n        self.cause = .stream;\n        self.next_server(now_ns);" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC15",
+        .what = "a lookup starts with a cause",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_init.zig", .old = "        .cause = null,", .new = "        .cause = .request," },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC16",
+        .what = "a walk ends a hard failure with its error alone, on the fields of the last lookup that failed",
+        .edits = .{
+            .{ .file = "src/resolver/address_lookup_walk.zig", .old = "    if (hard_failure(self)) |failure| return end_failed_with(self, failure);", .new = "    if (hard_failure(self)) |failure| return end_failed(self, failure.err);" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC17",
+        .what = "the reverse walk ends a hard failure with its error alone, on zeros and no cause",
+        .edits = .{
+            .{ .file = "src/resolver/name_lookup.zig", .old = "    if (!negative) return end_failed_with(self, failure);", .new = "    if (!negative) return end_failed_with(self, .{ .err = failure.err, .server_index = 0, .attempts_made = 0, .negative_ttl_seconds = 0, .cause = null });" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC18",
+        .what = "the replay spells the cause FORMERR as SERVFAIL",
+        .edits = .{
+            .{ .file = "tools/spec_replay/replay_text.zig", .old = "            .format_error => \"formerr\",", .new = "            .format_error => \"servfail\"," },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC19",
+        .what = "the replay's flag that a server failed ignores the cause",
+        .edits = .{
+            .{ .file = "tools/spec_replay/replay_text.zig", .old = "        flag(lookup.cause != null, 'F'),", .new = "        flag(false, 'F')," },
+        },
+        .caught_by = .{ .step = "test-tools" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC29",
+        .what = "the reverse walk keeps no failure of its lookup, and a negative end or a cancel ends on zeros",
+        .edits = .{
+            .{ .file = "src/resolver/name_lookup.zig", .old = "    // Kept before the cancel is read, so a cancel after a failure ends on its fields.\n    self.last_failure = failure;\n", .new = "" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC30",
+        .what = "the reverse walk reads the cancel before it keeps the failure of its lookup",
+        .edits = .{
+            .{ .file = "src/resolver/name_lookup.zig", .old = "    // Kept before the cancel is read, so a cancel after a failure ends on its fields.\n    self.last_failure = failure;\n    if (self.cancelled) return end_failed(self, core.Error.Canceled);\n", .new = "    if (self.cancelled) return end_failed(self, core.Error.Canceled);\n    self.last_failure = failure;\n" },
+        },
+        .caught_by = .{ .step = "test-resolver" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC31",
+        .what = "the first rcode stays the cause, as the replay of the committed slice sees it",
+        .edits = .{
+            .{ .file = "src/resolver/lookup_response.zig", .old = "        self.cause = failed;", .new = "        if (self.cause == null) self.cause = failed;" },
+        },
+        .caught_by = .{ .step = "test-tools" },
     },
 }

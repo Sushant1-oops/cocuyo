@@ -183,7 +183,7 @@ fn report(name: []const u8, result: Resolver.Result) !void {
     switch (result.outcome) {
         .answer => |answer| try answer_text.report(name, &answer),
         .failure => |failure| {
-            std.debug.print("{s}: {t}\n", .{ name, failure.err });
+            answer_text.report_failure(name, &failure);
             std.process.exit(1);
         },
     }

@@ -84,7 +84,7 @@ fn resolve(io: std.Io, name: []const u8, config: *const cocuyo.Config, seed: u64
             },
             .done => |answer| return report(name, answer),
             .failed => |failure| {
-                std.debug.print("{s}: {t}\n", .{ name, failure.err });
+                report_failure(name, &failure);
                 std.process.exit(1);
             },
         }
@@ -196,4 +196,16 @@ fn report(name: []const u8, answer: cocuyo.Answer) void {
     if (answer.truncated) {
         std.debug.print("{s}: more addresses existed than there was room for\n", .{name});
     }
+}
+
+/// A failure as one line: `<name>: <error>`, and the cause in parentheses when a server failed the
+/// lookup: the rcode, or `connect`, `stream` or `request` for a transport (docs/design.md §5, The
+/// cause of a failure). Silence has no cause: `example.com: Timeout`.
+fn report_failure(name: []const u8, failure: *const cocuyo.Failure) void {
+    const cause = failure.cause orelse return std.debug.print("{s}: {t}\n", .{ name, failure.err });
+    const cause_text = switch (cause) {
+        .rcode => |rcode| @tagName(rcode),
+        .connect, .stream, .request => @tagName(cause),
+    };
+    std.debug.print("{s}: {t} ({s})\n", .{ name, failure.err, cause_text });
 }

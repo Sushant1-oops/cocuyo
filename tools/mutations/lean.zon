@@ -52,7 +52,7 @@
         .id = "DM3",
         .what = "an HTTP failure changes nothing",
         .edits = .{
-            .{ .file = "spec/lean/Spec/Lookup.lean", .old = "    if c.request ∧ s.stage = .awaitingUdp then (advanceServer c { s with serverFailed := true }, .none)\n    else (s, .none)", .new = "    if c.request ∧ s.stage = .awaitingUdp then (s, .none)\n    else (s, .none)" },
+            .{ .file = "spec/lean/Spec/Lookup.lean", .old = "    if c.request ∧ s.stage = .awaitingUdp then (advanceServer c (keep s .request), .none)\n    else (s, .none)", .new = "    if c.request ∧ s.stage = .awaitingUdp then (s, .none)\n    else (s, .none)" },
         },
         .caught_by = .{ .step = "spec-lean" },
     },
@@ -61,7 +61,7 @@
         .id = "RF1",
         .what = "the model counts a failed connection as silence",
         .edits = .{
-            .{ .file = "spec/lean/Spec/Lookup.lean", .old = "    if onStream s.stage then (advanceServer c { s with serverFailed := true }, .none) else (s, .none)", .new = "    if onStream s.stage then (advanceServer c s, .none) else (s, .none)" },
+            .{ .file = "spec/lean/Spec/Lookup.lean", .old = "    if onStream s.stage then (advanceServer c (keep s (streamCause s.stage)), .none)\n", .new = "    if onStream s.stage then (advanceServer c s, .none)\n" },
         },
         .caught_by = .{ .step = "spec-lean" },
     },
@@ -70,7 +70,7 @@
         .id = "RF2",
         .what = "the model counts a failed request as silence",
         .edits = .{
-            .{ .file = "spec/lean/Spec/Lookup.lean", .old = "    if c.request ∧ s.stage = .awaitingUdp then (advanceServer c { s with serverFailed := true }, .none)", .new = "    if c.request ∧ s.stage = .awaitingUdp then (advanceServer c s, .none)" },
+            .{ .file = "spec/lean/Spec/Lookup.lean", .old = "    if c.request ∧ s.stage = .awaitingUdp then (advanceServer c (keep s .request), .none)", .new = "    if c.request ∧ s.stage = .awaitingUdp then (advanceServer c s, .none)" },
         },
         .caught_by = .{ .step = "spec-lean" },
     },
@@ -79,7 +79,7 @@
         .id = "CO22",
         .what = "the model advances the server at a first BADCOOKIE over a stream, as before #36",
         .edits = .{
-            .{ .file = "spec/lean/Spec/Lookup.lean", .old = "      if c.request || s.cookieRetried then (advanceServer c { s with serverFailed := true }, .accepted)", .new = "      if c.request || s.cookieRetried || stream then (advanceServer c { s with serverFailed := true }, .accepted)" },
+            .{ .file = "spec/lean/Spec/Lookup.lean", .old = "      if c.request || s.cookieRetried then (advanceServer c (keep s .badcookie), .accepted)", .new = "      if c.request || s.cookieRetried || stream then (advanceServer c (keep s .badcookie), .accepted)" },
         },
         .caught_by = .{ .step = "spec-lean" },
     },
@@ -88,7 +88,7 @@
         .id = "CO23",
         .what = "the model retries a BADCOOKIE over DoH or DoQ on a stream",
         .edits = .{
-            .{ .file = "spec/lean/Spec/Lookup.lean", .old = "      if c.request || s.cookieRetried then (advanceServer c { s with serverFailed := true }, .accepted)", .new = "      if s.cookieRetried then (advanceServer c { s with serverFailed := true }, .accepted)" },
+            .{ .file = "spec/lean/Spec/Lookup.lean", .old = "      if c.request || s.cookieRetried then (advanceServer c (keep s .badcookie), .accepted)", .new = "      if s.cookieRetried then (advanceServer c (keep s .badcookie), .accepted)" },
         },
         .caught_by = .{ .step = "spec-lean" },
     },
@@ -98,6 +98,69 @@
         .what = "the model's retry over a stream does not spend the server's retry",
         .edits = .{
             .{ .file = "spec/lean/Spec/Lookup.lean", .old = "      else ({ s with cookieRetried := true, stage := .tcpNeeded }, .accepted)", .new = "      else ({ s with stage := .tcpNeeded }, .accepted)" },
+        },
+        .caught_by = .{ .step = "spec-lean" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC22",
+        .what = "the model keeps the cause FORMERR at SERVFAIL",
+        .edits = .{
+            .{ .file = "spec/lean/Spec/Lookup.lean", .old = "  | .servfail => (advanceServer c (keep s .servfail), .accepted)", .new = "  | .servfail => (advanceServer c (keep s .formerr), .accepted)" },
+        },
+        .caught_by = .{ .step = "spec-lean" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC23",
+        .what = "the model's cause of a failed stream is the connect's in every stage",
+        .edits = .{
+            .{ .file = "spec/lean/Spec/Lookup.lean", .old = "def streamCause (s : Stage) : Cause := if s = .connectingTcp then .connect else .stream", .new = "def streamCause (_ : Stage) : Cause := .connect" },
+        },
+        .caught_by = .{ .step = "spec-lean" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC24",
+        .what = "the model's failed request keeps the stream's cause",
+        .edits = .{
+            .{ .file = "spec/lean/Spec/Lookup.lean", .old = "    if c.request ∧ s.stage = .awaitingUdp then (advanceServer c (keep s .request), .none)", .new = "    if c.request ∧ s.stage = .awaitingUdp then (advanceServer c (keep s .stream), .none)" },
+        },
+        .caught_by = .{ .step = "spec-lean" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC25",
+        .what = "the model keeps the first cause, and a later server failure does not replace it",
+        .edits = .{
+            .{ .file = "spec/lean/Spec/Lookup.lean", .old = "def keep (s : State) (k : Cause) : State := { s with cause := some k }", .new = "def keep (s : State) (k : Cause) : State := { s with cause := s.cause <|> some k }" },
+        },
+        .caught_by = .{ .step = "spec-lean" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC26",
+        .what = "the model forgets the cause at the end of its last pass",
+        .edits = .{
+            .{ .file = "spec/lean/Spec/Lookup.lean", .old = "    fail { s with round := s.round + 1 } (if s.cause.isSome then .allServersFailed else .timeout)", .new = "    fail { s with round := s.round + 1, cause := none } (if s.cause.isSome then .allServersFailed else .timeout)" },
+        },
+        .caught_by = .{ .step = "spec-lean" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC27",
+        .what = "the model's walk writes no cause",
+        .edits = .{
+            .{ .file = "spec/lean/Main.lean", .old = "    out.putStrLn s!\"{depth + 1} {eventToken e} {outToken o} {lineToken t}\"", .new = "    out.putStrLn s!\"{depth + 1} {eventToken e} {outToken o} {stateToken t}\"" },
+        },
+        .caught_by = .{ .step = "spec-lean" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC28",
+        .what = "failure_cause proved by sorry",
+        .edits = .{
+            .{ .file = "spec/lean/Spec/LookupProofs/Cause.lean", .old = "  exact key es _ (init_fits c)", .new = "  sorry" },
         },
         .caught_by = .{ .step = "spec-lean" },
     },

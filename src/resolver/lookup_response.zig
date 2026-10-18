@@ -21,6 +21,7 @@ const Endpoint = core.Endpoint;
 const lookup_module = @import("lookup.zig");
 const Lookup = lookup_module.Lookup;
 const Verdict = lookup_module.Verdict;
+const Cause = lookup_module.Cause;
 const policy = @import("lookup_policy.zig");
 const cookies = @import("lookup_cookie.zig");
 const casing = @import("lookup_response_case.zig");
@@ -118,7 +119,7 @@ pub fn apply(self: *Lookup, message: []const u8, accepted: Accepted, now_ns: u64
     // (docs/design.md §5), as `ignore_truncation` has it read one over UDP, and `collect` marks
     // the answer it gives.
     if (header.truncated() and !over_stream(self) and !self.config.ignore_truncation) {
-        heard(self, accepted.cookie, false, now_ns);
+        heard(self, accepted.cookie, null, now_ns);
         self.state = .tcp_needed;
         return .accepted;
     }
@@ -129,7 +130,7 @@ pub fn apply(self: *Lookup, message: []const u8, accepted: Accepted, now_ns: u64
     // NOERROR is believed only once its answer section is read, so `collect` tells the server's
     // state what it heard.
     if (action == .collect) return collect(self, message, accepted, now_ns);
-    heard(self, accepted.cookie, fails_server(self, action), now_ns);
+    heard(self, accepted.cookie, cause_of(self, action, rcode), now_ns);
     switch (action) {
         .collect => unreachable,
         .next_candidate => {
@@ -181,24 +182,33 @@ fn bad_cookie_fails(self: *const Lookup) bool {
 }
 
 /// What an answer the lookup takes says of the server that sent it (docs/design.md §19 step 12).
-/// It is one sample of the server's latency (§5). One that marks the server's failure counts
-/// against it, as a timeout does, and any other is the server up. Its lack of a COOKIE option can
-/// start the server's silence (RFC 9018 §3, `lookup_cookie.zig`). Called before the lookup moves
-/// on, while the current server and transaction are still the ones answered. A response the lookup
-/// ignores is taken as never received (§16 decision 10) and never comes here. Its server cookie
-/// was cached all the same, by `apply`.
-fn heard(self: *Lookup, cookie: ?wire.CookieView, failed: bool, now_ns: u64) void {
+/// It is one sample of the server's latency (§5). An answer with a cause says that the server
+/// failed the lookup. It counts against the server, as a timeout does. Its cause replaces the
+/// one that the lookup held (§5, The cause of a failure). Any other is the server up. Its lack
+/// of a COOKIE option can start the server's silence (RFC 9018 §3, `lookup_cookie.zig`). Called
+/// before the lookup moves on, while the current server and transaction are still the ones
+/// answered. A response the lookup ignores is taken as never received (§16 decision 10) and
+/// never comes here. Its server cookie was cached all the same, by `apply`.
+fn heard(self: *Lookup, cookie: ?wire.CookieView, cause: ?Cause, now_ns: u64) void {
     assert(self.state == .awaiting_udp or self.state == .awaiting_tcp);
     const slot = self.server_slot();
     self.servers.record_latency(slot, now_ns - self.sent_at_ns, now_ns);
-    if (failed) {
+    if (cause) |failed| {
         self.servers.record_failure(slot, now_ns);
-        self.flags.had_server_failure = true;
+        self.cause = failed;
     } else {
         self.servers.record_success(slot);
     }
     cookies.silence_if_missing(self, cookie, now_ns);
-    assert(failed == (self.servers.failures(slot) > 0));
+    assert((cause != null) == (self.servers.failures(slot) > 0));
+}
+
+/// The cause a response keeps, its rcode, when that rcode fails the server; null when it does not.
+fn cause_of(self: *const Lookup, action: policy.RcodeAction, rcode: wire.Rcode) ?Cause {
+    if (!fails_server(self, action)) return null;
+    // NOERROR is collected and NXDOMAIN moves to the next candidate: neither fails a server.
+    assert(rcode != .no_error and rcode != .name_error);
+    return .{ .rcode = rcode };
 }
 
 /// Whether an rcode's action is the server failing the lookup: SERVFAIL, REFUSED, NOTIMP and
@@ -282,13 +292,13 @@ fn collect(self: *Lookup, message: []const u8, accepted: Accepted, now_ns: u64) 
         // malformed one: it passed every check of §7. Alias loops are an error passed back to
         // the client (RFC 1034 §3.6.2, §5.2.2), and §5 names it.
         if (err == error.ChainTooLong) {
-            heard(self, accepted.cookie, false, now_ns);
+            heard(self, accepted.cookie, null, now_ns);
             self.fail(core.Error.ChainTooLong);
             return .accepted;
         }
         return .ignored;
     };
-    heard(self, accepted.cookie, false, now_ns);
+    heard(self, accepted.cookie, null, now_ns);
     // A name the chain moved to came off the wire, and a server that compressed it to a pointer
     // into the question it echoed handed back cocuyo's own case randomisation. That case is noise
     // cocuyo made, not the server's spelling, so it is folded away before anyone reads it.

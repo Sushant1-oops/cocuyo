@@ -306,7 +306,21 @@ pub const Failure = struct {
     server_index: u8,
     attempts_made: u8,
     negative_ttl_seconds: u32, // NameNotFound, NoData: the SOA minimum (§18), else zero; the
-                               // smallest of a lookup's walk (§5), AddressLookup's last lookup's
+                               // smallest of a lookup's walk (§5); for AddressLookup and
+                               // NameLookup, the last lookup's that failed (§19 step 14)
+    cause: ?Cause,             // since 2026-10-17: the last server failure the lookup met, null
+                               // when none did; never null for AllServersFailed, always for Timeout
+};
+
+/// What made a server fail a lookup (§5, The cause of a failure; §16 decision 45).
+pub const Cause = union(enum) {
+    rcode: wire.Rcode, // SERVFAIL, REFUSED, NOTIMP or BADVERS; FORMERR without EDNS0; a BADCOOKIE
+                       // that advances the server
+    connect,           // on_tcp_failed before on_tcp_connected: the connect, the TLS handshake, or
+                       // a local failure: no socket, no free connection slot, no TCP at all
+    stream,            // on_tcp_failed after on_tcp_connected: the connection failed under the
+                       // lookup
+    request,           // on_request_failed: a request over DoH or DoQ ended without an answer
 };
 ```
 
@@ -480,21 +494,21 @@ Eight states: `query_ready`, `awaiting_udp`, `tcp_needed`, `connecting_tcp`, `tc
 | `awaiting_udp` | `on_response` with a CNAME and no answer | `query_ready` | new transaction, hop count up |
 | `awaiting_udp` | `on_response` with an answer | `done` | copy the records out |
 | `awaiting_udp` | `on_response` NXDOMAIN or NODATA | `query_ready` or `failed` | keep the smaller negative TTL, advance the search candidate |
-| `awaiting_udp` | `on_response` SERVFAIL, REFUSED, NOTIMP | `query_ready` or `failed` | advance the server |
+| `awaiting_udp` | `on_response` SERVFAIL, REFUSED, NOTIMP | `query_ready` or `failed` | keep the rcode as the cause, advance the server |
 | `awaiting_udp` | `on_response` FORMERR and EDNS0 was on | `query_ready` | same server, EDNS0 off |
-| `awaiting_udp` | `on_response` FORMERR and EDNS0 was off | `query_ready` or `failed` | advance the server, as SERVFAIL does |
+| `awaiting_udp` | `on_response` FORMERR and EDNS0 was off | `query_ready` or `failed` | keep the rcode as the cause, advance the server, as SERVFAIL does |
 | `awaiting_udp` | `on_response` BADCOOKIE, the first from this server | `query_ready` | same server, the fresh cookie |
 | `awaiting_udp` | `on_response` BADCOOKIE again | `tcp_needed` | same server, over TCP |
 | `tcp_needed` | `poll` | `connecting_tcp` | return `connect_tcp`, arm the deadline |
 | `connecting_tcp` | `on_tcp_connected` | `tcp_ready` | re-arm the deadline |
-| `connecting_tcp` | `on_tcp_failed` | `query_ready` or `failed` | advance the server, as SERVFAIL does |
+| `connecting_tcp` | `on_tcp_failed` | `query_ready` or `failed` | keep `connect` as the cause, advance the server, as SERVFAIL does |
 | `connecting_tcp` | deadline | `query_ready` or `failed` | advance the server |
 | `tcp_ready` | `poll` | `tcp_ready` | build with the length prefix, return `send_tcp` |
 | `tcp_ready` | `on_sent` | `awaiting_tcp` | arm the deadline |
-| `tcp_ready`, `awaiting_tcp` | `on_tcp_failed` | `query_ready` or `failed` | advance the server, as SERVFAIL does |
+| `tcp_ready`, `awaiting_tcp` | `on_tcp_failed` | `query_ready` or `failed` | keep `stream` as the cause, advance the server, as SERVFAIL does |
 | `awaiting_tcp` | `on_response` | as the UDP rows | TC=1 sends the lookup nowhere, so the message is read as if it were clear, and an answer it gives is marked `truncated` |
 | `awaiting_tcp` | `on_response` BADCOOKIE, the first from this server | `tcp_needed` | same server, a new transaction on the stream, the fresh cookie |
-| `awaiting_tcp` | `on_response` BADCOOKIE again | `query_ready` or `failed` | advance the server, as SERVFAIL does |
+| `awaiting_tcp` | `on_response` BADCOOKIE again | `query_ready` or `failed` | keep the rcode as the cause, advance the server, as SERVFAIL does |
 | `awaiting_tcp` | `poll` at or past the deadline | `query_ready` or `failed` | a sample as long as the wait, then advance the server, then the attempt |
 | `done`, `failed` | any | unchanged | `poll` returns the same value; `on_response` is `ignored` |
 
@@ -523,7 +537,7 @@ is added:
 
 | State | Event | Next state | Effect |
 | --- | --- | --- | --- |
-| `awaiting_udp` | `on_request_failed` for the current transaction | `query_ready` or `failed` | advance the server, as SERVFAIL does |
+| `awaiting_udp` | `on_request_failed` for the current transaction | `query_ready` or `failed` | keep `request` as the cause, advance the server, as SERVFAIL does |
 
 After `send_tcp` the caller reads two bytes, calls `wire.message_len(prefix)`, reads that many
 bytes and passes them to `on_response`. There is no `read` action: the `wait` deadline already
@@ -686,7 +700,8 @@ decision 40). A sum with a literal `2` is still a `u16`.
   that failed, or a DoH or DoQ request that ended without an answer (§16 decision 25). So
   `Timeout` means that every try went unanswered.
   A failed send is not a refusal: the loop or the local stack refused it, and the server said
-  nothing.
+  nothing. Since 2026-10-17 the lookup keeps the cause of each such failure in place of a flag,
+  and fails with `AllServersFailed` when it holds a cause (below).
 - EDNS0 is off for the server that answered FORMERR, and on again at the next server and the
   next name. RFC 6891 §6.2.2 makes a server's lack of EDNS0 a fact about that server, and a
   lookup that kept it off would ask every later server without a cookie and with a 512-octet
@@ -694,6 +709,68 @@ decision 40). A sum with a literal `2` is still a `u16`.
 - `rotate` starts the first try at a server the seed picks among those with the fewest failures
   (§19 step 12), instead of the first of them, so a process with many lookups does not aim all
   of them at one server.
+
+### The cause of a failure
+
+The owner ruled on 2026-10-17 that a lookup that fails keeps the last cause a server gave (§16
+decision 45). The lookup holds `cause`, null until a server fails it, and `Failure.cause` reports
+it. A server fails a lookup at each event that the retry policy counts against `Timeout`:
+
+| Event | The cause it keeps |
+| --- | --- |
+| `on_response` SERVFAIL, REFUSED, NOTIMP or BADVERS, `check_response` on | `.rcode`, that code |
+| `on_response` FORMERR, EDNS0 off | `.{ .rcode = .format_error }` |
+| `on_response` BADCOOKIE that advances the server: over a stream after its retry, or over DoH or DoQ | `.{ .rcode = .bad_cookie }` |
+| `on_tcp_failed` in `connecting_tcp` | `.connect` |
+| `on_tcp_failed` in `tcp_ready` or `awaiting_tcp` | `.stream` |
+| `on_request_failed` for the current transaction | `.request` |
+
+- Each of these replaces the cause that the lookup holds. Nothing else changes it, and nothing
+  clears it before the lookup ends: not the next server, the next pass, the next candidate or a
+  CNAME hop.
+- FORMERR with EDNS0 on, a first BADCOOKIE, TC=1, a deadline that passes, a failed send and a
+  cancel keep no cause. A server error that `check_response` off takes as the answer keeps none
+  either: it is the answer, in `err`, and the server's state counts it as an answer.
+- `on_tcp_failed` carries no reason, so the lookup reads the cause from its own state. Before
+  `on_tcp_connected` the cause is `connect`, and after it the cause is `stream`.
+- The engine calls `on_tcp_failed` before `on_tcp_connected` in these cases, and each is
+  `connect`:
+  - A connect that failed.
+  - Over TLS, a handshake that failed. A lookup on a TLS connection is told that it is up only
+    after the handshake (§21, TLS rule 1).
+  - A socket that the system refused.
+  - No free connection slot. A slot is not free while a lookup uses its connection, or while the
+    loop holds its memory. Over TLS a slot is free only when its connection has closed (§21, TLS
+    rules 4 and 6).
+  - An engine that keeps no TCP connection, as one built for DoQ alone does.
+- The last three of these are local, and no server took part in them. The last cause wins, so a
+  local failure on a later pass replaces the cause that a server gave before it. §17 question 54
+  asks about a reason that tells them apart.
+- The engine calls `on_tcp_failed` after `on_tcp_connected` when the connection closes or resets,
+  and when a send or a receive on it fails. Each is `stream`.
+- Over DoH and DoQ each failure of a server is `request`:
+  - an HTTP status that is not 2xx;
+  - a stream that the server reset;
+  - a connection or a handshake that failed under the request.
+
+So each error carries this cause:
+
+| `Failure.err` | `Failure.cause` |
+| --- | --- |
+| `Timeout` | null: every try went unanswered |
+| `AllServersFailed` | the last server failure, never null |
+| `NameNotFound`, `NoData` | the last server failure, or null; null when the memory of §20 recalled the negative |
+| `ServerFailure`, `Refused`, `NotImplemented`, with `check_response` off | a server failure before the answer, or null |
+| `ChainTooLong`, `NameTooLong`, `Canceled` | the last server failure, or null |
+| `NoServers` | null |
+
+A `NameNotFound` can carry the SERVFAIL of a server before the one that answered NXDOMAIN. The
+memory of §20 keeps no cause, and a negative that it recalls asked no server.
+
+`AddressLookup` and `NameLookup` hand on the `Failure` of the lookup whose end they report, its
+cause with it. A negative end, or a cancel after a lookup failed, reports the walk's error on the
+fields of the last lookup that failed (§19 step 14). An `Answer` carries no cause, so a server
+failure before an answer does not reach the walk.
 
 ### Search list policy
 
@@ -778,10 +855,12 @@ spec/ holds a model of this section in Lean 4, written from the table and the RF
 the code, and proofs of what the table promises: an ended lookup stays ended, a lookup under
 `use_tcp` never asks for a datagram, a lookup over DoH or DoQ never asks for a datagram or a
 stream (§22, §23), its counters stay inside the configuration, and every send lowers a measure in a
-well-founded order, so no sequence of answers makes a lookup retry forever. `zig build spec`
-builds the proofs, then walks every state the model reaches under 109 configurations and replays
-each of the 2.7 million transitions against `Lookup`, comparing the answer and the whole state
-after every event. `zig build test` replays a committed slice of 4,414 of them without Lean.
+well-founded order, so no sequence of answers makes a lookup retry forever. Since 2026-10-17 the
+model holds the cause of a failure in place of a flag, and proves that `AllServersFailed` has a
+cause and `Timeout` has none (The cause of a failure, above). `zig build spec` builds the proofs,
+then walks every state the model reaches under 109 configurations and replays each of the 7.5
+million transitions against `Lookup`. It compares the answer, the whole state and the cause after
+every event. `zig build test` replays a committed slice of 6,696 of them without Lean.
 spec/README.md says what the model abstracts and why. Time is one of those things: a poll comes
 before the deadline or at it. So when a server's wait came to be measured, on 2026-10-09, no
 transition changed, and neither did the model.
@@ -1185,11 +1264,11 @@ up as a diff rather than as a surprise. The pins that exist are in `src/core/cor
 
 | Part of `Lookup` | Bytes | Note |
 | --- | --- | --- |
-| the scalars | 108 | state, flags, four indices, the server order, the transaction with its client cookie's draw, three instants, the generator, the failure, the negative TTL, the chain's TTL, the config pointer, the servers pointer, and the COOKIE option the last query carried with its client cookie (§19 step 10) |
+| the scalars | 111 | state, flags, four indices, the server order, the transaction with its client cookie's draw, three instants, the generator, the failure and its cause (§5), the negative TTL, the chain's TTL, the config pointer, the servers pointer, and the COOKIE option the last query carried with its client cookie (§19 step 10) |
 | `question` | 260 | the name as asked, its type, and whether it was absolute |
 | `current` | 256 | the current candidate, or where the CNAME chain has reached |
 | `answers` | 2448 | an extern union: `[addresses_max]Address` is 272, `[ptr_names_max]Name` is 256, and the records of §19 step 9 are 2436 — 32 references of 12 and a buffer of `rdata_bytes_max` — plus the question's type (decision 34), the count, the TTL, the hop count and two flags |
-| total | 3072, measured | pinned by a test in `src/resolver/lookup_init_test.zig`; 3064 until the instant of the send, which a latency sample is measured from, on 2026-10-09 (§5), and 3048 until the cookies of 2026-10-08 (§19 step 10) |
+| total | 3072, measured | pinned by a test in `src/resolver/lookup_init_test.zig`; the cause of a failure on 2026-10-17 took three octets of the padding (§5); 3064 until the instant of the send, which a latency sample is measured from, on 2026-10-09 (§5), and 3048 until the cookies of 2026-10-08 (§19 step 10) |
 
 The total is larger than the parts because Zig chooses a struct's field order and pads accordingly.
 It also means a declaration order cannot be relied on for locality: the measurement that pinned
@@ -1205,7 +1284,7 @@ The caller-provided buffer §19 keeps as the fallback is what would take it back
 | `[2N]MatchKey` | 4 bytes each | the id-to-slot table, power-of-two length |
 | send buffer | `query_bytes_max`, 386 | shared by the whole table |
 | receive buffer | `config.udp_payload_bytes`, 1232 by default | the caller's, per socket |
-| `[M]AddressLookup` | 1152 bytes each, measured | one per `getaddrinfo`-shaped lookup in flight: the name, the canonical name, 32 addresses, two handles and the walk's scalars, beside the two slots it takes; pinned by a test in `src/resolver/address_lookup_test.zig` |
+| `[M]AddressLookup` | 1184 bytes each, measured | one per `getaddrinfo`-shaped lookup in flight: the name, the canonical name, 32 addresses, two handles, the failure of each lookup and the walk's scalars, beside the two slots it takes; pinned by a test in `src/resolver/address_lookup_test.zig`; 1152 until the cause of a failure on 2026-10-17 (§16 decision 45) |
 
 So 1024 concurrent lookups cost 3088 KiB of slots plus 8 KiB of keys. Nothing else is allocated,
 ever, by anybody. `Resolver` itself holds the `Servers` table, 1488 octets, measured and pinned
@@ -2611,6 +2690,80 @@ step until `zig build test` passes.
     changes.
 
     §7, §19 step 13 (the datagram's rule 7; the cache's memory, rule 5), §24.
+45. **A failure keeps the last cause a server gave.** Ruled by the owner on 2026-10-17. On
+    2026-10-12 the daily DoT live check failed once at Quad9 with `AllServersFailed`, and nobody
+    could say why. The lookup kept the flag `had_server_failure` and no reason, and the example
+    printed `failure.err` alone. Now `Failure` has a field `cause: ?Cause`. It is null when no
+    server failed the lookup. Otherwise it holds the last failure of a server that the lookup
+    met: the rcode of a response, or the transport that failed (§4, §5).
+
+    Choices the ruling did not make, made here:
+
+    - The cause replaces the flag. Each place that set `had_server_failure` keeps a cause, and
+      the end of the passes reads whether the lookup holds one. A flag beside the cause would
+      keep one fact twice.
+    - The lookup reads the cause of a transport from its own state. `on_tcp_failed` while it
+      connects is `connect`, and after `on_tcp_connected` it is `stream`. A lookup on a TLS
+      connection is told that it is up only after the handshake (§21, TLS rule 1), so a
+      handshake that fails is `connect`. `on_request_failed` is `request`. No entry point
+      changes.
+    - Each server failure replaces the cause, and nothing clears it. `AllServersFailed` rests on
+      each failure on the way, so it always has a cause, and `Timeout` never has one.
+    - Each error carries the cause, not `AllServersFailed` alone. A `NameNotFound` can carry the
+      SERVFAIL of a server before the one that answered NXDOMAIN. One rule for each error is
+      simpler than a rule for one of them.
+    - The rcode is `wire.Rcode`, the codec's own type. A second enum of the same codes gives two
+      names to one thing. `no_error` and `name_error` never come, and an assertion holds that.
+    - A failed send keeps no cause. It is silence, as decision 25 says, and `Timeout` still means
+      that every try went unanswered.
+    - A server error that `check_response` off takes as the answer keeps no cause. The answer is
+      in `err`, and the server's state counts it as an answer.
+    - A negative that the memory recalls has no cause. The memory keeps the negative and its TTL
+      alone (§20), and no server was asked.
+    - `AddressLookup` ends a walk on a failure but `NoData` with the `Failure` of the lookup that
+      failed so, whole. Until 2026-10-17 it took the error from that lookup and the other fields
+      from the last lookup that failed. Then an `AllServersFailed` could carry the null cause of
+      a `Timeout`, or the negative TTL of a NODATA. A negative end still takes the fields of the
+      last lookup that failed (§19 step 14).
+    - `NameLookup` ends a negative walk, and a cancel after its lookup failed, on the fields of
+      that lookup's `Failure`, as `AddressLookup` does. Until 2026-10-17 it built a `Failure` of
+      zeros for these ends, so the cause of its lookup was lost (§19 step 14).
+    - `connect` covers three local failures as well: no socket, no free connection slot, and an
+      engine that keeps no TCP connection. The lookup cannot tell them from a server's refusal
+      without the reason of §17 question 54.
+
+    Rejected:
+
+    - A flat enum of the causes, `server_failure`, `refused` and the others beside `connect`.
+      Each of its values can come, but each rcode gets a second name.
+    - A reason in `on_tcp_failed` and `on_request_failed`, which would tell a connect from a
+      handshake. Decision 25 counted it against another alternative: "a second change to the API
+      in a call every consumer that owns its sockets makes". §17 question 54 asks for it.
+    - The cause beside the engine's result alone, which decision 25 rejected. A consumer that
+      drives `Lookup` or `Resolver` itself gets nothing from it.
+    - The first cause in place of the last. The owner ruled the last. A failure later in the
+      walk is nearer to the end that the caller sees.
+    - The extended DNS error of the response (RFC 8914 §2) in the cause. It adds a read of the
+      OPT record at each failure, and two octets. §17 question 18 asks it for DNSSEC.
+    - The server that the cause came from. One octet fits in the padding of `Failure`, but the
+      ruling named one field. §17 question 53 lists it.
+
+    `Failure` grows from 8 octets to 12. `Action`, `Event` and the engine's `Result` keep their
+    size, since an `Answer` is larger. The Lean model of the lookup holds the cause in place of
+    its flag. It proves that `AllServersFailed` has a cause and `Timeout` has none, and its
+    replay compares the cause at each event. The engine model keeps its flag, since which cause
+    a lookup holds changes no transition of the engine. The model of the walks holds no
+    `Failure`, so it does not change.
+
+    The x86-64 code of `init_in_place`, `heard`, `next_server`, `Resolver.poll` and
+    `Resolver.on_datagram` changed, as the fill check's assembly shows. So the counts of
+    `bench/count.zig` for the round trip and the datagram matches can move. On 2026-10-17 the
+    review of the change counted them under cachegrind 3.22.0 on arm64 Linux, not on the x86-64
+    of the baseline. `round-trip` went from 3,948 instructions to 3,970, and `match-wrong` from
+    258 to 255. The other twelve cases did not move. Both moves are under the 2% floor of
+    `tools/instructions.zig` (docs/mutations.md, The cause of a failure).
+
+    §4, §5 (The cause of a failure), §19 step 14, §20.
 
 ## 17. Questions for the owner
 
@@ -3022,6 +3175,61 @@ still ends the TCP link of a DoH channel.
     Recommended: the first. The hold is colibri's, and only colibri can remove it.
     Answered on 2026-10-17: the first. colibri sizes its room for h11's longest head and one record
     more, and cocuyo moves its pin.
+
+### Asked on 2026-10-17, for the cause of a failure
+
+§16 decision 45 records the ruling of the day: a lookup that fails keeps the last cause a server
+gave. The ruling approved a change to the public API, and did not name the field or its type.
+
+53. **The name and the type of the cause.** As built, `Failure.cause: ?Cause`, where `Cause` is
+    `union(enum) { rcode: wire.Rcode, connect, stream, request }`. It is null when no server
+    failed the lookup (§5, The cause of a failure). `Failure` grows from 8 octets to 12. The
+    ways:
+
+    - As built. The rcode keeps the codec's type, and the three causes of a transport name the
+      entry point and the state that gave them.
+    - A flat enum: `server_failure`, `refused`, `not_implemented`, `bad_vers`, `format_error`,
+      `bad_cookie`, `connect`, `stream` and `request`. Each value can come, but five codes get
+      a second name beside `wire.Rcode`.
+    - The cause with the server that gave it: `struct { server_index: u8, kind: Cause }`.
+      `Failure.server_index` names the server that the lookup was on at its end, which after
+      the last pass is the first of the order. One octet more fits in the padding, and
+      `Failure` stays at 12 octets.
+    - Another name for the field: `reason`, or `last_failure`.
+
+    Recommended: as built. The server is the first addition to make if a failure with many
+    servers needs it.
+54. **A reason from the caller.** The lookup cannot tell a connect that failed from a TLS
+    handshake that failed: `on_tcp_failed` carries no reason, and both are `connect`. Three
+    local failures are `connect` too, and no server took part in them:
+
+    - a socket that the system refused;
+    - no free connection slot;
+    - an engine that keeps no TCP connection.
+
+    The last cause wins, so a local failure on a later pass replaces the cause that a server
+    gave before it. Over TLS the second pass can find no free slot while the connection of the
+    first pass still closes (§5, The cause of a failure). Over DoH and DoQ every failure is
+    `request`. A parameter on `on_tcp_failed` and on `on_request_failed` would let the engine
+    name each failure:
+
+    - a connect, a handshake or a local failure;
+    - a connection that failed after it was up, or a send on it;
+    - an HTTP status, or a stream that the server reset.
+
+    §16 decision 25 counted that parameter against an alternative that it rejected. Its words
+    are "a second change to the API in a call every consumer that owns its sockets makes". The
+    ways:
+
+    - As built: the lookup reads the cause from its own state, and no entry point changes.
+    - A reason on each of the two calls, which the engine sets at each of its failures, and
+      which `Cause` reports in place of `connect`, `stream` and `request`.
+    - A reason that the engine keeps beside its result, outside `Failure`. A consumer that owns
+      its sockets has the reason already.
+
+    Recommended: as built until a live failure needs more. The DoT check then tells a
+    connection that never came up from one that failed under the lookup, and both from a
+    server's rcode.
 
 ## 18. The cache
 
@@ -4405,7 +4613,11 @@ is where a consumer with a loop of its own can reach it now that the engine is h
   `no_sort`, the result is ordered by step 15's rules that need no route, which puts IPv6
   before IPv4 by precedence, the way `getaddrinfo` does.
 - **The TTLs.** `AddressInfo.ttl_seconds` is the smallest TTL of the answers joined, and a
-  failure carries the `Failure` of the last lookup that failed, its negative TTL included. Each
+  failure carries the `Failure` of the last lookup that failed, its negative TTL included. A
+  walk that ends with a failure but `NoData` (rule 5 below) carries that lookup's `Failure`
+  whole, its cause included (§5, The cause of a failure). Until 2026-10-17 it took the error
+  from that lookup and the rest from the last lookup that failed, so an `AllServersFailed` could
+  carry a NODATA's negative TTL (§16 decision 45). Each
   candidate's lookups are absolute, so §5's bound by the negatives of a walk reaches neither:
   an answer after negative candidates keeps its own TTL, and a walk that is negative throughout
   reports its last candidate's negative TTL. A consumer that caches the outcome under the name
@@ -4450,7 +4662,10 @@ is where a consumer with a loop of its own can reach it now that the engine is h
 and one `PTR` question. Its `NameNotFound` or `NoData` moves on to the next source; any other
 failure ends the walk with that failure; the sources gone, the walk fails `NameNotFound`, or
 `NoData` when the lookup said `NoData`. The consumer's cancel ends it `Canceled` whatever end
-its lookup had. Until 2026-09-23 any failure moved on, and a walk whose last source was DNS
+its lookup had. Its end hands on its lookup's `Failure`, the cause included (§5, The cause of a
+failure). A negative end, and a cancel after its lookup failed, put the walk's error in that
+`Failure`. Until 2026-10-17 those two ends built a `Failure` of zeros with no cause (§16 decision
+45). Until 2026-09-23 any failure moved on, and a walk whose last source was DNS
 ended `NameNotFound` when its lookup had timed out: a timeout reported as a name that does not
 exist.
 
@@ -4652,7 +4867,8 @@ seeded from the cache never writes back what it was handed.
 
 `cocuyo.remembered_by(&cache)` builds a `Memory` from a `Cache`. It is the only place that maps
 a `Failure` to what may be kept: `NameNotFound` and `NoData` with the TTL the SOA gave
-(RFC 2308 §5), and nothing else — not a timeout, not a refusal, not a malformed answer.
+(RFC 2308 §5), and nothing else — not a timeout, not a refusal, not a malformed answer. The
+memory keeps no cause, so a negative that it recalls has none (§5, The cause of a failure).
 `io/` then drops its own copy of that policy and passes a `Memory` like any other caller.
 
 **A table without a cache, since 2026-10-11.** The engine built its table and its cache in one

@@ -13,7 +13,8 @@
 # than fall back: the right root with a name the certificate does not carry, and the right name
 # with a root the chain does not end at (RFC 9250 §5.1, RFC 8310 §5). Each must end in
 # AllServersFailed, a refusal: one that ends in Timeout was not answered at all, which is the
-# network and not strict mode (§16 decision 25). AdGuard is then known by its leaf key alone.
+# network and not strict mode (§16 decision 25). Its cause must be the request's, as each failure
+# over DoQ is (§5, The cause of a failure). AdGuard is then known by its leaf key alone.
 # Each resolver is also asked AAAA, MX, TXT and HTTPS at once, of a name that has each, and must
 # answer each with records of that type.
 set -eu
@@ -88,7 +89,7 @@ refuse() {
     if answer=$(lookup "$@"); then
         echo "RESOLVED what strict mode refuses: $*" >&2
         failures=$((failures + 1))
-    elif echo "$answer" | grep -q "^example.com: AllServersFailed$"; then
+    elif echo "$answer" | grep -q "^example.com: AllServersFailed (request)$"; then
         echo "refuses $2 with $(basename "$3")"
     else
         echo "DID NOT SEE a refusal of $2 with $(basename "$3"): $answer" >&2
@@ -127,7 +128,7 @@ pinned() {
         if answer=$(lookup "$address" "pin-sha256:$pin"); then
             echo "RESOLVED through $address by $what alone" >&2
             failures=$((failures + 1))
-        elif echo "$answer" | grep -q "^example.com: AllServersFailed$"; then
+        elif echo "$answer" | grep -q "^example.com: AllServersFailed (request)$"; then
             echo "refuses $address by $what alone"
         else
             echo "DID NOT SEE a refusal of $address by $what alone: $answer" >&2

@@ -2,6 +2,7 @@
 //! asked again over TCP, the pipelining of one connection, a server that refuses one, the idle
 //! close, and what a connection that comes up too late tells nobody. The rig is the one
 //! `io_sim_test.zig` builds, since these drive the same engine over the same scripted servers.
+//! The cause that each failure of a stream gives a lookup is in `io_tcp_cause_test.zig`.
 const std = @import("std");
 const testing = std.testing;
 const cocuyo = @import("cocuyo");
@@ -108,8 +109,19 @@ test "a server that refuses the connection costs it the lookup, and the next ser
     try rig.deinit();
 }
 
+/// Both lookups that `two_queued` started end in `AllServersFailed`. The first server's
+/// connection failed under them, and then the second server, which is down, refused theirs. Each
+/// failure carries the last cause, the connect's (docs/design.md §5, The cause of a failure).
+fn expect_both_failed(rig: *Rig) !void {
+    for (0..fixtures.queued_lookups) |_| {
+        const result = try rig.until_result();
+        try testing.expectEqual(cocuyo.Error.AllServersFailed, result.outcome.failure.err);
+        try testing.expectEqual(@as(?cocuyo.Cause, .connect), result.outcome.failure.cause);
+    }
+}
+
 /// An engine that keeps no TCP connection, as one built for DoQ alone does (c4milo/cocuyo#14).
-const Streamless = io.Resolver(.{
+pub const Streamless = io.Resolver(.{
     .lookups = fixtures.small_lookups,
     .group_buffers = fixtures.group_buffers,
     .tcp_connections = 0,
@@ -273,8 +285,7 @@ test "a query send that fails ends its connection, and every query on it gives i
     try expect_failed_over(&rig);
     try testing.expect(!rig.engine.send_in_flight[handles[0].index]);
     try testing.expect(!rig.engine.send_in_flight[handles[1].index]);
-    var ended: usize = 0;
-    while (ended < 2) : (ended += 1) _ = try rig.until_result();
+    try expect_both_failed(&rig);
     _ = rig.engine.take(rig.loop.now());
     try rig.deinit();
 }
@@ -292,8 +303,7 @@ test "a connection that fails mid-send keeps that send's buffer until its event,
     // The send's event names a connection that is gone, and hands the buffer back all the same.
     _ = try rig.step(fixtures.wait_ns);
     try testing.expect(!rig.engine.send_in_flight[handles[0].index]);
-    var ended: usize = 0;
-    while (ended < 2) : (ended += 1) _ = try rig.until_result();
+    try expect_both_failed(&rig);
     _ = rig.engine.take(rig.loop.now());
     try rig.deinit();
 }

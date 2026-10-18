@@ -2587,4 +2587,49 @@
         },
         .caught_by = .{ .step = "test-cocuyo_doh" },
     },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC20",
+        .what = "a connect that failed tells its lookups the connection is up first",
+        .edits = .{
+            .{ .file = "io/io_tcp.zig", .old = "    } else |_| {\n        fail(self, @intCast(at), now_ns);\n    }", .new = "    } else |_| {\n        tell_all(self, @intCast(at), now_ns, true);\n        fail(self, @intCast(at), now_ns);\n    }" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC21",
+        .what = "a TLS connection tells its lookups it is up when its handshake starts",
+        .edits = .{
+            .{ .file = "io/io_tls.zig", .old = "    }) catch return tcp.fail(self, at, now_ns);\n    _ = make_records(self, at, now_ns);\n}", .new = "    }) catch return tcp.fail(self, at, now_ns);\n    tcp.tell_all(self, at, now_ns, true);\n    _ = make_records(self, at, now_ns);\n}" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC32",
+        .what = "an engine that keeps no TCP connection tells the lookup it is up before it fails it",
+        .edits = .{
+            .{ .file = "io/io_tcp.zig", .old = "    if (comptime !@TypeOf(self.*).keeps_tcp) return self.resolver.on_tcp_failed(handle, now_ns);\n    const server", .new = "    if (comptime !@TypeOf(self.*).keeps_tcp) {\n        self.resolver.on_tcp_connected(handle, now_ns);\n        return self.resolver.on_tcp_failed(handle, now_ns);\n    }\n    const server" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC33",
+        .what = "a lookup that finds no free connection slot is told it is up before it is failed",
+        .edits = .{
+            .{ .file = "io/io_tcp.zig", .old = "    const at = attach(self, index, server, now_ns) orelse {\n        self.resolver.on_tcp_failed(handle, now_ns);\n        return;\n    };", .new = "    const at = attach(self, index, server, now_ns) orelse {\n        self.resolver.on_tcp_connected(handle, now_ns);\n        self.resolver.on_tcp_failed(handle, now_ns);\n        return;\n    };" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
+    .{
+        .section = "The cause of a failure",
+        .id = "LC34",
+        .what = "a stream send that moved nothing is reported as a failed send before the connection fails",
+        .edits = .{
+            .{ .file = "io/io_tcp_queue.zig", .old = "        finish_head(self, at);\n        send_module.give_back(self, slot);\n        return tcp.fail(self, at, now_ns);", .new = "        finish_head(self, at);\n        send_module.finish(self, slot, false, now_ns);\n        return tcp.fail(self, at, now_ns);" },
+        },
+        .caught_by = .{ .step = "test-io" },
+    },
 }

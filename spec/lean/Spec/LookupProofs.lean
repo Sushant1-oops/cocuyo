@@ -9,6 +9,11 @@ to the Zig code; these tie the model to the promises.
 -/
 namespace Spec.Lookup
 
+/-- A cause kept is a cause held, whichever cause it is. -/
+theorem keep_isSome (s : State) (k : Cause) : (keep s k).cause.isSome = true := by
+  unfold keep
+  cases s.cause <;> rfl
+
 /-! ## An ended lookup stays ended -/
 
 /-- A lookup that is done or has failed is changed by nothing: every poll returns the same end,
@@ -188,7 +193,7 @@ theorem onReply_noStream (c : Config) (s : State) (r : Reply) (hh : c.request = 
     · exact ⟨hadv _, by simp [NotPlain]⟩
   -- No cookie went out, so there is none to retry with: the server has failed.
   | badcookie =>
-    have e : onReply c s true .badcookie = (advanceServer c { s with serverFailed := true }, .accepted) := by
+    have e : onReply c s true .badcookie = (advanceServer c (keep s .badcookie), .accepted) := by
       simp [onReply, hh]
     rw [e]
     exact ⟨hadv _, by simp [NotPlain]⟩

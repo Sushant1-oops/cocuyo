@@ -106,6 +106,24 @@ test "an exchange that fails fails its request once, as the server's failure, an
     try rig.deinit();
 }
 
+test "a lookup whose every exchange failed ends in AllServersFailed, and its cause is the request" {
+    var rig: Rig = .{};
+    try start(&rig, 115, .{ .{}, .{} });
+    const handle = try rig.engine.start(question("example.com."), rig.loop.now());
+    for (0..rig.config.attempts) |_| {
+        for (0..fixtures.servers) |server| {
+            try tell(&rig, @intCast(server), .{ .finished = .{ .index = handle.index, .answer = false } });
+        }
+    }
+    const result = try rig.until_result();
+    try testing.expectEqual(cocuyo.Error.AllServersFailed, result.outcome.failure.err);
+    // Over DoH each failure of a server is the request's (docs/design.md §5, The cause of a
+    // failure).
+    try testing.expectEqual(@as(?cocuyo.Cause, .request), result.outcome.failure.cause);
+    _ = rig.engine.take(rig.loop.now());
+    try rig.deinit();
+}
+
 test "a template the engine cannot read fails its server before its channel opens" {
     // DoH "MUST be used with the https URI scheme" (RFC 8484 §5): the channel cannot start, the
     // request fails as the server's failure (request rule 7), and the next server answers.

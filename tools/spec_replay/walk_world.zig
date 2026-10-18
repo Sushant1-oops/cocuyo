@@ -245,7 +245,7 @@ pub const World = struct {
     fn pending_text(world: *World, line: *std.Io.Writer, pending: *const Pending) void {
         const handle = pending.handle orelse return put(line, "-", .{});
         if (pending.ended) {
-            const result = if (pending.answered) "answer" else result_of(pending.err.?);
+            const result = if (pending.answered) "answer" else result_of(pending.failure.?.err);
             return put(line, "done/{s}", .{result});
         }
         world.lookup_text(line, handle);

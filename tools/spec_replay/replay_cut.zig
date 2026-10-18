@@ -16,6 +16,7 @@ const Replay = replay_module.Replay;
 const Out = replay_module.Out;
 const Event = replay_module.Event;
 const fixtures = @import("fixtures.zig");
+const text_module = @import("replay_text.zig");
 
 /// Whether the line's reply is the one that a cut datagram stands for, to the lookup that the line's
 /// parent left, whose frame the replay has restored.
@@ -33,7 +34,7 @@ pub fn agrees(replay: *Replay, depth: usize, expected_out: Out, expected_state: 
     const verdict = replay.lookup.on_datagram_cut(whole[0 .. whole.len - 1], replay.source(), replay.now_ns);
     const got_out: Out = if (verdict == .accepted) .accepted else .ignored;
     var got_buffer: [replay_module.state_bytes_max]u8 = undefined;
-    const got_state = replay_module.state_text(&replay.lookup, &got_buffer);
+    const got_state = text_module.line_text(&replay.lookup, &got_buffer);
     replay.cuts += 1;
     replay.restore(depth - 1);
     if (got_out == expected_out and std.mem.eql(u8, got_state, expected_state)) return true;
@@ -63,13 +64,13 @@ test "a cut datagram moves a lookup that waits over UDP as TC=1 does, and leaves
     replay.* = .{};
     // Over UDP the cut datagram stands for TC=1; over TCP, where the lookup waits on the stream, it
     // stands for the unmatched reply.
-    const text = "hops 8\nconfig 1 1 1 udp\n0 init none query_ready 0/0/0/0 E---\n" ++
-        "1 poll send_udp query_ready 0/0/0/0 E---\n2 sent none awaiting_udp 0/0/0/0 E---\n" ++
-        "3 reply_truncated accepted tcp_needed 0/0/0/0 E---\n" ++
-        "config 1 1 1 tcp\n0 init none tcp_needed 0/0/0/0 E---\n" ++
-        "1 poll connect_tcp connecting_tcp 0/0/0/0 E---\n2 tcp_connected none tcp_ready 0/0/0/0 E---\n" ++
-        "3 poll send_tcp tcp_ready 0/0/0/0 E---\n4 sent none awaiting_tcp 0/0/0/0 E---\n" ++
-        "5 reply_unmatched ignored awaiting_tcp 0/0/0/0 E---\n";
+    const text = "hops 8\nconfig 1 1 1 udp\n0 init none query_ready 0/0/0/0 E--- -\n" ++
+        "1 poll send_udp query_ready 0/0/0/0 E--- -\n2 sent none awaiting_udp 0/0/0/0 E--- -\n" ++
+        "3 reply_truncated accepted tcp_needed 0/0/0/0 E--- -\n" ++
+        "config 1 1 1 tcp\n0 init none tcp_needed 0/0/0/0 E--- -\n" ++
+        "1 poll connect_tcp connecting_tcp 0/0/0/0 E--- -\n2 tcp_connected none tcp_ready 0/0/0/0 E--- -\n" ++
+        "3 poll send_tcp tcp_ready 0/0/0/0 E--- -\n4 sent none awaiting_tcp 0/0/0/0 E--- -\n" ++
+        "5 reply_unmatched ignored awaiting_tcp 0/0/0/0 E--- -\n";
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |one| try replay.line(one);
     try testing.expectEqual(@as(usize, 2), replay.cuts);
@@ -80,9 +81,9 @@ test "a cut datagram the lookup reads otherwise than the model's reply is a mism
     defer testing.allocator.destroy(replay);
     replay.* = .{};
     // A model whose TC=1 left the lookup waiting: the cut datagram moved it, and the replay says so.
-    const text = "hops 8\nconfig 1 1 1 udp\n0 init none query_ready 0/0/0/0 E---\n" ++
-        "1 poll send_udp query_ready 0/0/0/0 E---\n2 sent none awaiting_udp 0/0/0/0 E---\n" ++
-        "3 reply_truncated ignored awaiting_udp 0/0/0/0 E---\n";
+    const text = "hops 8\nconfig 1 1 1 udp\n0 init none query_ready 0/0/0/0 E--- -\n" ++
+        "1 poll send_udp query_ready 0/0/0/0 E--- -\n2 sent none awaiting_udp 0/0/0/0 E--- -\n" ++
+        "3 reply_truncated ignored awaiting_udp 0/0/0/0 E--- -\n";
     var lines = std.mem.splitScalar(u8, text, '\n');
     var failed: ?replay_module.Error = null;
     while (lines.next()) |one| replay.line(one) catch |err| {

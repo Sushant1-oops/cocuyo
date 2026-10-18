@@ -68,8 +68,9 @@ pub const Pending = struct {
     handle: ?Handle = null,
     ended: bool = true,
     answered: bool = false,
-    /// What its failure said, `Canceled` included.
-    err: ?core.Error = null,
+    /// The failure it ended with, `Canceled` included: whole, since a hard failure ends the walk
+    /// with it, its cause included (docs/design.md §19 step 14).
+    failure: ?Failure = null,
 };
 
 pub const AddressLookup = struct {

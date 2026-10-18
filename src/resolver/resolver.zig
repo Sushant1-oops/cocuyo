@@ -24,6 +24,7 @@ pub const Lookup = lookup.Lookup;
 pub const Action = lookup.Action;
 pub const Answer = lookup.Answer;
 pub const Failure = lookup.Failure;
+pub const Cause = lookup.Cause;
 pub const Verdict = lookup.Verdict;
 pub const State = lookup.State;
 pub const Resolver = table.Resolver;
@@ -75,6 +76,7 @@ test {
     _ = @import("lookup_case_echo_test.zig");
     _ = @import("lookup_request.zig");
     _ = @import("lookup_request_test.zig");
+    _ = @import("lookup_failure.zig");
     _ = @import("lookup_init_test.zig");
     _ = @import("lookup_negative_test.zig");
     _ = @import("lookup_config_test.zig");

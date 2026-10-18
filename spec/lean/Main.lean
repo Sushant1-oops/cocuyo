@@ -8,10 +8,11 @@ import Std.Data.HashSet
 
 `cocuyo-spec all <cname_hops_max>` walks, for each configuration below, every state the model can
 reach from `init`, depth first, and writes one line per event it tries: the depth, the event,
-what the model answers and the state it lands in (`stateToken`). Every event `enabled` allows is
-tried in every state reached, and a state reached a second time is not walked again, so each
-transition of the reachable graph is written once. The line still names the state it reached, so
-the replay checks the Zig lookup arrived at the same one by the second path as well.
+what the model answers, and the state it lands in with its cause (`lineToken`). Every event
+`enabled` allows is tried in every state reached, and a state reached a second time is not walked
+again, so each transition of the reachable graph is written once. The line still names the state
+it reached, so the replay checks the Zig lookup arrived at the same one by the second path as
+well.
 `cname_hops_max` is the library's, which the model takes as given; the first line records it,
 and the replay refuses a transcript written for another.
 
@@ -23,11 +24,13 @@ the one the model writes.
 open Spec.Lookup
 
 /-- What makes two states the same for the walk. An ended state answers the same to everything
-whatever its counters say (`ended_absorbing`), so its stage and its error are all of it. -/
+whatever its counters say (`ended_absorbing`), so its stage and its error are all of it. Its cause
+is not part of it either: each line below an ended state repeats the cause, which the line that
+reached the state checked already. -/
 def key (s : State) : State :=
   if ended s.stage then
     { s with server := 0, round := 0, candidate := 0, hops := 0, edns := true, hadNoData := false,
-             serverFailed := false, cookieRetried := false, offered := false }
+             cause := none, cookieRetried := false, offered := false }
   else s
 
 /-- Writes the events tried from `s`, and walks each state not seen before. Returns the lines
@@ -38,7 +41,7 @@ partial def walk (out : IO.FS.Stream) (c : Config) (seen : IO.Ref (Std.HashSet S
   let mut deepest := depth
   for e in enabled c s do
     let (t, o) := step c s e
-    out.putStrLn s!"{depth + 1} {eventToken e} {outToken o} {stateToken t}"
+    out.putStrLn s!"{depth + 1} {eventToken e} {outToken o} {lineToken t}"
     lines := lines + 1
     deepest := max deepest (depth + 1)
     unless (← seen.get).contains (key t) do
@@ -63,14 +66,17 @@ def configsAll (hops : Nat) : List Config := Id.run do
 
 /-- The configurations `gate` walks: the slice `zig build test` replays without Lean. One
 server, one attempt and one name reach every reply in every state, the whole CNAME chain, the
-TCP path, the DoH path and the DoQ path. -/
+TCP path, the DoH path and the DoQ path. One pass ends a lookup at its first server failure.
+So one server with two passes over DoH is walked too. There a lookup runs with a cause, and a
+second cause replaces the first (docs/design.md §5, The cause of a failure). -/
 def configsGate (hops : Nat) : List Config :=
   [{ servers := 0, attempts := 1, candidates := 1, hopsMax := hops, useTcp := false },
    { servers := 1, attempts := 1, candidates := 1, hopsMax := hops, useTcp := false },
    { servers := 1, attempts := 1, candidates := 1, hopsMax := hops, useTcp := true },
    { servers := 1, attempts := 1, candidates := 1, hopsMax := hops, useTcp := false, request := true },
    { servers := 1, attempts := 1, candidates := 1, hopsMax := hops, useTcp := false, request := true,
-     quic := true }]
+     quic := true },
+   { servers := 1, attempts := 2, candidates := 1, hopsMax := hops, useTcp := false, request := true }]
 
 /-- Writes the transcript of `configs` to `out`. Returns the events written and the deepest. -/
 def transcript (out : IO.FS.Stream) (hops : Nat) (configs : List Config) : IO (Nat × Nat) := do
@@ -80,7 +86,7 @@ def transcript (out : IO.FS.Stream) (hops : Nat) (configs : List Config) : IO (N
   for c in configs do
     out.putStrLn s!"config {c.servers} {c.attempts} {c.candidates} {transportToken c}"
     let s := init c
-    out.putStrLn s!"0 init none {stateToken s}"
+    out.putStrLn s!"0 init none {lineToken s}"
     let seen ← IO.mkRef (({} : Std.HashSet State).insert (key s))
     let (lines, depth) ← walk out c seen s 0
     total := total + lines

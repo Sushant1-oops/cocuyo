@@ -16,9 +16,9 @@ def Refusal (c : Config) (s : State) (e : Event) : Prop :=
   (e = .tcpFailed ∧ onStream s.stage = true) ∨
     (e = .requestFailed ∧ c.request = true ∧ s.stage = .awaitingUdp)
 
-/-- A lookup a server failed: the flag that decides the failure is set, and a lookup that has
+/-- A lookup a server failed: it holds the cause that decides the failure, and a lookup that has
 failed did not fail with `timeout`. -/
-def Marked (s : State) : Prop := s.serverFailed = true ∧ (s.stage = .failed → s.err ≠ .timeout)
+def Marked (s : State) : Prop := s.cause.isSome = true ∧ (s.stage = .failed → s.err ≠ .timeout)
 
 /-- The states a list of events leads a lookup through, one after the other. -/
 def run (c : Config) (s : State) : List Event → State
@@ -28,7 +28,7 @@ def run (c : Config) (s : State) : List Event → State
 theorem fresh_ne_failed (c : Config) : fresh c ≠ .failed := by
   unfold fresh; split <;> simp
 
-theorem marked_advanceServer (c : Config) (s : State) (h : s.serverFailed = true) :
+theorem marked_advanceServer (c : Config) (s : State) (h : s.cause.isSome = true) :
     Marked (advanceServer c s) := by
   unfold advanceServer
   split
@@ -37,7 +37,7 @@ theorem marked_advanceServer (c : Config) (s : State) (h : s.serverFailed = true
     · exact ⟨h, fun hf => absurd hf (fresh_ne_failed c)⟩
     · simp [Marked, fail, h]
 
-theorem marked_nextCandidate (c : Config) (s : State) (b : Bool) (h : s.serverFailed = true) :
+theorem marked_nextCandidate (c : Config) (s : State) (b : Bool) (h : s.cause.isSome = true) :
     Marked (nextCandidate c s b) := by
   unfold nextCandidate
   dsimp only
@@ -55,7 +55,7 @@ theorem marked_poll (c : Config) (s : State) (m : Marked s) : Marked (poll c s).
 theorem marked_onReply (c : Config) (s : State) (stream : Bool) (r : Reply) (m : Marked s)
     (hs : s.stage ≠ .failed) : Marked (onReply c s stream r).1 := by
   obtain ⟨h, _⟩ := m
-  have hadv : ∀ t : State, t.serverFailed = true → Marked (advanceServer c t) :=
+  have hadv : ∀ t : State, t.cause.isSome = true → Marked (advanceServer c t) :=
     marked_advanceServer c
   cases r with
   | unmatched => exact ⟨h, fun hf => absurd hf hs⟩
@@ -72,17 +72,17 @@ theorem marked_onReply (c : Config) (s : State) (stream : Bool) (r : Reply) (m :
     · exact ⟨h, fun hf => absurd hf (fresh_ne_failed c)⟩
   | nxdomain => exact marked_nextCandidate c s false h
   | nodata => exact marked_nextCandidate c s true h
-  | servfail => exact hadv _ rfl
+  | servfail => exact hadv _ (keep_isSome _ _)
   | formerr =>
     simp only [onReply]
     split
     · exact ⟨h, fun hf => absurd hf (fresh_ne_failed c)⟩
-    · exact hadv _ rfl
+    · exact hadv _ (keep_isSome _ _)
   | badcookie =>
     simp only [onReply]
     split
     · split
-      · exact hadv _ rfl
+      · exact hadv _ (keep_isSome _ _)
       · exact ⟨h, fun hf => absurd hf (by simp)⟩
     · split
       · exact ⟨h, fun hf => absurd hf (by simp)⟩
@@ -95,7 +95,7 @@ theorem marked_step (c : Config) (s : State) (e : Event) (m : Marked s) :
   · rw [ended_absorbing c s e hend]; exact m
   have hs : s.stage ≠ .failed := fun hf => hend (by simp [ended, hf])
   obtain ⟨h, ht⟩ := m
-  have hadv : ∀ t : State, t.serverFailed = true → Marked (advanceServer c t) :=
+  have hadv : ∀ t : State, t.cause.isSome = true → Marked (advanceServer c t) :=
     marked_advanceServer c
   cases e with
   | poll => exact marked_poll c s ⟨h, ht⟩
@@ -112,12 +112,12 @@ theorem marked_step (c : Config) (s : State) (e : Event) (m : Marked s) :
   | tcpFailed =>
     simp only [step]
     split
-    · exact hadv _ rfl
+    · exact hadv _ (keep_isSome _ _)
     · exact ⟨h, ht⟩
   | requestFailed =>
     simp only [step]
     split
-    · exact hadv _ rfl
+    · exact hadv _ (keep_isSome _ _)
     · exact ⟨h, ht⟩
   | reply r =>
     cases hst : s.stage <;> simp only [step, hst]
@@ -134,8 +134,8 @@ theorem marked_step (c : Config) (s : State) (e : Event) (m : Marked s) :
 theorem refusal_marks (c : Config) (s : State) (e : Event) (r : Refusal c s e) :
     Marked (step c s e).1 := by
   rcases r with ⟨he, hs⟩ | ⟨he, hc, hs⟩
-  · subst he; simp only [step, hs]; exact marked_advanceServer c _ rfl
-  · subst he; simp only [step, hc, hs]; exact marked_advanceServer c _ rfl
+  · subst he; simp only [step, hs]; exact marked_advanceServer c _ (keep_isSome _ _)
+  · subst he; simp only [step, hc, hs]; exact marked_advanceServer c _ (keep_isSome _ _)
 
 /-- A lookup that a server refused, its connection, its handshake or its request failing, never
 ends in `timeout`, whatever it hears afterwards (§5, retry policy; §16 decision 25). -/

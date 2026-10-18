@@ -20,7 +20,7 @@ would agree with the code by construction and prove nothing about it.
 
 - `lean/Spec/Lookup.lean` is the model: the eight states, the events a caller delivers, what each
   answers, and `enabled`, the events the contract of §4 lets a caller deliver in each state.
-- `lean/Spec/LookupProofs.lean` and the two modules under `lean/Spec/LookupProofs/` hold the
+- `lean/Spec/LookupProofs.lean` and the three modules under `lean/Spec/LookupProofs/` hold the
   proofs:
   - `ended_absorbing`: a lookup that is done or has failed is changed by nothing.
   - `cancel_after_end` and `cancel_before_end`: a cancel leaves an end standing, and ends
@@ -36,6 +36,9 @@ would agree with the code by construction and prove nothing about it.
     connection, its handshake or its request failing, never ends in `timeout`, whatever it hears
     afterwards (design §16 decision 25). It is `Timeout`'s promise, that every try went
     unanswered, which nothing checked before the decision.
+  - In `LookupProofs/Cause.lean`, `failure_cause`: a lookup that fails with `allServersFailed`
+    holds a cause, and one that fails with `timeout` holds none, whatever the caller tells it
+    (design §5, The cause of a failure; §16 decision 45).
 - `lean/Spec/Axioms.lean` pins the axioms each theorem rests on. A proof left unfinished rests on
   `sorryAx`, which changes a pinned line and fails the build.
 - `lean/Spec/Address.lean` is the model of both walks, and `lean/Spec/AddressWalk.lean` walks it and
@@ -65,8 +68,8 @@ would agree with the code by construction and prove nothing about it.
   moves it (docs/design.md §7, A datagram that the buffer cut). So the model's TC=1 stands for it
   there, and its unmatched reply everywhere else. No transition changed, and only the comment of
   TC=1 says so. The replay checks both claims (below). A cut datagram tells the server's state
-  nothing. The model holds no such state but whether a server failed, and TC=1 does not touch
-  that.
+  nothing. The model holds no such state but the cause of the last server failure, and TC=1 does
+  not touch that.
 - The server order of §19 step 12. The model counts a position in the order, which is what the
   lookup's `server_index` is.
 - Entropy, the cookies' values and the answers' records. Which COOKIE option a query carries,
@@ -90,16 +93,29 @@ would agree with the code by construction and prove nothing about it.
 none, one, two or three servers, one to three passes and one to three names, over UDP, under
 `use_tcp`, over DoH, or over DoQ. It tries every enabled event in every state and writes one line
 per transition, with the model's answer and its whole state after it. A state reached a second
-time is written but not walked again, so each transition appears once, 2,680,454 of them in all,
-173 deep at most. On 2026-10-08 a first BADCOOKIE over a stream became a retry on the stream with
+time is written but not walked again, so each transition appears once, 7,530,842 of them in all,
+183 deep at most. On 2026-10-08 a first BADCOOKIE over a stream became a retry on the stream with
 the fresh server cookie (docs/design.md §5, §19 step 10; c4milo/cocuyo#36), where before it
 advanced the server. The retry reaches states the walk did not reach before: the transcript held
 2,237,654 transitions, 168 deep, and the slice below 3,694.
 
+On 2026-10-17 the cause of the last server failure replaced the flag that a server failed
+(docs/design.md §5, The cause of a failure; §16 decision 45). A state holds the cause now, so
+two states that differ in their cause alone are walked apart. The transcript grew from 2,680,454
+transitions, 173 deep, to 7,530,842, 183 deep, and the slice below kept its 4,414 lines. An ended
+state's cause is not part of what makes it new to the walk: each line below it repeats the cause,
+which the line that reached it checked. In that slice one pass ended a lookup at its first server
+failure, so no lookup ran with a cause, and no cause replaced another. So the slice gained one
+server with two passes over DoH, 2,282 transitions more, and holds 6,696.
+
 `tools/spec_replay/replay.zig` drives `Lookup` down the same tree. It builds each reply around the
 question the lookup is asking, and it compares the answer and the state after every event: the
-stage, the server's position, the pass, the candidate, the hops, and the flags EDNS0, NODATA seen,
-a server failed and the cookie retried. A field that drifts is caught at the event that moved it.
+stage, the server's position, the pass, the candidate, the hops, the flags EDNS0, NODATA seen, a
+server failed and the cookie retried, and the cause the lookup holds. A failed lookup's cause is
+read from the `Failure` it reports. A field that drifts is caught at the event that moved it.
+The cause ends each line of the lookup's transcript, after the state. The engine's walks spell a
+lookup without it: the engine model keeps the flag that a server failed, since which cause a
+lookup holds changes no transition of the engine (`replay_text.zig`).
 
 Since 2026-10-14 the replay also hands a cut datagram to the lookup at each `reply_truncated`
 line (`tools/spec_replay/replay_cut.zig`). The datagram is the answer to what the lookup asks,
@@ -569,8 +585,10 @@ compares the walk's whole state after each.
 
 ## Running it
 
-- `zig build test` replays `tools/spec_replay/lookup_gate.txt`, a committed slice of 4,414
-  transitions: one server, one pass and one name, over UDP, over TCP, over DoH and over DoQ. It also
+- `zig build test` replays `tools/spec_replay/lookup_gate.txt`, a committed slice of 6,696
+  transitions. It holds one server, one pass and one name, over UDP, over TCP, over DoH and over
+  DoQ. It holds one server with two passes over DoH too, where a second cause replaces the first.
+  It also
   replays two sets of engine walks TLC wrote. `tools/spec_replay/engine_gate.txt` holds ten walks
   of forty events in each of the thirteen engine configurations.
   `tools/spec_replay/engine_picks.txt` holds fourteen walks of the full run, which `engine_picks` in

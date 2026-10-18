@@ -24,6 +24,12 @@ def errToken : Err → String
   | .allServersFailed => "all_servers_failed" | .chainTooLong => "chain_too_long"
   | .canceled => "canceled" | .noServers => "no_servers"
 
+/-- A cause as the transcript writes it, and `-` for none: the last column of a line. -/
+def causeToken : Option Cause → String
+  | none => "-" | some .servfail => "servfail" | some .formerr => "formerr"
+  | some .badcookie => "badcookie" | some .connect => "connect" | some .stream => "stream"
+  | some .request => "request"
+
 def outToken : Out → String
   | .sendUdp => "send_udp" | .connectTcp => "connect_tcp" | .sendTcp => "send_tcp"
   | .sendRequest => "send_request" | .wait => "wait" | .done => "done" | .failed e => "failed_" ++ errToken e
@@ -44,12 +50,17 @@ def flag (b : Bool) (c : Char) : String := if b then c.toString else "-"
 then for a lookup still running the server's position, the pass, the candidate and the hops, and
 the flags EDNS0, NODATA seen, a server failed and the cookie retried. An ended lookup's counters
 are nobody's business, so it writes its error instead. What a poll handed out and the caller has
-not answered is the caller's to know, and it is not written. -/
+not answered is the caller's to know, and it is not written. The engine's walks spell a lookup
+the same way, and hold whether a server failed it, not the cause (spec/README.md). -/
 def stateToken (s : State) : String :=
   match s.stage with
   | .done => "done - -"
   | .failed => s!"failed {errToken s.err} -"
   | st => s!"{stageToken st} {s.server}/{s.round}/{s.candidate}/{s.hops} " ++
-      flag s.edns 'E' ++ flag s.hadNoData 'N' ++ flag s.serverFailed 'F' ++ flag s.cookieRetried 'K'
+      flag s.edns 'E' ++ flag s.hadNoData 'N' ++ flag s.cause.isSome 'F' ++ flag s.cookieRetried 'K'
+
+/-- A state as the lookup's transcript writes it: `stateToken`, then the cause the lookup holds,
+which a failed lookup reports (docs/design.md §5, The cause of a failure). -/
+def lineToken (s : State) : String := stateToken s ++ " " ++ causeToken s.cause
 
 end Spec.Lookup

@@ -6193,3 +6193,278 @@ Four mutations, four `CAUGHT`.
 | DS2 | the stream check counts against a record at its longest, and not the buffer | the room for a chunk | the new test; the test of stream octets of exactly what the type keeps: "expected 18693, found 0", `test-cocuyo_doh` | CAUGHT |
 | DS3 | colibri is handed one chunk of the stream at most | no whole record stays after a read | the new test: "expected 0, found 1", `test-cocuyo_doh` | CAUGHT |
 | DS4 | the read stops after a pass that took octets and said nothing | the second pass of a read over HTTP/2 | the new test, at two full records and a short one, over HTTP/2 with answers of 40,000 octets: "expected 0, found 1", `test-cocuyo_doh` | CAUGHT |
+
+## The cause of a failure
+
+2026-10-17. The owner ruled that a lookup that fails keeps the last cause a server gave, and that
+the examples print it. On 2026-10-12 the daily DoT live check failed once at Quad9 with
+`AllServersFailed`, and nobody could say why. The lookup kept the flag `had_server_failure` and no
+reason, and the example printed `failure.err` alone.
+
+docs/design.md §16 decision 45 records the rule, and §5 (The cause of a failure) says what each
+error carries. §17 question 53 asks the owner about the name and the type of the field. Question
+54 asks about a reason in `on_tcp_failed` and `on_request_failed`, which §16 decision 25 counted
+against an alternative that it rejected. So the lookup reads the cause of a transport from its own
+state, and no entry point changes.
+
+### What the code did
+
+Three places set the flag:
+
+- `on_tcp_failed`, for a connection or a handshake that failed (`lookup.zig`);
+- `on_request_failed`, for a DoH or DoQ request that ended without an answer
+  (`lookup_request.zig`);
+- `heard`, for SERVFAIL, REFUSED, NOTIMP and BADVERS, FORMERR without EDNS0, and a BADCOOKIE that
+  advances the server (`lookup_response.zig`).
+
+`next_server` read it when the passes ran out, and chose `AllServersFailed` over `Timeout`. The
+engine calls `on_tcp_failed` at each failure of a connection:
+
+- a connect refused or failed;
+- no socket, no free connection slot, or an engine that keeps no TCP connection;
+- a send or a receive that failed, and the peer's close;
+- a TLS session that cannot start, seal or open, and a handshake that the session refuses.
+
+It calls `on_request_failed` at these failures:
+
+- each failure of a DoQ connection, and a stream that the server reset;
+- each DoH exchange that ends with no DNS message.
+
+Over TLS the engine tells a lookup that its connection is up only at the handshake's end (design
+§21, TLS rule 1).
+
+### The design and the models
+
+- `Failure.cause: ?Cause`, where `Cause` is `union(enum) { rcode: wire.Rcode, connect, stream,
+  request }`. `Failure` grows from 8 octets to 12, and a test pins it. `Action` stays at 64.
+- The lookup's field `cause` replaces the flag. Each place that set the flag keeps a cause, and
+  `next_server` reads whether there is one. `on_tcp_failed` keeps `connect` in `connecting_tcp`,
+  and `stream` in `tcp_ready` and `awaiting_tcp`.
+- `failure_of` asserts that `AllServersFailed` has a cause and `Timeout` has none.
+- `AddressLookup` keeps each pending lookup's whole failure, and ends a walk on a hard failure
+  with it. Until now it took the error from that lookup and the other fields from the last lookup
+  that failed. It grows from 1,152 octets to 1,184, and design §9 says so. A `Lookup` stays at
+  3,072 octets: the cause took three octets of the padding.
+- The Lean model of the lookup holds `cause : Option Cause` in place of `serverFailed`. One
+  definition, `keep`, gives a lookup the cause of a server failure, and `streamCause` reads the
+  stage of a stream that failed. `LookupProofs/Cause.lean` proves `failure_cause`: a lookup that
+  fails with `allServersFailed` holds a cause, and one that fails with `timeout` holds none.
+- Each line of the lookup's transcript ends with the cause, and the replay compares it. A failed
+  lookup's cause is read from its `Failure`. The full transcript grew from 2,680,454 transitions,
+  173 deep, to 7,530,842, 183 deep, since states that differ in their cause alone are walked
+  apart. The committed slice kept its 4,414 transitions, until the review below added to it.
+- The engine model in TLA+ keeps its flag, and the engine's walks spell a lookup as before. Which
+  cause a lookup holds changes no transition of the engine. The model of the walks holds no
+  `Failure`, so it does not change.
+
+### The tests, before the code
+
+The tests came first, over a stub: the type, the field and a lookup that never set it. Each failed
+as the list says, and each `err` that it checked passed.
+
+- `lookup_failure.zig`, each rcode that fails a server: "expected .{ .rcode = .server_failure },
+  found null".
+- There, FORMERR without EDNS0: "expected .{ .rcode = .format_error }, found null".
+- There, a connection that fails before it is up and after: "expected .{ .connect = void }, found
+  null".
+- There, the last server failure, with a silent server after it: "expected .{ .rcode = .refused },
+  found null".
+- There, a stream after an rcode and an rcode after a stream: "expected .{ .connect = void },
+  found null".
+- There, `NameNotFound` and `Canceled` after a server failure: "expected .{ .rcode =
+  .server_failure }, found null".
+- `lookup_cookie_test.zig`, BADCOOKIE over a stream after its retry, twice: "expected .{ .rcode =
+  .bad_cookie }, found null".
+- `lookup_request_test.zig`, every request failed: "expected .{ .request = void }, found null";
+  BADCOOKIE over DoH or DoQ: "expected .{ .rcode = .bad_cookie }, found null".
+- `address_lookup_walk.zig`, a walk that ends on a hard failure: "expected .{ .rcode =
+  .server_failure }, found null".
+- `name_lookup.zig`, a server that fails the reverse walk: "expected .{ .rcode = .server_failure },
+  found null".
+- `io_tcp_test.zig`, every server refused a connection: "expected .{ .connect = void }, found
+  null"; a query send that fails, and a connection that fails mid-send: "expected .{ .stream = void
+  }, found null". After the review the test of refused connections moved to
+  `io_tcp_cause_test.zig`.
+- `io_tls_failing_test.zig`, a session that fails at each server: "expected .{ .connect = void },
+  found null".
+- `io_request_failure_test.zig`, three tests over DoQ: "expected .{ .request = void }, found
+  null".
+- `io_channel_test.zig`, every DoH exchange failed: "expected .{ .request = void }, found null".
+
+These passed over the stub, since null was all that it gave: a lookup that no server failed, a
+retry, a server error under `check_response` off, and a negative that the memory recalls. Their
+rows below are what shows each one.
+
+### What the rows found
+
+Each row ran once by hand first, with its step, and each file put back after it.
+
+- The two tests of `io_tcp_test.zig` that break a stream expected `stream`. With the code, both
+  found `connect`. The second server of that rig is down, and the twin refuses a connect to a
+  server that is down. So the last failure is that refusal, and the last cause wins. The tests now
+  expect `connect`. A new test resets the stream at each server once it is up, and expects
+  `stream`.
+- LC21 was not caught at first. The TLS test that every server refuses runs two passes. On the
+  second pass a lookup finds no free connection slot, since the refused connection still closes
+  after its alert. The engine then calls `on_tcp_failed` in `connecting_tcp`, which is `connect`
+  whatever the handshake did. A new test runs one pass, and its last failure is the second
+  server's own refusal: "expected .connect, found .stream". The test of two passes now checks
+  the error alone, as it did before.
+- LC22 and LC25 broke two proofs at first, because each proof named the cause that a SERVFAIL
+  keeps. Neither proof failed for a reason of the behaviour. The model now keeps each cause
+  through `keep`, and the proofs do not name it. Then LC22 meets the committed slice, and LC25
+  only the full transcript: in the slice, one server and one pass end a lookup at its first server
+  failure, so a first cause never meets a second.
+- LC19 is caught by the engine's replay alone, for the same reason: the lookup's slice never shows
+  a lookup that a server failed and that still runs.
+- After the review the slice holds one server with two passes over DoH too. So since then the
+  slice catches LC25 and LC19 as well (What the review found, below).
+
+The rows of earlier sections whose edits named the flag were written again for the cause, with the
+same intent: RF3, RF4, FR2, FR3, FR8 to FR12, CO30, DT38 and G1 in `lookup.zon`, A4 and A5 in
+`address.zon`, and DM3, RF1, RF2, CO22 and CO23 in `lean.zon`. Each ran again below.
+
+### What the review found
+
+A review read the change on 2026-10-17. What it found, and what changed for it:
+
+- `NameLookup` lost the cause at a negative end, and at a cancel after its lookup failed. Its
+  `end_failed` built a `Failure` of zeros. In a copy of the tree the review gave the first server
+  SERVFAIL and the second NXDOMAIN. `NameLookup` then ended `NameNotFound` with no cause, and
+  `AddressLookup` with the SERVFAIL. `NameLookup` now keeps `last_failure` as `AddressLookup`
+  does, and both ends put their error on its fields. So a negative end carries its lookup's
+  negative TTL too (design §16 decision 45, §19 step 14).
+- In `examples/answer_text.zig`, `report_failure` stood between the doc comment of `report` and
+  `report`. Each function has its own comment again.
+- Design §5, §17 question 54 and the README now name three more causes of `connect`. These are
+  no socket, no free connection slot, and an engine that keeps no TCP connection. They are local,
+  and no server took part. Over TLS a second pass can find no free slot while the connection of the
+  first pass still closes. Its `connect` then replaces the cause that the server gave.
+- No engine test checked the cause on three paths: an engine with no TCP connection, no free
+  slot, and a query send that fails on a connection that is up. `io/io_tcp_cause_test.zig` has a
+  test for each. The two tests of a cause in `io_tcp_test.zig` moved there too, by the
+  file-length rule.
+- The committed slice held no lookup that runs with a cause. So `zig build test` never replayed a
+  cause that a later failure replaces. `configsGate` in `spec/lean/Main.lean` now adds one server
+  with two passes over DoH. The slice grew by 2,282 transitions to 6,696, and the replay's test
+  requires six configurations. Two passes over TCP held 10,094 transitions, and over DoH both
+  `request` and three rcodes come, so DoH was the smaller choice.
+- The interop check took `connect` or `request` over each transport. It now requires `connect`
+  over DoT, and `request` over DoQ and DoH.
+- Some new sentences were longer than 25 words, and one list was written as a sentence. They are
+  split, or written as lists.
+- The time of `zig build spec` here did not match the runs of the builder and of the review. The
+  time below is measured over the final tree.
+
+One finding stays as it was. `examples/udp_blocking.zig` and `examples/udp_rotor.zig` each have a
+`report_failure` of their own, and do not import `answer_text.zig`. Each is one file by design,
+"so the shape of the API is visible in one file". Each has its own `report` for that reason.
+
+The change to `NameLookup` made LC17 an equivalent mutant. Its edit called `end_failed` with the
+error, and `end_failed` now reads the failure that was just kept. So its edit now builds a
+`Failure` of zeros, which is what `end_failed` built before.
+
+### The tests, before the code, after the review
+
+The two tests of `name_lookup.zig` came first, and each failed:
+
+- a negative end after a server failure: "expected .{ .rcode = .server_failure }, found null";
+- a cancel after the lookup failed: "expected .{ .rcode = .server_failure }, found null".
+
+The three tests of `io_tcp_cause_test.zig` passed at once, since the engine took each path
+already. LC32 to LC34 show what each one catches.
+
+### What ran
+
+These runs went over the final tree, after the review:
+
+- `zig build mutations -- lookup` with LC1 to LC19, LC29 to LC31 and the twelve carried rows;
+- `zig build mutations -- engine` with LC20, LC21 and LC32 to LC34;
+- `zig build mutations -- address A4 A5`;
+- `zig build mutations -- lean` with LC22 to LC28 and the five carried rows.
+
+Each ran its steps once with nothing mutated first. Each found each row `CAUGHT`, and each left the
+tree as it was. LC1 also breaks the two engine tests of a stream, in `test-io`: "expected .stream,
+found .connect".
+
+With the change, `zig build test` has 1,111 tests pass of 1,111. `zig build lint` passes, with
+each function at a complexity of 15 or less. `zig build spec` passes. The lookup's replay agrees
+over 7,530,951 events and 994,033 cut datagrams, the walks' over 66,565 events, and the engine's
+over 5,226,000 events in 26,000 walks. Over the final tree it took 490 seconds, 8 minutes 10
+seconds, on 2026-10-18, on an Apple M1 Pro. `zig build examples` builds each example.
+`example-cleartext-rotor` over TCP to a closed port on the loopback prints
+`example.com: AllServersFailed (connect)`. The live checks and the interop check need the network
+or dnsproxy, and did not run.
+
+### The instruction counts
+
+No counted case of `bench/count.zig` ends in a failure, and an `Action` keeps its size. The x86-64
+code of the library's hot paths did change. `zig build fill-check` compiles them ReleaseSafe to
+assembly. It ran for HEAD and for the change, each in a copy of the tree with a cache of its own.
+By the instructions that each function holds:
+
+- `heard` went from 138 to 145, and `next_server` from 51 to 49.
+- `Resolver.poll` went from 1,040 to 1,056, and `Resolver.on_datagram` from 934 to 919.
+- `Resolver.on_tcp_failed` went from 67 to 81.
+- `init_in_place` and the query's build kept their counts, and their code changed: the fields
+  moved.
+
+The cases `round-trip`, `match-accept`, `match-stray` and `match-wrong` run these functions, so
+their counts can move. `query-build`, `query-build-tcp`, the three `parse` cases, `resolv-conf`
+and the four cache cases run none of them, and should not move. A function's size is not what a
+case takes, so the review counted the cases under cachegrind 3.22.0, for HEAD and for the change.
+It ran in an arm64 Linux container, and not on the x86-64 of the baseline:
+
+- `round-trip` went from 3,948 instructions to 3,970, 0.56% more;
+- `match-wrong` went from 258 to 255, 1.2% fewer;
+- the other twelve cases did not move.
+
+Both moves are under the 2% floor of `tools/instructions.zig`, so the x86-64 counts of CI will
+likely pass too. The changes after the review are in `NameLookup`, in tests and in comments, and
+no counted case runs them. `bench/instructions.zon` did not change. CI's Linux job prints the
+counts as they stand when they move.
+
+### The rows
+
+| # | Mutation | Check it breaks | Caught by | Status |
+| --- | --- | --- | --- | --- |
+| LC1 | the cause of a failed stream is the connect's in every state | `stream_cause` reads the state | the test of a connection that fails before it is up and after: "expected .stream, found .connect", `test-resolver` | CAUGHT |
+| LC2 | the cause of a failed stream is the stream's in every state | `stream_cause` reads the state | the same test and two others: "expected .connect, found .stream", `test-resolver` | CAUGHT |
+| LC3 | a failed request keeps the stream's cause | `on_request_failed` keeps `request` | the test of every request failed: "expected .request, found .stream", `test-resolver` | CAUGHT |
+| LC4 | a response that fails its server keeps no cause | `heard` keeps the rcode | the BADCOOKIE tests over a stream: "expected .{ .rcode = .bad_cookie }, found null"; the test of each rcode: "expected error.AllServersFailed, found error.Timeout", `test-resolver` | CAUGHT |
+| LC5 | each rcode that fails a server keeps SERVFAIL as its cause | `cause_of` keeps the rcode read | the test of each rcode: "expected .refused, found .server_failure"; the BADCOOKIE tests: "expected .bad_cookie, found .server_failure", `test-resolver` | CAUGHT |
+| LC6 | FORMERR to a query with EDNS0, a retry, keeps a cause | a retry is no failure | the FORMERR test and the test of a retry: "expected null, found .{ .rcode = .format_error }", `test-resolver` | CAUGHT |
+| LC7 | a first BADCOOKIE, a retry, keeps a cause | a retry is no failure | the test of a retry: "expected null, found .{ .rcode = .bad_cookie }"; the BADCOOKIE tests on the server's count: "expected 0, found 2", `test-resolver` | CAUGHT |
+| LC8 | a server error taken as the answer under `check_response` off keeps a cause | the answer is no failure | the test under `check_response` off: "expected null, found .{ .rcode = .server_failure }", `test-resolver` | CAUGHT |
+| LC9 | the next candidate clears the cause | nothing clears the cause | the test of an error but `AllServersFailed`: "expected .{ .rcode = .server_failure }, found null", `test-resolver` | CAUGHT |
+| LC10 | a try that ran out clears the cause | silence clears no cause | the test of a silent server after a failure: "expected error.AllServersFailed, found error.Timeout", `test-resolver` | CAUGHT |
+| LC11 | the first rcode stays the cause | the last cause wins | the test of the last server failure: "expected .refused, found .server_failure", `test-resolver` | CAUGHT |
+| LC12 | the first cause stays, and a failed stream after it does not replace it | the last cause wins | the test of a stream after an rcode: "expected .connect, found .rcode", `test-resolver` | CAUGHT |
+| LC13 | the failure reports no cause | `failure_of` copies the cause | each test of a cause, among them: "expected .{ .rcode = .server_failure }, found null", `test-resolver` | CAUGHT |
+| LC14 | a failed send keeps a cause | a failed send is silence | the test of a lookup no server failed: "expected error.Timeout, found error.AllServersFailed", `test-resolver` | CAUGHT |
+| LC15 | a lookup starts with a cause | `init` sets none | the timeout test of `lookup_poll.zig`: "expected error.Timeout, found error.AllServersFailed", and three more, `test-resolver` | CAUGHT |
+| LC16 | a walk ends a hard failure with its error alone, on the fields of the last lookup that failed | the hard end hands on that lookup's failure | the walk's test trips the assertion of `end_failed_with`, that `AllServersFailed` has a cause: "reached unreachable code", `test-resolver` | CAUGHT |
+| LC17 | the reverse walk ends a hard failure with its error alone, on zeros and no cause | `NameLookup` hands on the failure whole | the test of a server that fails the reverse walk trips the assertion of `end_failed_with`, that `AllServersFailed` has a cause: "reached unreachable code", `test-resolver` | CAUGHT |
+| LC18 | the replay spells the cause FORMERR as SERVFAIL | the replay compares the cause | the replay of the committed slice, at line 107: the model's "failed all_servers_failed - formerr" against the lookup's "... - servfail"; the test of the spelling, `test-tools` | CAUGHT |
+| LC19 | the replay's flag that a server failed ignores the cause | the flag is the cause's | the replay of the committed slice, at line 4,822: the model's `E-F- request` against the lookup's `E--- request`; the engine's replay of the committed walks, at line 7: the model's `E-F-` against the engine's `E---`, `test-tools` | CAUGHT |
+| LC20 | a connect that failed tells its lookups the connection is up first | `connect` before `on_tcp_connected` | the test that every server refused a connection, and the two tests of `two_queued`: "expected .connect, found .stream", `test-io` | CAUGHT |
+| LC21 | a TLS connection tells its lookups that it is up when its handshake starts | TLS rule 1 | the one-pass test of a refused handshake: "expected .connect, found .stream"; four other TLS tests, on a server's count of failures, `test-io` | CAUGHT |
+| LC22 | the model keeps the cause FORMERR at SERVFAIL | the model's SERVFAIL | `cocuyo-spec check`: "lookup_gate.txt is not the slice the model writes", `spec-lean` | CAUGHT |
+| LC23 | the model's cause of a failed stream is the connect's in every stage | `streamCause` | the same check, `spec-lean` | CAUGHT |
+| LC24 | the model's failed request keeps the stream's cause | the model's failed request | the same check, `spec-lean` | CAUGHT |
+| LC25 | the model keeps the first cause, and a later server failure does not replace it | `keep` | `cocuyo-spec check`: "lookup_gate.txt is not the slice the model writes", `spec-lean`. Before the review, the replay of the full transcript alone, at line 41,673 | CAUGHT |
+| LC26 | the model forgets the cause at the end of its last pass | `failure_cause`, `refused_never_timeout` | the proofs: "Timeout.lean:38:4: unsolved goals", in `marked_advanceServer`, `spec-lean` | CAUGHT |
+| LC27 | the model's walk writes no cause | the cause on each line | `cocuyo-spec check`: "lookup_gate.txt is not the slice the model writes", `spec-lean` | CAUGHT |
+| LC28 | `failure_cause` proved by `sorry` | the axiom pins | "Axioms.lean:49:0: Docstring on `#guard_msgs` does not match generated message", `spec-lean` | CAUGHT |
+| LC29 | the reverse walk keeps no failure of its lookup, so a negative end or a cancel ends on zeros | `NameLookup` keeps `last_failure` | both tests of `name_lookup.zig` after the review: "expected .{ .rcode = .server_failure }, found null", `test-resolver` | CAUGHT |
+| LC30 | the reverse walk reads the cancel before it keeps the failure of its lookup | the failure is kept first | the test of a cancel after the lookup failed: "expected .{ .rcode = .server_failure }, found null", `test-resolver` | CAUGHT |
+| LC31 | the first rcode stays the cause, as the replay of the committed slice sees it | the last cause wins | the replay of the committed slice, at line 4,906: the model's "failed all_servers_failed - servfail" against the lookup's "... - request", `test-tools` | CAUGHT |
+| LC32 | an engine that keeps no TCP connection tells the lookup it is up before it fails it | `connect` with no TCP | the test of an engine with no TCP connection: "expected .connect, found .stream", `test-io` | CAUGHT |
+| LC33 | a lookup that finds no free connection slot is told it is up before it is failed | `connect` with no slot | the test of no free slot: "expected .connect, found .stream", `test-io` | CAUGHT |
+| LC34 | a stream send that moved nothing is reported as a failed send before the connection fails | a failed send on a stream is `stream` | the test of a query send that fails on a connection that is up: "expected error.AllServersFailed, found error.Timeout", `test-io` | CAUGHT |
+
+The carried rows were each `CAUGHT` again, by the step they name: RF3, RF4, FR2, FR3, FR8 to FR12,
+CO30 and DT38 by `test-resolver`, and G1 by `test-tools`; A4 and A5 by `test-resolver`; DM3, RF1,
+RF2, CO22 and CO23 by `spec-lean`.
+
+Thirty-four mutations, thirty-four `CAUGHT`.

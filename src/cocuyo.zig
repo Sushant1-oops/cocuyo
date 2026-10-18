@@ -43,6 +43,7 @@ pub const Servers = resolver.Servers;
 pub const Action = resolver.Action;
 pub const Answer = resolver.Answer;
 pub const Failure = resolver.Failure;
+pub const Cause = resolver.Cause;
 pub const Verdict = resolver.Verdict;
 pub const Handle = resolver.Handle;
 pub const Slot = resolver.Slot;

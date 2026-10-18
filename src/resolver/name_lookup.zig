@@ -49,6 +49,10 @@ pub const NameLookup = struct {
     /// Whether the lookup said `NoData`, which ends a walk out of sources as `NoData` rather than
     /// `NameNotFound` (docs/design.md §5).
     saw_no_data: bool,
+    /// The failure of the walk's last lookup that failed, unless that lookup ended `Canceled`. A
+    /// negative end and a cancel put the walk's error on its fields, its cause included
+    /// (docs/design.md §19 step 14).
+    last_failure: ?Failure,
 
     pub const End = union(enum) { answered, failed: Failure };
     pub const InitError = error{NoSlot} || core.Error;
@@ -68,6 +72,7 @@ pub const NameLookup = struct {
             .ended = null,
             .cancelled = false,
             .saw_no_data = false,
+            .last_failure = null,
         };
         try next_source(&self);
         assert(self.ended != null or self.handle != null);
@@ -160,6 +165,8 @@ fn take_failure(self: *NameLookup, failure: Failure) void {
     // A cancel is the caller's word and ends the walk, even when the lookup failed on its own
     // before the cancel reached it.
     if (failure.err == core.Error.Canceled) return end_failed_with(self, failure);
+    // Kept before the cancel is read, so a cancel after a failure ends on its fields.
+    self.last_failure = failure;
     if (self.cancelled) return end_failed(self, core.Error.Canceled);
     // A name that does not exist, or has no `PTR`, lets the next source try; any other failure
     // says nothing about the name and ends the walk with it (docs/design.md §19 step 14).
@@ -170,11 +177,17 @@ fn take_failure(self: *NameLookup, failure: Failure) void {
     if (self.ended == null and self.handle == null) end_failed_with(self, failure);
 }
 
+/// The walk ends with `err` on the fields of the last failure of its lookup. When its lookup
+/// never failed, the fields are zeros and the cause is null (docs/design.md §19 step 14).
 fn end_failed(self: *NameLookup, err: core.Error) void {
-    end_failed_with(self, .{ .err = err, .server_index = 0, .attempts_made = 0, .negative_ttl_seconds = 0 });
+    var failure: Failure = self.last_failure orelse .{ .err = err, .server_index = 0, .attempts_made = 0, .negative_ttl_seconds = 0, .cause = null };
+    failure.err = err;
+    end_failed_with(self, failure);
 }
 
 fn end_failed_with(self: *NameLookup, failure: Failure) void {
+    // `AllServersFailed` rests on a server that failed the lookup (docs/design.md §5).
+    assert(failure.err != core.Error.AllServersFailed or failure.cause != null);
     self.ended = .{ .failed = failure };
 }
 
@@ -184,6 +197,7 @@ const testing = std.testing;
 const fixtures = @import("fixtures.zig");
 const Table = fixtures.Table;
 const Verdict = @import("lookup.zig").Verdict;
+const Cause = @import("lookup.zig").Cause;
 const Source = core.Source;
 
 /// A hosts table built by hand, the parser being in `config`.
@@ -307,9 +321,11 @@ test "a server that fails ends the reverse walk with its failure, and NODATA end
     var rig: Table = .{ .config = .{ .servers = &fixtures.servers_one, .search = &.{}, .attempts = 1 } };
     rig.open();
     const address = Address.from_v4(.{ 192, 0, 2, 1 });
-    const cases = [_]struct { reply: fixtures.Reply, err: core.Error }{
-        .{ .reply = fixtures.server_failure, .err = core.Error.AllServersFailed },
-        .{ .reply = fixtures.no_data, .err = core.Error.NoData },
+    // The failure is the lookup's, handed on whole, its cause included (docs/design.md §5, The
+    // cause of a failure).
+    const cases = [_]struct { reply: fixtures.Reply, err: core.Error, cause: ?Cause }{
+        .{ .reply = fixtures.server_failure, .err = core.Error.AllServersFailed, .cause = .{ .rcode = .server_failure } },
+        .{ .reply = fixtures.no_data, .err = core.Error.NoData, .cause = null },
     };
     for (cases) |case| {
         var lookup = try NameLookup.init(&rig.resolver, null, &address);
@@ -321,7 +337,52 @@ test "a server that fails ends the reverse walk with its failure, and NODATA end
         _ = rig.resolver.on_datagram(message, asked.server(), rig.now_ns);
         try drive(&rig, &lookup);
         try testing.expectEqual(case.err, lookup.outcome().?.failed.err);
+        try testing.expectEqual(case.cause, lookup.outcome().?.failed.cause);
     }
+    try testing.expectEqual(@as(usize, 0), rig.resolver.in_flight());
+}
+
+test "a negative end of the reverse walk carries the lookup's failure, the cause of a server before it included" {
+    // The first server fails the PTR lookup, and the second says that the name does not exist
+    // (RFC 1035 §4.1.1). No source is left, and the walk ends on the lookup's failure
+    // (docs/design.md §5, The cause of a failure; §19 step 14).
+    const config: core.Config = .{ .servers = &fixtures.servers_two, .search = &.{}, .attempts = 1, .failover_retry_chance = 0 };
+    var rig: Table = .{ .config = config };
+    rig.open();
+    const address = Address.from_v4(.{ 192, 0, 2, 1 });
+    var lookup = try NameLookup.init(&rig.resolver, null, &address);
+    for ([_]fixtures.Reply{ fixtures.server_failure, fixtures.name_error }) |reply| {
+        const event = rig.poll().?;
+        rig.resolver.on_sent(event.handle, rig.now_ns);
+        const asked = rig.resolver.lookup_of(lookup.handle.?);
+        const message = rig.build(asked, reply);
+        rig.now_ns += 1;
+        _ = rig.resolver.on_datagram(message, asked.server(), rig.now_ns);
+    }
+    try drive(&rig, &lookup);
+    const failure = lookup.outcome().?.failed;
+    try testing.expectEqual(core.Error.NameNotFound, failure.err);
+    try testing.expectEqual(@as(?Cause, .{ .rcode = .server_failure }), failure.cause);
+    try testing.expectEqual(@as(usize, 0), rig.resolver.in_flight());
+}
+
+test "a cancel after the reverse walk's lookup failed carries the cause of that failure" {
+    var rig: Table = .{ .config = .{ .servers = &fixtures.servers_one, .search = &.{}, .attempts = 1 } };
+    rig.open();
+    const address = Address.from_v4(.{ 192, 0, 2, 1 });
+    var lookup = try NameLookup.init(&rig.resolver, null, &address);
+    const event = rig.poll().?;
+    rig.resolver.on_sent(event.handle, rig.now_ns);
+    const asked = rig.resolver.lookup_of(lookup.handle.?);
+    const message = rig.build(asked, fixtures.server_failure);
+    rig.now_ns += 1;
+    _ = rig.resolver.on_datagram(message, asked.server(), rig.now_ns);
+    // The lookup failed in the table, and the caller cancels before its end is routed here.
+    lookup.cancel();
+    try drive(&rig, &lookup);
+    const failure = lookup.outcome().?.failed;
+    try testing.expectEqual(core.Error.Canceled, failure.err);
+    try testing.expectEqual(@as(?Cause, .{ .rcode = .server_failure }), failure.cause);
     try testing.expectEqual(@as(usize, 0), rig.resolver.in_flight());
 }
 

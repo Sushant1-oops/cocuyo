@@ -29,6 +29,13 @@ const Lookup = resolver.Lookup;
 const Servers = resolver.servers.Servers;
 const fixtures = @import("fixtures.zig");
 const cut_module = @import("replay_cut.zig");
+const text_module = @import("replay_text.zig");
+
+/// What a lookup answers, and the lookup's state as the model writes one (`replay_text.zig`).
+pub const Out = text_module.Out;
+pub const state_text = text_module.state_text;
+const line_text = text_module.line_text;
+const out_of = text_module.out_of;
 
 /// The deepest line the replay can follow. The walk over spec/lean/Main.lean's configurations went
 /// 168 deep when it was measured on 2026-09-23; this leaves room for a model that grows.
@@ -41,8 +48,8 @@ const seed = 0x5eed_5eed;
 /// The longest line of a transcript: an event, an answer and a state, and room to spare.
 const line_bytes_max = 256;
 
-/// The longest state a line writes: the longest stage, four counters and the flags.
-pub const state_bytes_max = 64;
+/// The longest state a line writes, its cause included (`replay_text.zig`).
+pub const state_bytes_max = text_module.state_bytes_max;
 
 /// How a configuration's queries go: the model's `transportToken` (spec/lean/Spec/Tokens.lean).
 const Transport = enum { udp, tcp, https, quic };
@@ -76,28 +83,6 @@ pub const Event = enum {
     reply_formerr,
     reply_truncated,
     reply_badcookie,
-};
-
-/// What a lookup answers: the model's `Out`, with each failure spelt out.
-pub const Out = enum {
-    send_udp,
-    connect_tcp,
-    send_tcp,
-    send_request,
-    wait,
-    done,
-    failed_name_not_found,
-    failed_no_data,
-    failed_timeout,
-    failed_all_servers_failed,
-    failed_chain_too_long,
-    failed_canceled,
-    failed_no_servers,
-    /// A failure the model has no name for, which is a disagreement whatever the model said.
-    failed_other,
-    accepted,
-    ignored,
-    none,
 };
 
 pub const Error = error{ Malformed, TooDeep, Mismatch, WrongHops, Empty };
@@ -217,7 +202,7 @@ pub const Replay = struct {
         }
         const got_out = if (event == .init) Out.none else self.apply(event);
         var got_buffer: [state_bytes_max]u8 = undefined;
-        const got_state = state_text(&self.lookup, &got_buffer);
+        const got_state = line_text(&self.lookup, &got_buffer);
         self.save(depth);
         self.depth = depth;
         self.events += 1;
@@ -313,36 +298,6 @@ pub const Replay = struct {
     }
 };
 
-/// The lookup's state as the model writes one (spec/lean/Spec/Tokens.lean, `stateToken`).
-pub fn state_text(lookup: *const Lookup, out: *[state_bytes_max]u8) []const u8 {
-    return switch (lookup.state) {
-        .done => "done - -",
-        .failed => std.fmt.bufPrint(out, "failed {s} -", .{
-            @tagName(failed_out(lookup.failure))["failed_".len..],
-        }) catch unreachable,
-        else => running_text(lookup, out),
-    };
-}
-
-fn running_text(lookup: *const Lookup, out: *[state_bytes_max]u8) []const u8 {
-    const flags = lookup.flags;
-    return std.fmt.bufPrint(out, "{s} {d}/{d}/{d}/{d} {c}{c}{c}{c}", .{
-        @tagName(lookup.state),
-        lookup.server_index,
-        lookup.round,
-        lookup.candidate_index,
-        lookup.cname_hops,
-        flag(flags.edns_enabled, 'E'),
-        flag(flags.had_no_data, 'N'),
-        flag(flags.had_server_failure, 'F'),
-        flag(flags.cookie_retried, 'K'),
-    }) catch unreachable;
-}
-
-fn flag(set: bool, letter: u8) u8 {
-    return if (set) letter else '-';
-}
-
 fn parse(comptime T: type, token: ?[]const u8) ?T {
     return std.meta.stringToEnum(T, token orelse return null);
 }
@@ -373,31 +328,6 @@ fn reply_of(event: Event) fixtures.Reply {
         .reply_truncated => .truncated,
         .reply_badcookie => .badcookie,
         else => unreachable,
-    };
-}
-
-fn out_of(action: resolver.Action) Out {
-    return switch (action) {
-        .send_udp => .send_udp,
-        .connect_tcp => .connect_tcp,
-        .send_tcp => .send_tcp,
-        .send_request => .send_request,
-        .wait => .wait,
-        .done => .done,
-        .failed => |failure| failed_out(failure.err),
-    };
-}
-
-fn failed_out(err: core.Error) Out {
-    return switch (err) {
-        error.NameNotFound => .failed_name_not_found,
-        error.NoData => .failed_no_data,
-        error.Timeout => .failed_timeout,
-        error.AllServersFailed => .failed_all_servers_failed,
-        error.ChainTooLong => .failed_chain_too_long,
-        error.Canceled => .failed_canceled,
-        error.NoServers => .failed_no_servers,
-        else => .failed_other,
     };
 }
 
@@ -435,6 +365,7 @@ const testing = std.testing;
 
 test {
     _ = cut_module;
+    _ = text_module;
 }
 
 fn replay_text(replay: *Replay, text: []const u8) Error!void {
@@ -451,8 +382,9 @@ test "the committed slice of the model's transcript replays against the lookup" 
         replay.report(err);
         return err;
     };
-    try testing.expectEqual(@as(usize, 5), replay.configs);
-    try testing.expect(replay.events > 2900);
+    // Since 2026-10-17 the sixth, two passes over DoH, holds a lookup that runs with a cause.
+    try testing.expectEqual(@as(usize, 6), replay.configs);
+    try testing.expect(replay.events > 6600);
     try testing.expect(replay.cuts > 0);
 }
 
@@ -460,8 +392,8 @@ test "a line where the lookup answers otherwise than the model is a mismatch" {
     const replay = try testing.allocator.create(Replay);
     defer testing.allocator.destroy(replay);
     replay.* = .{};
-    const text = "hops 8\nconfig 1 1 1 udp\n0 init none query_ready 0/0/0/0 E---\n" ++
-        "1 poll send_tcp query_ready 0/0/0/0 E---\n";
+    const text = "hops 8\nconfig 1 1 1 udp\n0 init none query_ready 0/0/0/0 E--- -\n" ++
+        "1 poll send_tcp query_ready 0/0/0/0 E--- -\n";
     try testing.expectError(error.Mismatch, replay_text(replay, text));
     try testing.expectEqual(Out.send_udp, replay.mismatch.?.got_out);
     try testing.expectEqual(@as(usize, 4), replay.mismatch.?.line);
@@ -471,11 +403,11 @@ test "a line where the lookup's state drifts from the model's is a mismatch, wha
     const replay = try testing.allocator.create(Replay);
     defer testing.allocator.destroy(replay);
     replay.* = .{};
-    const text = "hops 8\nconfig 1 1 1 udp\n0 init none query_ready 0/0/0/0 E---\n" ++
-        "1 poll send_udp query_ready 0/0/0/0 ----\n";
+    const text = "hops 8\nconfig 1 1 1 udp\n0 init none query_ready 0/0/0/0 E--- -\n" ++
+        "1 poll send_udp query_ready 0/0/0/0 ---- -\n";
     try testing.expectError(error.Mismatch, replay_text(replay, text));
     const mismatch = replay.mismatch.?;
-    try testing.expectEqualStrings("query_ready 0/0/0/0 E---", mismatch.got_state[0..mismatch.got_state_len]);
+    try testing.expectEqualStrings("query_ready 0/0/0/0 E--- -", mismatch.got_state[0..mismatch.got_state_len]);
 }
 
 test "a line in the wrong place, a transcript for other hops, and an empty one are refused" {
@@ -484,8 +416,8 @@ test "a line in the wrong place, a transcript for other hops, and an empty one a
     const cases = [_]struct { text: []const u8, err: Error }{
         .{ .text = "hops 7\n", .err = error.WrongHops },
         .{ .text = "config 1 1 1 udp\n", .err = error.WrongHops },
-        .{ .text = "hops 8\nconfig 1 1 1 udp\n2 poll send_udp query_ready 0/0/0/0 E---\n", .err = error.Malformed },
-        .{ .text = "hops 8\nconfig 1 1 1 udp\n1 poll send_udp query_ready 0/0/0/0 E---\n", .err = error.Malformed },
+        .{ .text = "hops 8\nconfig 1 1 1 udp\n2 poll send_udp query_ready 0/0/0/0 E--- -\n", .err = error.Malformed },
+        .{ .text = "hops 8\nconfig 1 1 1 udp\n1 poll send_udp query_ready 0/0/0/0 E--- -\n", .err = error.Malformed },
         .{ .text = "hops 8\nconfig 1 1 1 udp\n0 init none\n", .err = error.Malformed },
         .{ .text = "hops 8\nconfig 4 1 1 udp\n", .err = error.Malformed },
         .{ .text = "hops 8\nconfig 1 1 1 carrier-pigeon\n", .err = error.Malformed },
