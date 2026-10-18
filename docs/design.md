@@ -2995,6 +2995,7 @@ still ends the TCP link of a DoH channel.
     - The link ends, as now. A KeyUpdate is rare, and the send buffer is busy for a short time.
 
     Recommended: the first. The hold is colibri's, and colibri can remove it with no new memory.
+    Answered on 2026-10-17: the first. colibri writes the reply at once, and cocuyo moves its pin.
 52. **A long head or trailer section over HTTP/1.1.** colibri v0.6.0 reads a head or a trailer
     section only when it is whole. Its h11 accepts a head of up to 32,768 octets (`head_len_max`).
     Whitespace around a value and the reason phrase count in that length, and not in the size of
@@ -3019,6 +3020,8 @@ still ends the TCP link of a DoH channel.
     - The link ends, as now. No measurement shows how often a DoH server sends a head that long.
 
     Recommended: the first. The hold is colibri's, and only colibri can remove it.
+    Answered on 2026-10-17: the first. colibri sizes its room for h11's longest head and one record
+    more, and cocuyo moves its pin.
 
 ## 18. The cache
 
@@ -6465,6 +6468,7 @@ lookup over each transport.
 | `doh_request_bytes_max` | 1,536 | the `:path` of a DoH GET, which an exchange holds in a buffer of this size: `start` refuses a template whose path, with a `dns` value of 512 octets, passes it (§17 question 41). A test sends that GET with the longest authority, 259 octets, over HTTP/2, and its server answers; HTTP/3 was not tried at that length |
 | `answers_default` | 4 | a DoH connection's answer buffers when the consumer names none, 262 KB of them; chosen, not measured |
 | `doh_channels_max` | `servers_max` | one channel for each DoH server (decision 33) |
+| `channel_events_max` | 16 | beside an end for each request, what one read of a channel takes at most: its links' opens and closes, its tickets and its close, which bounds the loop over it; chosen, not measured, as `quic_connection_events_max` is. What a flood leaves unread is read at the next read |
 | `doh_fallback_delay_ns` | 250 ms | how long a channel gives QUIC's handshake before TCP opens beside it: the Connection Attempt Delay RFC 8305 §5 recommends, which that RFC sets between attempts at two addresses, not two versions of HTTP; taken from it, not measured |
 | `doh_stream_bytes` | 18,693 | the octets of the stream a channel keeps until colibri takes them: a record at its longest, 16,645 octets with its header (RFC 9846 §5.2), and one of the engine's chunks, 2,048. It is the engine's `tls_record_in_bytes` since 2026-10-13 (§21, TLS rule 7) |
 | `doh_datagram_bytes` | 2,048 | the datagram a channel keeps until colibri takes it: the engine's datagram buffer, which holds any datagram the engine reads |
