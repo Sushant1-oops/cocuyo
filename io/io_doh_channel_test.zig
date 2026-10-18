@@ -5,28 +5,29 @@
 //! the type keeps; and a template too long. The test plays the engine: a link's connection starts
 //! as soon as the channel asks for it, and the stream goes over in the engine's chunks, the channel
 //! read after each. The engine over the type, on the twin, is `io_doh_channel_engine_test.zig`'s.
+//! `io_doh_channel_read_test.zig` drives the same pair with whole records back to back.
 const std = @import("std");
 const testing = std.testing;
 const cocuyo = @import("cocuyo");
 const cocuyo_doh = @import("io_doh_channel.zig");
 const identity = @import("io_doh_channel_identity.zig");
 const server_module = @import("io_doh_channel_server.zig");
-const constants = cocuyo_doh.constants;
+pub const constants = cocuyo_doh.constants;
 const doh_constants = @import("doh").constants;
 
 /// Two answer buffers: a test's second request fits beside its first, and a third waits.
 const test_answers = 2;
-const Doh = cocuyo_doh.Channel(.{ .answers = test_answers });
-const Event = Doh.Event;
+pub const Doh = cocuyo_doh.Channel(.{ .answers = test_answers });
+pub const Event = Doh.Event;
 const Tag = std.meta.Tag(Event);
 
 /// A millisecond a round, and rounds enough for the fallback delay and a handshake after it.
-const round_ns = 1_000_000;
-const rounds_max = 1_000;
+pub const round_ns = 1_000_000;
+pub const rounds_max = 1_000;
 const said_max = 64;
 /// The octet of a DNS header that holds the QR bit, and the bit (RFC 1035 §4.1.1).
-const flags_at = 2;
-const qr_bit = 0x80;
+pub const flags_at = 2;
+pub const qr_bit = 0x80;
 
 /// The server's address, and its template as the engine splits it, on a port of its own, so a link
 /// that went to HTTPS's 443 anyway shows.
@@ -35,7 +36,7 @@ const endpoint: cocuyo.Endpoint = .{ .address = cocuyo.Address.from_text("192.0.
 const template = .{ .authority = "dns.example:8443", .host = "dns.example", .port = port, .path = "/dns-query{?dns}" };
 /// A query of a header alone, ID 0, as DoH asks (RFC 8484 §4.1), recursion desired: the server
 /// echoes it, so it need not ask anything.
-const query = [_]u8{ 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+pub const query = [_]u8{ 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 /// The octet the context's stream is seeded with. Test-only.
 const seed_octet = 7;
 
@@ -48,7 +49,7 @@ fn echo(context: *anyopaque, asked: []const u8, out: []u8) ?usize {
 }
 
 /// The type, colibri's server, and what the type said, on the heap: a channel is over a megabyte.
-const Pair = struct {
+pub const Pair = struct {
     doh: Doh = .{},
     /// A test's context, built where the pair is, at the pair's first instant: no pair holds one
     /// that nobody named.
@@ -66,7 +67,7 @@ const Pair = struct {
     /// Whether the last round carried octets either way over TCP.
     carried: bool = false,
 
-    fn create(script: server_module.Script) !*Pair {
+    pub fn create(script: server_module.Script) !*Pair {
         const pair = try testing.allocator.create(Pair);
         errdefer testing.allocator.destroy(pair);
         pair.* = .{};
@@ -74,7 +75,7 @@ const Pair = struct {
         return pair;
     }
 
-    fn free(pair: *Pair) void {
+    pub fn free(pair: *Pair) void {
         pair.doh.wipe();
         testing.allocator.destroy(pair);
     }
@@ -117,17 +118,22 @@ const Pair = struct {
     fn hear(pair: *Pair, until: Tag) !?Event {
         for (0..said_max) |_| {
             const event = pair.doh.next(pair.now_ns) orelse return null;
-            if (pair.said_len == pair.said.len) return error.TooMuchSaid;
-            pair.said[pair.said_len] = event;
-            pair.said_len += 1;
-            switch (event) {
-                .open => |asked| try pair.start_link(asked.link),
-                .ticket => |link| pair.ticket = pair.doh.take_ticket(link),
-                else => {},
-            }
+            try pair.note(event);
             if (event == until) return event;
         }
         return error.TooMuchSaid;
+    }
+
+    /// Keeps one thing the channel said, and does what the engine does with it.
+    pub fn note(pair: *Pair, event: Event) !void {
+        if (pair.said_len == pair.said.len) return error.TooMuchSaid;
+        pair.said[pair.said_len] = event;
+        pair.said_len += 1;
+        switch (event) {
+            .open => |asked| try pair.start_link(asked.link),
+            .ticket => |link| pair.ticket = pair.doh.take_ticket(link),
+            else => {},
+        }
     }
 
     /// A link's socket carries octets at once in memory: its connection starts, TCP's with the
@@ -156,7 +162,7 @@ const Pair = struct {
     }
 
     /// Whether the channel said `tag`, and how many times.
-    fn count(pair: *const Pair, tag: Tag) usize {
+    pub fn count(pair: *const Pair, tag: Tag) usize {
         var counted: usize = 0;
         for (pair.said[0..pair.said_len]) |event| counted += @intFromBool(event == tag);
         return counted;

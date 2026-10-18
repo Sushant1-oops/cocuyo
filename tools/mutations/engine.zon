@@ -2551,4 +2551,40 @@
         },
         .caught_by = .{ .step = "test-io" },
     },
+    .{
+        .section = "The DoH channel's stream buffer",
+        .id = "DS1",
+        .what = "the stream buffer holds a record at its longest, and no chunk past it",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_constants.zig", .old = "pub const stream_bytes: usize = record_bytes_max + engine_chunk_bytes;\n", .new = "pub const stream_bytes: usize = record_bytes_max;\n" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "The DoH channel's stream buffer",
+        .id = "DS2",
+        .what = "the stream check counts against a record at its longest, and not the buffer",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_read.zig", .old = "            if (self.stream_len + bytes.len > self.stream.len) {\n", .new = "            if (self.stream_len + bytes.len > constants.record_bytes_max) {\n" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "The DoH channel's stream buffer",
+        .id = "DS3",
+        .what = "colibri is handed one chunk of the stream at most",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_read.zig", .old = "    if (self.stream_len > 0) return .{ .stream = self.stream[0..self.stream_len] };\n", .new = "    if (self.stream_len > 0) return .{ .stream = self.stream[0..@min(self.stream_len, constants.engine_chunk_bytes)] };\n" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
+    .{
+        .section = "The DoH channel's stream buffer",
+        .id = "DS4",
+        .what = "the read stops after a pass that took octets and said nothing",
+        .edits = .{
+            .{ .file = "io/io_doh_channel_read.zig", .old = "        if (received.consumed == 0) return null;\n", .new = "        if (received.event == null) return null;\n" },
+        },
+        .caught_by = .{ .step = "test-cocuyo_doh" },
+    },
 }

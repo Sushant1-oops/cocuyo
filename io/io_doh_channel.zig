@@ -146,6 +146,7 @@ test {
     _ = start_module;
     _ = read_module;
     _ = @import("io_doh_channel_test.zig");
+    _ = @import("io_doh_channel_read_test.zig");
     _ = @import("io_doh_channel_engine_test.zig");
     _ = @import("io_doh_channel_quic_test.zig");
 }

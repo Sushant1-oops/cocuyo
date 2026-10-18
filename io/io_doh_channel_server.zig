@@ -69,7 +69,7 @@ pub const Server = struct {
     /// The records the client sent and the server has not read.
     input: [constants.stream_bytes]u8 = undefined,
     input_len: usize = 0,
-    content: [cocuyo.constants.message_bytes_max]u8 = undefined,
+    owed: [owed_max]Owed = @splat(.{}),
     /// What it heard, which a test reads: the queries it answered, the requests it holds, the last
     /// query it read, and what that request's `accept` and `accept-encoding` asked for.
     answered: usize = 0,
@@ -109,21 +109,76 @@ pub const Server = struct {
         }
     }
 
+    /// Writes what the answers still owe of their content, then what the connection owes.
     pub fn send(self: *Server, out: []u8, now_ns: u64) usize {
+        self.write_owed();
         return self.connection.send(out, now_ns);
     }
 
-    /// Reads the request's query, and answers it as the script says.
+    /// Reads the request's query, and answers it as the script says. The content goes into the
+    /// connection as its output and the stream's window take it (RFC 9113 §6.9).
     fn answer(self: *Server, request: server.Request, answerer: Answerer) void {
         const query = read_request(self, request) orelse return;
         if (self.script.hold) {
             self.held += 1;
             return;
         }
-        const len = answerer.answer(answerer.context, query, &self.content) orelse return;
-        if (respond(&self.connection, request.id, self.script, self.content[0..len])) self.answered += 1;
+        const owed = for (&self.owed) |*slot| {
+            if (!slot.live) break slot;
+        } else return;
+        const len = answerer.answer(answerer.context, query, &owed.content) orelse return;
+        if (!respond_head(&self.connection, request.id, self.script, len)) return;
+        owed.live = true;
+        owed.id = request.id;
+        owed.len = len;
+        owed.written = 0;
+        self.write_owed();
+    }
+
+    /// Writes as much of each answer's content as the connection takes. An answer whose content
+    /// has all gone is answered.
+    fn write_owed(self: *Server) void {
+        for (&self.owed) |*owed| {
+            if (!owed.live) continue;
+            owed.written += write_content(&self.connection, owed.id, owed.content[owed.written..owed.len]) orelse {
+                owed.live = false;
+                continue;
+            };
+            if (owed.written < owed.len) continue;
+            owed.live = false;
+            self.answered += 1;
+        }
     }
 };
+
+/// The answers that a server holds at once while their content goes out: one for each request
+/// that a test has in flight.
+const owed_max = 2;
+
+/// An answer whose head has gone, and the content that it still owes.
+const Owed = struct {
+    live: bool = false,
+    id: server.Id = 0,
+    content: [cocuyo.constants.message_bytes_max]u8 = undefined,
+    len: usize = 0,
+    written: usize = 0,
+};
+
+/// Writes `content`, the rest of request `id`'s content, until the connection takes no more. The
+/// octets written, or null when the connection refused the request.
+fn write_content(connection: *server.Connection, id: server.Id, content: []const u8) ?usize {
+    var written: usize = 0;
+    // Bounded: each pass writes an octet of the content, or stops.
+    for (0..content.len + 1) |_| {
+        written += connection.write_body(id, .{ .octets = content[written..], .end = true }) catch |failure| switch (failure) {
+            // No room in the output, or no window (RFC 9113 §6.9): the next send makes room.
+            error.Blocked, error.NoSpaceLeft => return written,
+            else => return null,
+        };
+        if (written == content.len) return written;
+    }
+    return written;
+}
 
 /// Reads a request's query out of its path's `dns` parameter (RFC 8484 §4.1) into `record`, a
 /// server that keeps what it heard, and what the request's `accept` and `accept-encoding` asked for.
@@ -140,12 +195,25 @@ pub fn read_request(record: anytype, request: server.Request) ?[]const u8 {
 /// Answers request `id` on `connection`, colibri's TCP or QUIC one, whose calls are alike: the head
 /// the script says, then `content`, or a reset once the head has gone. Whether it answered.
 pub fn respond(connection: anytype, id: server.Id, script: Script, content: []const u8) bool {
+    if (!respond_head(connection, id, script, content.len)) return false;
+    var written: usize = 0;
+    // Bounded: each pass writes an octet of the content, or stops.
+    for (0..content.len + 1) |_| {
+        written += connection.write_body(id, .{ .octets = content[written..], .end = true }) catch return false;
+        if (written == content.len) return true;
+    }
+    return false;
+}
+
+/// Writes the head the script says for content `content_len` octets long, or a reset once the
+/// head has gone. Whether the content goes next.
+fn respond_head(connection: anytype, id: server.Id, script: Script, content_len: usize) bool {
     var digits: [length_digits_max]u8 = undefined;
     var fields: [response_fields_max]server.Field = undefined;
     var count: usize = 0;
     fields[count] = .{ .name = "content-type", .value = script.content_type };
     count += 1;
-    fields[count] = .{ .name = "content-length", .value = std.fmt.bufPrint(&digits, "{d}", .{content.len}) catch unreachable };
+    fields[count] = .{ .name = "content-length", .value = std.fmt.bufPrint(&digits, "{d}", .{content_len}) catch unreachable };
     count += 1;
     if (script.content_encoding) |coding| {
         fields[count] = .{ .name = "content-encoding", .value = coding };
@@ -161,11 +229,5 @@ pub fn respond(connection: anytype, id: server.Id, script: Script, content: []co
         connection.cancel(id);
         return false;
     }
-    var written: usize = 0;
-    // Bounded: each pass writes an octet of the content, or stops.
-    for (0..content.len + 1) |_| {
-        written += connection.write_body(id, .{ .octets = content[written..], .end = true }) catch return false;
-        if (written == content.len) return true;
-    }
-    return false;
+    return true;
 }

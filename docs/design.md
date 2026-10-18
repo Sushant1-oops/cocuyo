@@ -2382,6 +2382,42 @@ step until `zig build test` passes.
     `tcp_message_bytes` fails the connection when it arrives. Over TLS the peer is still there, so
     the session says `close_notify` first (§21, TLS rule 5).
 
+    Checked on 2026-10-17 at the DoH channel's buffer, `doh_stream_bytes` (c4milo/cocuyo#44). The
+    issue said that whole records could stay there when the next chunk comes. Then they and the
+    chunk count against one room. It named two causes:
+
+    - The bound of the engine's read of a channel. This cause cannot happen with colibri v0.6.0.
+      A sound channel says less than the bound at each read: an end for each request at most,
+      and a few events of its own. The bound gives it `channel_events_max`, 16, of those
+      (`io/constants.zig`).
+    - Records that colibri keeps for want of room. colibri opens a record only into room for its
+      body. Its connection has room for a partial HTTP/2 frame and one record more. A pass that
+      opened a record can find no room for the next one. That pass took octets, so the read makes
+      one more pass, and the record fits then. So over HTTP/2 each whole record opens in the read
+      after the chunk that made it whole.
+
+    Over HTTP/1.1 the second cause can happen (§17 question 52). colibri reads a head or a trailer
+    section only when it is whole. It accepts a head of up to 32,768 octets, and a trailer section
+    of up to 24,576. When more than 16,632 octets of either wait, no room is left for a record of
+    2^14 octets of plaintext. colibri then opens no more records, so the head or the trailer
+    section never becomes whole.
+
+    The next chunks pass the buffer and end the link. If no chunk comes, the request waits for its
+    deadline. No size of the buffer helps, because colibri never takes the record.
+
+    A test sends whole records back to back over HTTP/2 and HTTP/1.1, with heads of a usual length
+    (`io_doh_channel_read_test.zig`). After each read the buffer holds a partial record at most, as
+    the engine's own buffers do. Neither the buffer nor its check changed.
+
+    In three more states colibri opens no record, and the type keeps what comes:
+
+    - After a KeyUpdate that asks for a reply, until the engine next asks the channel for octets to
+      send. This rule cannot hand those records over, so §17 question 51 asks the owner.
+    - After the connection stopped: it failed, or its last exchange ended after a shutdown. No
+      exchange is left on it. The octets go when the link closes, or sooner at an overrun.
+    - After the server's `close_notify`. The server sends no more messages after it, and data
+      after it is ignored (RFC 9846 §6.1).
+
     Rejected:
 
     - No memory added: copy what fits, hand over the whole items, and copy the rest. It needs more
@@ -2923,6 +2959,66 @@ choices to the build. Each changes the public API, so each is a question here.
     transport. Should the check refuse only a configuration that asks over UDP? Recommended: as
     built. One check of the configuration is one rule. A size that the engine cannot receive over
     UDP is wrong in each query that carries it. Answered on 2026-10-14: as built.
+
+### Asked on 2026-10-17, for the DoH channel's stream buffer
+
+§16 decision 41 records the check of c4milo/cocuyo#44. It found two ways in which a sound stream
+still ends the TCP link of a DoH channel.
+
+51. **A KeyUpdate while the TCP link's send buffer is busy.** A server may send a KeyUpdate that
+    asks for a reply at any time after its Finished (RFC 9846 §4.7.3). That section asks for the
+    reply before the receiver's next Application Data record. colibri v0.6.0 also opens no record
+    until its next `send` writes the reply (its `connection_tls.zig`). The RFC does not ask for
+    that hold. It does not ask a receiver to stop its reads either.
+
+    The engine asks the channel for octets only when the link's send buffer is free (§24, request
+    rule 15). The buffer is busy in two cases:
+
+    - A send is in flight.
+    - The buffer holds octets not yet sent: the rest of a short send, or a send that the loop
+      refused.
+
+    Meanwhile each chunk after the KeyUpdate stays in the type's buffer. The held records open at
+    the first read after `output`: the read after the next send ends, or after the next chunk.
+    When more than 16,645 such octets wait, the next full chunk ends the link (request rule 7).
+    The link's requests fail, and their lookups fail over. No size of the buffer bounds this,
+    because the network sets how many chunks come before the send ends. The ways:
+
+    - colibri writes the reply into its connection's output at once, and opens the records after
+      the KeyUpdate. That output holds records before the protocol's octets already, for the
+      handshake's flight. cocuyo then changes only its pin of colibri.
+    - The type keeps a small buffer for what colibri owes. When a whole record waits, the type has
+      colibri write into that buffer, and `output` hands it over first. This adds memory and a
+      named limit.
+    - The engine stops the TCP link's receive while the type holds a whole record that colibri
+      does not take. This changes the DoH interface and the engine model.
+    - The link ends, as now. A KeyUpdate is rare, and the send buffer is busy for a short time.
+
+    Recommended: the first. The hold is colibri's, and colibri can remove it with no new memory.
+52. **A long head or trailer section over HTTP/1.1.** colibri v0.6.0 reads a head or a trailer
+    section only when it is whole. Its h11 accepts a head of up to 32,768 octets (`head_len_max`).
+    Whitespace around a value and the reason phrase count in that length, and not in the size of
+    the field section (RFC 9112 §4, §5.1). The room of a connection, `plaintext_in_len`, is 33,033
+    octets: a frame of HTTP/2 at its longest, and one record more. colibri opens a record only
+    into room for its body. So a long head holds the link:
+
+    - When more than 16,632 octets of a head wait, no room is left for a record of 2^14 octets of
+      plaintext. colibri then opens no more records, and the head never becomes whole.
+    - The next chunks pass `doh_stream_bytes` and end the link (request rule 7). If no chunk
+      comes, the request waits for its deadline. Either way its lookup fails over.
+    - No size of the type's buffer helps, because colibri never takes the record.
+
+    A probe showed the hold and the end of the link (docs/mutations.md, The DoH channel's stream
+    buffer). The ways:
+
+    - colibri sizes the room for h11's longest head and one record more: 32,768 and 16,640
+      octets, 16,375 more than now in each connection. cocuyo then changes only its pin of
+      colibri.
+    - colibri's client refuses a head or a trailer section longer than its room holds beside a
+      record. The request then fails at once, and not at the overrun or the deadline.
+    - The link ends, as now. No measurement shows how often a DoH server sends a head that long.
+
+    Recommended: the first. The hold is colibri's, and only colibri can remove it.
 
 ## 18. The cache
 
@@ -5995,11 +6091,20 @@ through the request interface, so `cocuyo_rotor` never imports colibri. The type
 - `request`, `cancel` and `shutdown` are the channel's own.
 - `receive` hands the channel a datagram or octets of the stream a link read, and `next` returns
   what it says, one thing at a time, until it has nothing more. The octets of the stream the
-  channel has not taken stay with the type until it takes them, as `cocuyo_h2` kept them: a
-  partial record until the rest arrives (TLS rule 7), and whole ones while the channel has no
-  room for what they hold. The type keeps a record at its longest and one of the engine's chunks
-  after it. Since 2026-10-13 the engine's own record buffer has the same size (TLS rule 7).
-  Octets past what the type keeps end the TCP link, as they failed
+  channel has not taken stay with the type until it takes them: a partial record until the rest
+  arrives (TLS rule 7). Over HTTP/2, colibri takes each whole record in the read after the chunk
+  that made it whole. Its connection has room for a partial frame and one record more (§16
+  decision 41, checked on 2026-10-17). colibri takes no record in four states:
+  - after a KeyUpdate that asks for a reply, until the engine next asks it for octets to send
+    (§17 question 51);
+  - over HTTP/1.1, while a long partial head or trailer section leaves no room for the next
+    record (§17 question 52);
+  - after its connection stopped;
+  - after the server's `close_notify` (RFC 9846 §6.1).
+
+  The type keeps a record at its longest and one of the engine's chunks after it. Since 2026-10-13
+  the engine's own record buffer has the same size (TLS rule 7). Octets past what the type keeps
+  end the TCP link, as they failed
   `cocuyo_h2`'s connection (request rule 7): the type tells the channel the link ended, and says
   `close` for it. A datagram the channel has not taken when the next arrives is dropped, as the
   network may drop one.

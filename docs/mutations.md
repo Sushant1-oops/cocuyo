@@ -6041,3 +6041,155 @@ Thirteen mutations, thirteen `CAUGHT`.
 | PL11 | `reinit` cancels the receives of its sockets before the check | rule 7: the call changes nothing | the test of `reinit`, at the receive of its socket, `test-io` | CAUGHT |
 | PL12 | `reinit` closes its streams before the check, and its sockets after it | rule 7: the call changes nothing | the test of `reinit`, at its stream, which is no longer up, `test-io` | CAUGHT |
 | PL13 | `reinit` cancels the operations of its streams before the check | rule 7: the call changes nothing | the test of `reinit`, at the receive of its stream, `test-io` | CAUGHT |
+
+## The DoH channel's stream buffer
+
+2026-10-17. c4milo/cocuyo#44 said that `cocuyo_doh` could end a sound TCP link. The type adds the
+octets that it keeps and each new chunk. It ends the link when the sum passes `doh_stream_bytes`,
+18,693 octets. The issue said that whole records could stay in the buffer when the next chunk
+comes. It named two causes: records that colibri keeps for later, and records that the bound of
+the engine's read leaves behind. No test showed it.
+
+docs/design.md §16 decision 41 records the check. §17 questions 51 and 52 ask the owner about two
+ways in which a sound stream still ends the link.
+
+### What the code does
+
+- The engine hands each chunk to the type, then reads the channel until it says nothing more
+  (`take` in `io_channel_link.zig`, `hear` in `io_channel.zig`). A read takes at most an end for
+  each request and `channel_events_max`, 16, of the channel's own.
+- `next` hands colibri every octet that the type keeps. It goes on while colibri takes octets or
+  says something. It ends when colibri takes nothing and says nothing (`io_doh_channel_read.zig`).
+- In each pass, colibri v0.6.0 first reads the protocol from what it holds (`poll` in its
+  `channel_events.zig`). Then it opens each whole record that its room holds, and reads the
+  protocol again until an exchange ends (`read` and `open_records` in its `connection_tls.zig`).
+- A record opens only into room for its body. The room is `plaintext_in_len`, 33,033 octets: a
+  frame of HTTP/2 at its longest, 16,393 octets, and the body of a record at its longest, 16,640.
+
+### The two causes
+
+- The bound of the read: this cause cannot happen. Each request ends once, so a read hears one
+  end for each at most. The rest is a ticket for each pass that opened one, the opens and closes
+  of two links, and `closed`. colibri keeps the latest ticket alone (`collect_ticket`). The
+  version that the channel speaks comes once, and `next` reads past it. A sound channel stays far
+  under 16 of these.
+- The room, over HTTP/2: this cause cannot happen. A pass starts with a partial frame at most,
+  16,392 octets, so the first record of a pass fits. A later record of the same pass may not
+  fit, because colibri opens records before it reads frames. That pass took octets, so `next`
+  makes one more. It starts with a partial frame again, and the record fits.
+- The room, over HTTP/1.1: this cause can happen. colibri's h11 reads a head or a trailer
+  section only when it is whole, and keeps a partial one in its room. It accepts a head of up to
+  32,768 octets, and a trailer section of up to 24,576. A record of 2^14 octets of plaintext has
+  a body of 16,401 octets. When more than 16,632 octets of a head wait, the room is shorter.
+  colibri then opens no more records, and the head never becomes whole.
+
+### The probe
+
+A test written for the check showed the hold over HTTP/1.1. The tree does not keep it, because it
+requires the behaviour that §17 question 52 asks the owner to change. Its rig was the pair of
+`io_doh_channel_test.zig`:
+
+- colibri's server answered one request with a head of about 18,100 octets and 20,000 octets of
+  content.
+- The first record held 1,000 octets of plaintext, and the records after it were full.
+- After the second record, colibri held 17,384 octets of the head. The third record did not fit.
+- After the read, the third record stayed whole in the type's buffer. The next chunk passed
+  `doh_stream_bytes`. The TCP link closed, and the exchange ended `closed`.
+
+colibri's server does not let the rig choose its reason phrase, and writes no whitespace around a
+value. So the probe's head held a field section larger than colibri's client accepts, 16,384
+octets. The hold comes before the client reads the head, so the probe shows it all the same. A
+sound head of that length has a long reason phrase, or whitespace around its values (RFC 9112 §4,
+§5.1).
+
+### Other states in which colibri opens no record
+
+After a KeyUpdate that asks for a reply, colibri opens no record until its next `send` writes the
+reply (`connection_tls.zig` and `record_provider.zig` of colibri). RFC 9846 §4.7.3 asks only for
+the reply before the next Application Data record that colibri sends. The RFC does not ask for the
+hold. The engine asks the channel for octets only when the link's send buffer is free (`send` in
+`io_channel_link.zig`). The buffer is busy while a send is in flight, and while it holds octets not
+yet sent.
+
+Meanwhile each chunk after the KeyUpdate stays in the buffer. When more than 16,645 such octets
+wait, the next full chunk ends the link. colibri's server sends no KeyUpdate of its own, so no test
+shows it. §17 question 51 asks the owner.
+
+In two more states colibri opens no record, and no exchange is left:
+
+- After the connection stopped: it failed, or its last exchange ended after a shutdown. The
+  octets stay until the link closes, or an overrun closes it sooner. After a shutdown, DATA can
+  still come for a stream that the client cancelled (RFC 9113 §5.1).
+- After the server's `close_notify`. The server sends no more messages after it, and data after
+  it is ignored (RFC 9846 §6.1).
+
+### The test
+
+`io/io_doh_channel_read_test.zig` plays the engine, over the pair of `io_doh_channel_test.zig`.
+Two requests are in flight. colibri's server answers each with a message of 2,000, 20,000 or
+40,000 octets, over HTTP/2 and over HTTP/1.1. Call after call, it writes into rooms that follow
+one of six lists:
+
+- one room alone: 16,645, 2,049, 2,047 or 100 octets;
+- two rooms of 16,406 octets, then one of 1,022 or 1,522 octets. A record in a room of 16,406
+  octets holds 2^14 octets of plaintext and nothing after it.
+
+Each chunk goes to the type, then a read as the engine's `hear` makes it, with the engine's bound.
+The test requires:
+
+- that no chunk ends the link;
+- that no whole record stays in the buffer after a read;
+- that no read reaches the engine's bound;
+- that each answer comes whole.
+
+The lists of two full rooms and a short one came after the review. Over HTTP/2, the first full
+record holds the HEADERS frame of the first answer, and most of its first DATA frame. The second
+full record ends that frame, and holds most of the next. The short record comes whole in the chunk
+that ends the second. It finds no room beside the second, so it opens in a second pass of the
+read.
+
+Only the answers of 40,000 octets show it. Their second DATA frame has no END_STREAM, so no
+exchange ends in the second full record. A first version alternated one full room with one short
+room. No run of it made such a second pass, because the frames fell at other places.
+
+The server of `io_doh_channel_server.zig` changed for the answers of 40,000 octets. colibri's
+server takes a response's content only as its output and the stream's window allow (RFC 9113
+§6.9). Now the rig's server keeps the rest of each answer, and writes more of it before each send.
+It holds two such answers at once.
+
+Over the 36 runs, 833 chunks came. After 224 of them the buffer held two whole records or more
+before the read. The most that the buffer held with a chunk was 18,432 octets: a partial record of
+16,384 and a chunk of 2,048. That passes a record at its longest, so the runs use the room that
+decision 41 gives a chunk. The test passed on the code as it stood. The code did not change.
+
+The rig of `io_doh_channel_test.zig` changed for it. The test reads through `Pair.note`, which
+keeps what the channel said, and the pieces that it reads are public.
+
+### What ran
+
+With the change, `zig build test` has 1,087 tests pass of 1,087. The change adds the test of
+`io_doh_channel_read_test.zig`. `zig build test-cocuyo_doh` has 27 tests pass of 27. `zig build
+lint` passes, with each function at a complexity of 15 or less. `zig build example-doh-rotor`
+builds its program, which asks for its arguments.
+
+No code of the library or of the engine changed, so no count of `bench/count.zig` moves. Neither
+model changes: the engine model holds no octets.
+
+### The rows
+
+Each row ran by hand first, with `zig build test-cocuyo_doh` in the tree. Then `zig build mutations
+-- engine DS1 DS2 DS3 DS4` ran the four rows, after it ran `zig build test-cocuyo_doh` once with
+nothing mutated. The run found each row `CAUGHT`, and left the tree as it was.
+
+The review found that DS4 is not equivalent. It stops `next` after a pass that took octets and
+said nothing. The first version of the test did not catch it, since none of its runs made such a
+second pass. The lists of two full rooms and a short one catch it: "expected 0, found 1".
+
+Four mutations, four `CAUGHT`.
+
+| # | Mutation | Check it breaks | Caught by | Status |
+| --- | --- | --- | --- | --- |
+| DS1 | the stream buffer holds a record at its longest, and no chunk past it | decision 41's room for a chunk | the new test, at a long partial record and a chunk; the test of the copied sizes: "expected 18693, found 16645", `test-cocuyo_doh` | CAUGHT |
+| DS2 | the stream check counts against a record at its longest, and not the buffer | the room for a chunk | the new test; the test of stream octets of exactly what the type keeps: "expected 18693, found 0", `test-cocuyo_doh` | CAUGHT |
+| DS3 | colibri is handed one chunk of the stream at most | no whole record stays after a read | the new test: "expected 0, found 1", `test-cocuyo_doh` | CAUGHT |
+| DS4 | the read stops after a pass that took octets and said nothing | the second pass of a read over HTTP/2 | the new test, at two full records and a short one, over HTTP/2 with answers of 40,000 octets: "expected 0, found 1", `test-cocuyo_doh` | CAUGHT |
